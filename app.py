@@ -2779,7 +2779,7 @@ def render_deep_analysis_panel(p, api_provider, api_key, api_model):
                                    mime="text/markdown", key=f"deep_dl_{short}")
 
         if btn_exp:
-            _render_obsidian_export(p, deep, figs, short)
+            render_obsidian_export(p, deep, figs, short)
 
 
 def _adopt_source_figure(pid, src_fig):

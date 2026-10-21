@@ -29,7 +29,7 @@ def port_up(port: int) -> bool:
 
 
 def ensure_desktop_shortcut():
-    """在 Windows 桌面自动建立或更新『个人文献库』快捷方式"""
+    """在 Windows 桌面建立快捷方式（若桌面已存在 PaperLibrary 或 个人文献库 快捷方式则不重复创建）"""
     if sys.platform != "win32":
         return
     try:
@@ -41,7 +41,13 @@ def ensure_desktop_shortcut():
             else:
                 return
 
-        lnk_path = os.path.join(desktop, "个人文献库.lnk")
+        # 如果桌面已经有任何形式的 PaperLibrary 或 个人文献库 快捷方式/入口，直接跳过不打扰用户
+        for existing in [
+            "PaperLibrary.lnk", "PaperLibrary.url",
+            "个人文献库.lnk", "个人文献库.url"
+        ]:
+            if os.path.exists(os.path.join(desktop, existing)):
+                return
         # 便携版布局：启动器在 app/ 的上一级目录；开发版则与 app.py 同级
         base_dirs = [APP_DIR, os.path.dirname(APP_DIR)]
         candidates = []
