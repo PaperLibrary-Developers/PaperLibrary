@@ -1,0 +1,24 @@
+# PaperLibrary 主题 —— 仿 Sci-lib 的暖纸质配色
+# 设计令牌来源：Sci-lib/public/styles.css
+[theme]
+base = "light"
+primaryColor = "#2f6f5e"              # 墨绿主色
+backgroundColor = "#f3f1ea"           # 暖纸质背景
+secondaryBackgroundColor = "#fffefb"  # 卡片表面
+textColor = "#26251f"                 # 暖近黑
+# 注意：这里【不要】写 font = "sans serif"。
+# 那个值会让 Streamlit 把字体设成自带的 "Source Sans" —— 它不含中文字形，
+# 中文回退到系统字体后字形与行框对不上，页签文字会被裁成「只剩上半截」。
+# 留空则用我们自己注入的字体栈（含微软雅黑/PingFang 等中文字体），中文才正常。
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+# 关掉文件监视：文献库（含 data/images/ 约 880MB）就在程序目录下，
+# 开着 watchdog 时新增一篇 PDF 就可能触发整页重跑、甚至打断正在进行的 AI 总结。
+# 需要刷新直接按浏览器 F5，或用侧边栏的「🔄 更新文献库」。
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
