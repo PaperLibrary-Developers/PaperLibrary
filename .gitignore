@@ -24,6 +24,8 @@ dist/
 build/
 *.egg-info/
 PaperLibrary_Setup_v*.exe
+【版本发布区】/
+releases/
 
 # ── 备份与临时文件 ──
 *.bak
@@ -41,3 +43,7 @@ desktop.ini
 # ── 本机个性化（路径、隧道 token、API key 一类的本地配置） ──
 .tunnel_config.json
 .streamlit/secrets.toml
+*.lock
+_audit_*.py
+_t_*.py
+

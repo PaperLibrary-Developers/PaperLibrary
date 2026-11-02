@@ -43,11 +43,67 @@ import figure_anchor
 import figures_arxiv
 import deep_analysis
 import obsidian_export
+import api_manager
+import compare_engine
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_CONFIG_FILE = os.path.join(APP_DIR, "data", ".app_config.json")
 
+
+# ------------------------------------------------------------------
+# 环境自愈：NO_PROXY 里带方括号的 "[::1]" 会让 httpx 切端口时报
+#   InvalidURL: Invalid port: ':1]'
+# 于是 OpenAI(...) 一构造就炸（跟 api_key / base_url 无关）。
+# 刻意写在主脚本里：Streamlit 每次 rerun 都会重跑主脚本，但不会重新
+# import 本地模块，所以这样已经开着的服务器不用重启就能自愈。
+# ------------------------------------------------------------------
+def _fix_no_proxy_env():
+    for _var in ("NO_PROXY", "no_proxy"):
+        _raw = os.environ.get(_var)
+        if not _raw:
+            continue
+        _keep = []
+        for _item in _raw.split(","):
+            _s = _item.strip()
+            if not _s:
+                continue
+            if "[" in _s or "]" in _s:
+                _s = _s.replace("[", "").replace("]", "").strip()
+                if not _s:
+                    continue
+            if _s not in _keep:
+                _keep.append(_s)
+        os.environ[_var] = ",".join(_keep)
+
+
+_fix_no_proxy_env()
+
 st.set_page_config(page_title="文献管理检索系统", page_icon="📚", layout="wide")
+
+# ------------------------------------------------------------------
+# 前端心跳：定期向 file_server (8502) 发送 ping，若用户关闭标签页
+# 则 file_server 检测到心跳中断后自动关闭服务释放 8501/8502 端口
+# ------------------------------------------------------------------
+components.html("""
+<script>
+(function() {
+    function sendHeartbeat() {
+        fetch('http://127.0.0.1:8502/heartbeat', { mode: 'no-cors', cache: 'no-store' }).catch(function(){});
+    }
+    // 页面加载立即发一次
+    sendHeartbeat();
+    // 随后每 4 秒发一次心跳
+    setInterval(sendHeartbeat, 4000);
+    // 监听关闭或刷新
+    window.addEventListener('beforeunload', function() {
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon('http://127.0.0.1:8502/heartbeat');
+        }
+    });
+})();
+</script>
+""", height=0, width=0)
+
 
 # 启动本地文件服务器（端口 8502，仅本机可访问，用于浏览器内嵌 PDF 预览）。
 # 在 Streamlit 进程内以线程运行：独立子进程容易被系统/沙箱清理掉，导致 PDF 打不开。
@@ -120,14 +176,16 @@ def inject_compact_academic_css():
     }
     .sc-badge-pro {
         font-size: 10px;
-        font-weight: 700;
-        padding: 1px 5px;
+        font-weight: 800;
+        padding: 2px 7px;
         border-radius: 4px;
-        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+        background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 50%, #4f46e5 100%);
         color: #ffffff !important;
         -webkit-text-fill-color: #ffffff !important;
         vertical-align: middle;
-        margin-left: 4px;
+        margin-left: 6px;
+        letter-spacing: 0.08em;
+        box-shadow: 0 2px 8px rgba(14, 165, 233, 0.35);
     }
     .sc-app-subtitle {
         font-size: 12px;
@@ -934,7 +992,18 @@ def get_offline_assistant_reply(query: str, stats: dict, scan_root: str) -> str:
             f"     调用大模型融会贯通正文与实验数据，用 2~3 句精炼的学术中文总结反应机理、活性提升倍数与特征峰位归属；\n"
             f"   • **按需点选 + 永久存库**：看哪张点哪张，提炼一次永久存入本地数据库，下次打开秒现，绝不重复花钱！"
         )
-    elif any(k in q for k in ["对比", "并排", "比对", "横向", "多图"]):
+    elif any(k in q for k in ["横向对比", "文献对比", "对比表", "结构化对比", "综合综述", "对比工作台", "比较"]):
+        return (
+            f"🧭 **文献横向对比工作台 (Cross-Paper Benchmark) 使用指引**：\n\n"
+            f"1. **加入对比篮**：在「📖 文献库概览」的每张论文卡片右下角点击 **「＋ 对比」**（可连选多篇同方向文献，如电催化、手性材料、有机合成等）；顶部会弹出浮动提示条；\n"
+            f"2. **进入对比工作台**：切换到顶部第四个页签 **「🧭 横向对比」**（或直接点击顶部浮动条「立即前往」）；\n"
+            f"3. **专业化学模板抽取**：内置 **化学有机合成/催化**（反应体系、催化剂、条件、产率、选择性等 11 个关键指标）、**电化学/电催化**、**功能材料/晶态材料**、**通用对比** 4 套预设，支持输入自定义维度；\n"
+            f"4. **Map-Reduce 级结构化抽取**：点击「🚀 抽取结构化数据」，AI 会按统一 Schema 逐篇提炼核心数据与原文佐证（结果自动持久化缓存，重温无需重复消耗 Token）；\n"
+            f"5. **两维结构化矩阵**：直观横向比对多篇文献的条件、产率与限制，并展开查看关键佐证原文；\n"
+            f"6. **AI 跨文献深度横向综述**：点击「🧠 生成跨文献深度横向综述」，提炼多篇共性、核心分歧点、演进脉络与未解决的科学空白（Research Gap）；\n"
+            f"7. **一键导出交付**：支持一键导出 Markdown 研报与 UTF-8 BOM 编码的 CSV 矩阵表。"
+        )
+    elif any(k in q for k in ["多图对比", "图片对比", "并排", "幕布", "多图"]):
         return (
             f"🔬 **多图横向对比幕布 (Figure Comparator) 使用指引**：\n\n"
             f"1. **添加对比**：在「🔬 图片检索」Tab 或文献研读工作台的插图画廊中，点击任意图片下方的 **「🔬 加入横向对比」**（最多可同时比对 4 张）；\n"
@@ -981,6 +1050,7 @@ def get_offline_assistant_reply(query: str, stats: dict, scan_root: str) -> str:
         return (
             f"💡 **PaperLibrary 智能助手**：\n\n"
             f"您好！我是您的学术文献管理 Copilot。您可以问我：\n"
+            f"- 🧭 *多篇文献怎么做横向对比与结构化表格？*\n"
             f"- 📥 *怎么导入新下载的论文？*\n"
             f"- 🔬 *怎么检索具体的图表（如 CV 曲线）？*\n"
             f"- 📑 *如何复制 BibTeX 引用？*\n"
@@ -1352,7 +1422,7 @@ def render_delete_button(paper: dict, key_suffix: str = "default"):
                 st.error(f"❌ {msg}")
 
 
-def _trigger_paper_chat(paper, history, user_query, provider, api_key, model, chat_key):
+def _trigger_paper_chat(paper, history, user_query, provider, api_key, model, chat_key, base_url=None):
     pid = paper["id"]
     p_full = database.get_paper_by_id(pid) or paper
     figs = database.get_paper_figures(pid) or []
@@ -1367,7 +1437,8 @@ def _trigger_paper_chat(paper, history, user_query, provider, api_key, model, ch
                 user_query=user_query,
                 provider=provider or "deepseek",
                 api_key=api_key,
-                model=model or None
+                model=model or None,
+                base_url=base_url or None
             )
             history.append({"role": "assistant", "content": ans})
         except Exception as e:
@@ -1377,7 +1448,7 @@ def _trigger_paper_chat(paper, history, user_query, provider, api_key, model, ch
 
 
 def render_paper_chat(paper: dict, api_provider: str, api_key: str, api_model: str,
-                      standalone: bool = False, compact: bool = False):
+                      standalone: bool = False, compact: bool = False, api_base_url: str = None):
     """文献专属端到端 AI 对话助手 (ChatPDF)：结合全文正文与全篇高精度图注进行深度学术解答
 
     compact=True 时按窄栏（并排右栏）排版：快捷芯片单列、输入框独占一行。
@@ -1393,7 +1464,7 @@ def render_paper_chat(paper: dict, api_provider: str, api_key: str, api_model: s
         # 检查 API Key
         active_key = api_key or st.session_state.get("custom_chat_api_key", "")
         if not active_key:
-            st.info("💡 请在**左侧边栏**填写 DeepSeek / Claude 的 API Key，或在下方快速输入：")
+            st.info("💡 请在**左侧边栏**选择或配置 API，或在下方快速输入临时 Key：")
             quick_key = st.text_input("临时 API Key", type="password", key=f"quick_key_{pid[:12]}", placeholder="sk-...")
             if quick_key:
                 active_key = quick_key
@@ -1414,14 +1485,14 @@ def render_paper_chat(paper: dict, api_provider: str, api_key: str, api_model: s
             if compact:
                 for _cid, _label, _q in _chips:
                     if st.button(_label, key=f"chip_{_cid}_{pid[:12]}", width="stretch", disabled=not active_key):
-                        _trigger_paper_chat(paper, history, _q, api_provider, active_key, api_model, chat_key)
+                        _trigger_paper_chat(paper, history, _q, api_provider, active_key, api_model, chat_key, base_url=api_base_url)
             else:
                 p_col1, p_col2 = st.columns(2)
                 _chip_cols = [p_col1, p_col2]
                 for _i, (_cid, _label, _q) in enumerate(_chips):
                     with _chip_cols[_i % 2]:
                         if st.button(_label, key=f"chip_{_cid}_{pid[:12]}", width="stretch", disabled=not active_key):
-                            _trigger_paper_chat(paper, history, _q, api_provider, active_key, api_model, chat_key)
+                            _trigger_paper_chat(paper, history, _q, api_provider, active_key, api_model, chat_key, base_url=api_base_url)
 
         st.divider()
 
@@ -1450,7 +1521,7 @@ def render_paper_chat(paper: dict, api_provider: str, api_key: str, api_model: s
                 send_click = st.button("🚀 发送", key=f"chat_send_{pid[:12]}", width="stretch", disabled=not active_key)
 
         if send_click and user_input.strip():
-            _trigger_paper_chat(paper, history, user_input.strip(), api_provider, active_key, api_model, chat_key)
+            _trigger_paper_chat(paper, history, user_input.strip(), api_provider, active_key, api_model, chat_key, base_url=api_base_url)
 
         if history:
             if st.button("🗑️ 清空当前对话历史", key=f"clear_chat_{pid[:12]}"):
@@ -1464,7 +1535,7 @@ def render_paper_chat(paper: dict, api_provider: str, api_key: str, api_model: s
             _render_chat_content()
 
 
-def render_paper_detail_page(paper_id: str, api_provider: str, api_key: str, api_model: str):
+def render_paper_detail_page(paper_id: str, api_provider: str, api_key: str, api_model: str, api_base_url: str = None):
     """独立的文献全屏研读工作台（子页面）：
     提供顶栏返回、完整题录信息、权威引文、左右双栏（现代 HTML5 流式阅读器 + 专属 AI 对话助手）、底栏图表全景画廊
     """
@@ -1684,7 +1755,7 @@ def render_paper_detail_page(paper_id: str, api_provider: str, api_key: str, api
               <span style="font-size:11.5px; opacity:0.8;">全文正文 + 空间图注融合</span>
             </div>
             """, unsafe_allow_html=True)
-            render_paper_chat(p, api_provider, api_key, api_model, standalone=True, compact=compact)
+            render_paper_chat(p, api_provider, api_key, api_model, standalone=True, compact=compact, api_base_url=api_base_url)
 
     if "沉浸" in wb_layout:
         _draw_pdf_panel()
@@ -1708,7 +1779,7 @@ def render_paper_detail_page(paper_id: str, api_provider: str, api_key: str, api
 
     figs = database.get_paper_figures(p["id"])
     # 4.5 深度分析报告 / arXiv 高清图表升级 / Obsidian 导出
-    render_deep_analysis_panel(p, api_provider, api_key, api_model)
+    render_deep_analysis_panel(p, api_provider, api_key, api_model, api_base_url=api_base_url)
     render_figure_comparator_section()
     with st.container(border=True):
         gal_h1, gal_h2 = st.columns([3, 1.2])
@@ -1846,7 +1917,7 @@ def render_paper_detail_page(paper_id: str, api_provider: str, api_key: str, api
                                         ident = figure_anchor.extract_figure_identity(cap, ft)
                                         fig_lbl = ident.get("label", "此图")
                                         if api_key and api_key.strip():
-                                            new_conc = figure_anchor.summarize_figure_with_llm(cap, mentions, fig_lbl, api_provider, api_key, api_model)
+                                            new_conc = figure_anchor.summarize_figure_with_llm(cap, mentions, fig_lbl, api_provider, api_key, api_model, base_url=api_base_url)
                                         else:
                                             new_conc = figure_anchor.extract_offline_conclusion(mentions, cap)
                                         figure_anchor.save_figure_conclusion(fig["id"], new_conc)
@@ -1865,7 +1936,7 @@ def render_paper_detail_page(paper_id: str, api_provider: str, api_key: str, api
                                     ident = figure_anchor.extract_figure_identity(cap, ft)
                                     fig_lbl = ident.get("label", "此图")
                                     if has_key:
-                                        new_conc = figure_anchor.summarize_figure_with_llm(cap, mentions, fig_lbl, api_provider, api_key, api_model)
+                                        new_conc = figure_anchor.summarize_figure_with_llm(cap, mentions, fig_lbl, api_provider, api_key, api_model, base_url=api_base_url)
                                     else:
                                         new_conc = figure_anchor.extract_offline_conclusion(mentions, cap)
                                     figure_anchor.save_figure_conclusion(fig["id"], new_conc)
@@ -2024,7 +2095,7 @@ with st.sidebar:
         <div class="sb-brand-title">
           <span>📚</span>
           <span>PaperLibrary</span>
-          <span class="sb-brand-badge">PRO</span>
+          <span class="sb-brand-badge">NEXUS</span>
         </div>
         <div class="sb-live-indicator">
           <span class="sb-live-dot"></span>
@@ -2323,14 +2394,162 @@ with st.sidebar:
     # ── 4. Advanced Toolboxes & AI Settings ──
     st.markdown('<div class="sb-card-header" style="margin-top:14px;">🛠️ 高级配置与维护</div>', unsafe_allow_html=True)
 
-    with st.expander("🤖 AI 问答与摘要配置", expanded=False):
-        api_provider = st.selectbox("API 提供商", ["deepseek", "claude"])
-        api_key = st.text_input("API Key", type="password", help="填入 DeepSeek 或 Claude 的 API Key")
-        api_model = st.text_input("模型名称", placeholder="deepseek-chat / claude-sonnet-5")
-        if st.button("🧠 运行全文 AI 摘要分析", width="stretch", disabled=not api_key):
+    with st.expander("🤖 AI 问答与模型配置（多 API 管理）", expanded=False):
+        # 1. 加载所有已保存的 API 档案
+        saved_profiles = api_manager.get_profiles()
+        active_prof = api_manager.get_active_profile()
+
+        # 选项列表：如果有已存档案，前面列出已存档案；同时提供「➕ 添加新配置」
+        prof_options = [f"⭐ {p['name']} ({p.get('model') or p.get('provider')})" for p in saved_profiles]
+        prof_options.append("➕ 添加新 API 配置")
+
+        # 当前选中项的索引
+        active_idx = 0
+        if active_prof:
+            for idx, p in enumerate(saved_profiles):
+                if p.get("id") == active_prof.get("id"):
+                    active_idx = idx
+                    break
+
+        selected_prof_label = st.selectbox(
+            "选择当前使用的 API",
+            options=prof_options,
+            index=active_idx if saved_profiles else (len(prof_options) - 1),
+            key="sb_selected_api_prof"
+        )
+
+        is_adding_new = (selected_prof_label == "➕ 添加新 API 配置") or (not saved_profiles)
+
+        if not is_adding_new and saved_profiles:
+            # 选中了已有的某个配置
+            chosen_p = saved_profiles[prof_options.index(selected_prof_label)]
+            if active_prof and chosen_p.get("id") != active_prof.get("id"):
+                api_manager.set_active_profile_id(chosen_p.get("id"))
+                active_prof = chosen_p
+                st.toast(f"✅ 已切换为 API：{chosen_p['name']}")
+                st.rerun()
+
+            # 显示当前配置摘要与操作
+            masked_k = api_manager.mask_key(chosen_p.get("api_key", ""))
+            st.markdown(f"""
+            <div style="background:var(--secondary-background-color, #f8fafc); border:1px solid #e2e8f0; border-radius:6px; padding:7px 10px; font-size:12px; margin-bottom:8px; line-height:1.6;">
+              <div><b>提供商:</b> {chosen_p.get('provider', '')} ｜ <b>模型:</b> <code>{chosen_p.get('model', '')}</code></div>
+              <div><b>Base URL:</b> {chosen_p.get('base_url') or '（默认官方地址）'}</div>
+              <div><b>API Key:</b> {masked_k or '<i>（无需Key/留空）</i>'}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            c_act1, c_act2, c_act3 = st.columns([1.1, 1, 1])
+            with c_act1:
+                if st.button("🔌 测试连通", key="btn_test_active_api", use_container_width=True):
+                    with st.spinner("正在向模型发起测试调用…"):
+                        t_ok, t_msg = api_manager.test_api_connection(
+                            chosen_p.get("provider", ""),
+                            chosen_p.get("api_key", ""),
+                            chosen_p.get("model", ""),
+                            chosen_p.get("base_url", "")
+                        )
+                    if t_ok:
+                        st.success(t_msg)
+                    else:
+                        st.error(t_msg)
+            with c_act2:
+                show_edit = st.checkbox("✏️ 修改", key=f"chk_edit_{chosen_p['id']}")
+            with c_act3:
+                if st.button("🗑️ 删除", key=f"btn_del_{chosen_p['id']}", use_container_width=True):
+                    api_manager.delete_profile(chosen_p["id"])
+                    st.toast("已删除该 API 配置")
+                    st.rerun()
+
+            if show_edit:
+                with st.form(f"form_edit_api_{chosen_p['id']}"):
+                    e_name = st.text_input("配置备注名", value=chosen_p.get("name", ""))
+                    e_provider = st.selectbox(
+                        "提供商协议",
+                        ["deepseek", "claude", "openai_compatible"],
+                        index=["deepseek", "claude", "openai_compatible"].index(chosen_p.get("provider", "deepseek")) if chosen_p.get("provider") in ["deepseek", "claude", "openai_compatible"] else 0
+                    )
+                    e_base_url = st.text_input("接口地址 (Base URL)", value=chosen_p.get("base_url", ""))
+                    e_model = st.text_input("模型名称 (Model ID)", value=chosen_p.get("model", ""))
+                    e_key = st.text_input("新 API Key (留空表示不修改原Key)", type="password", placeholder="输入新 Key 以替换")
+                    
+                    if st.form_submit_button("💾 保存修改", use_container_width=True):
+                        api_manager.save_or_update_profile(
+                            name=e_name,
+                            provider=e_provider,
+                            api_key=e_key,
+                            model=e_model,
+                            base_url=e_base_url,
+                            profile_id=chosen_p["id"]
+                        )
+                        st.toast("✅ 配置修改成功！")
+                        st.rerun()
+
+            api_provider = chosen_p.get("provider", "deepseek")
+            api_key = chosen_p.get("api_key", "")
+            api_model = chosen_p.get("model", "")
+            api_base_url = chosen_p.get("base_url", "")
+
+        else:
+            # 添加新配置界面
+            st.markdown("<b>➕ 添加并保存新 API</b>", unsafe_allow_html=True)
+            preset_labels = [p["name"] for p in api_manager.DEFAULT_PRESETS]
+            preset_idx = st.selectbox("快速选择预设模板", options=range(len(preset_labels)), format_func=lambda i: preset_labels[i])
+            chosen_preset = api_manager.DEFAULT_PRESETS[preset_idx]
+
+            with st.form("form_add_new_api"):
+                new_name = st.text_input("配置名称 / 备注", value=chosen_preset["name"])
+                new_prov = st.selectbox(
+                    "服务商协议",
+                    ["deepseek", "claude", "openai_compatible"],
+                    index=["deepseek", "claude", "openai_compatible"].index(chosen_preset["provider"]) if chosen_preset["provider"] in ["deepseek", "claude", "openai_compatible"] else 0
+                )
+                new_base = st.text_input("Base URL (接口地址)", value=chosen_preset["base_url"])
+                new_model = st.text_input("模型名称 (Model ID)", value=chosen_preset["model"])
+                new_key = st.text_input("API Key 密钥", type="password", placeholder=chosen_preset["placeholder_key"])
+                
+                c_btn_save, c_btn_tst = st.columns([1, 1])
+                with c_btn_save:
+                    submitted = st.form_submit_button("💾 保存并激活", type="primary", use_container_width=True)
+                with c_btn_tst:
+                    test_clicked = st.form_submit_button("🔌 测试连通", use_container_width=True)
+
+                if test_clicked:
+                    with st.spinner("正在测试接口连通性…"):
+                        t_ok, t_msg = api_manager.test_api_connection(new_prov, new_key, new_model, new_base)
+                    if t_ok:
+                        st.success(t_msg)
+                    else:
+                        st.error(t_msg)
+
+                if submitted:
+                    if not new_key.strip() and new_prov != "openai_compatible":
+                        st.warning("⚠️ 请填入 API Key 密钥（本地无密钥模型除外）")
+                    else:
+                        ok, new_id, _ = api_manager.save_or_update_profile(
+                            name=new_name,
+                            provider=new_prov,
+                            api_key=new_key,
+                            model=new_model,
+                            base_url=new_base
+                        )
+                        if ok:
+                            st.toast(f"✅ API 配置【{new_name}】已成功记住并激活！")
+                            st.rerun()
+                        else:
+                            st.error("保存失败，请检查文件权限")
+
+            # 暂未保存时的临时 fallback
+            api_provider = chosen_preset["provider"]
+            api_key = ""
+            api_model = chosen_preset["model"]
+            api_base_url = chosen_preset["base_url"]
+
+        st.divider()
+        if st.button("🧠 运行全文 AI 摘要分析 (全库未总结文献)", width="stretch", disabled=not (api_key or "").strip()):
             st.session_state.ai_all = True
             st.rerun()
-        st.caption("注：前台已聚焦原始图文，此处仅对论文正文提炼结构化摘要。")
+        st.caption("提示：配置保存后永久记录在本地 `data/api_profiles.json`，不会丢失。")
 
     with st.expander("⚡ 缩略图缓存与性能", expanded=False):
         _ts = thumbs.cache_stats(APP_DIR)
@@ -2365,19 +2584,19 @@ with st.sidebar:
         q_cols = st.columns(2)
         preset_q = None
         with q_cols[0]:
+            if st.button("🧭 怎么横向对比", key="sb_pq7", use_container_width=True):
+                preset_q = "怎么把多篇文献进行横向对比与综合分析？"
             if st.button("📥 怎么导入文献", key="sb_pq1", use_container_width=True):
                 preset_q = "怎么导入新下载的论文？"
             if st.button("📑 如何导出BibTeX", key="sb_pq2", use_container_width=True):
                 preset_q = "如何导出BibTeX引用？"
+        with q_cols[1]:
             if st.button("🔬 怎么搜图表", key="sb_pq3", use_container_width=True):
                 preset_q = "怎么检索具体的实验图表如CV曲线？"
-        with q_cols[1]:
             if st.button("🎯 有无配置AI区别", key="sb_pq5", use_container_width=True):
                 preset_q = "有无配置AI有什么区别？"
             if st.button("📊 库藏数据概况", key="sb_pq4", use_container_width=True):
                 preset_q = "当前文献库最新统计数据如何？"
-            if st.button("🔬 多图横向对比", key="sb_pq6", use_container_width=True):
-                preset_q = "多图横向对比幕布怎么用？"
 
         sb_user_query = st.text_input("向 Copilot 提问", value=preset_q or "",
                                       placeholder="输入使用问题或库藏咨询…", key="sb_copilot_input")
@@ -2400,10 +2619,11 @@ with st.sidebar:
 你熟悉当前文献库的一切：
 - 本地文献库路径: {current_root}
 - 篇目总数: {p_cnt} 篇，图表总数: {f_cnt} 张，图注总数: {stats_quick.get('with_caption', 0)} 条，官方作者补全数: {au_cnt} 篇。
-- 系统核心功能: 增量文件夹扫描与期刊过滤、中英双模态插图检索(Figure级与Bbox几何图注临近绑定)、HTML5嵌入式双栏研读工作台(选词复制划线与单篇ChatPDF)、多格式引文一键导出(BibTeX/GB/T 7714/APA)、Crossref与OpenAlex题录自动补全。
+- 系统核心功能: 增量文件夹扫描与期刊过滤、中英双模态插图检索(Figure级与Bbox几何图注临近绑定)、HTML5嵌入式双栏研读工作台(选词复制划线与单篇ChatPDF)、多格式引文一键导出(BibTeX/GB/T 7714/APA)、Crossref与OpenAlex题录自动补全、文献横向对比工作台(同类论文多选加入对比篮、化学等专业维度结构化矩阵抽取、AI跨文献深度综述与分歧研读、持久化缓存与Markdown/CSV导出)。
 请用专业、亲切、干练的学术中文回答用户的任何使用疑问或科研检索建议。排版规范，要点清晰。"""
                         ai_ans = ai_engine.copilot_chat(sys_prompt, [],
-                                                        active_query, api_provider, api_key, model=api_model or None)
+                                                        active_query, api_provider, api_key, model=api_model or None,
+                                                        base_url=api_base_url or None)
                     except Exception as e:
                         ai_ans = get_offline_assistant_reply(active_query, stats_quick, current_root)
                 else:
@@ -2484,11 +2704,37 @@ with st.sidebar:
 
 ---
 
-### ❓ 六、 常见问题与技巧 (FAQ)
+### 🧭 六、 文献横向对比工作台 (Tab 4 - 跨篇研读核心)
+1. **多选文献加入对比篮**：
+   在「📖 文献库概览」的任意文献卡片右下方，点击 **「＋ 对比」** 即可加入对比篮。已加入的文献按钮显示为「✓ 已选对比」，再次点击可移除。顶部会实时弹出浮动提示条。
+2. **专属对比工作台 (Tab 4)**：
+   点击顶部「🧭 横向对比」Tab，即可进入多文献对比工作台。系统自动编号为 P1, P2... Pn，并展示题录清单，支持单篇移除或一键清空。
+3. **专业化学与材料维度预设**：
+   针对化学/材料实验科学专门设计了四套提取模式：
+   - **化学有机合成 / 催化**：覆盖反应体系、催化剂与配体、反应条件、产率、立体/区域选择性、底物普适性、机理、表征手段、局限性与核心创新点等 11 个关键科研维度；
+   - **电化学 / 电催化**：覆盖电解质与体系、催化电极材料、过电位/电位窗口、Tafel斜率、法拉第效率与耐久性等指标；
+   - **功能材料 / 晶态材料 (MOF/COF)**：覆盖单体前驱体、合成工艺、比表面积/孔径、吸附性能、稳定性等；
+   - **通用学术对比**：核心方法、主要指标、实验条件、主要局限、核心贡献。
+   - **自定义补充维度**：还可自由输入任意关心的特定字段（如“溶剂效应”、“抗水氧稳定性”）。
+4. **Map-Reduce 级结构化抽取与持久化缓存**：
+   - 点击 **「🚀 抽取结构化数据」**，AI 会对多篇文献分别独立抽取固定 Schema，保证长文信息不被截断、数值不串味，并抓取原文事实与佐证；
+   - **本地数据库持久化缓存**：抽取完成的特征自动存入 `compare_cache` 表，下次换不同论文组合比对或重新打开时直接命中秒开，**绝不重复消耗 Token**！
+5. **结构化矩阵对比表 & AI 跨文献深度横向综述**：
+   - **📊 结构化矩阵**：以表格形式并排对比各项实验指标，可展开查看原文 Markdown 源码与单篇一句话评述；
+   - **🧠 AI 横向综述**：综合多篇抽取的结构化数据，深度产出「核心研究问题与体系」、「方法与条件共识」、「关键差异与争议分歧点（含定量指标并列）」、「演进脉络」、「研究空白 (Research Gap)」与「总结建议」；
+   - **一键导出交付**：支持一键导出 Markdown 研报与 UTF-8 BOM 编码的 CSV 矩阵表（Excel 双击直接打开无乱码）。
+
+---
+
+### ❓ 七、 常见问题与技巧 (FAQ)
 - **Q: 为什么有些 PDF 提示跳过？**
   A: 系统默认过滤了自写笔记等非学术文档，可在侧边栏取消勾选「只导入期刊文献」以强制全部导入。
 - **Q: 怎么更换文献库路径？**
   A: 在侧边栏「⚙️ 文献库路径与分类管理」中输入新路径即可无缝切换，原数据库索引依然完整保留。
+- **Q: 横向对比换了文献组合需要重新花钱抽取吗？**
+  A: 不需要！抽取是针对每篇论文按维度独立存库缓存的。如果文献库里的某篇已经抽取过对应预设维度，加入任意新组合都直接秒级读取缓存，只需最后对综述进行一次汇总。
+- **Q: 系统以后发布新版本，如何更新升级？已有文献会丢吗？**
+  A: **完全不用担心丢失文献！** 系统采用「程序逻辑」与「用户数据」严格物理隔离的设计。升级时只需获取作者发布的微型升级补丁（约 1 MB），解压后覆盖 `app` 代码目录（或双击补丁包内的升级批处理），**所有已存 PDF、笔记标签与历史分析均存放在 `data` 与文献目录中，100% 完整保留**！
 """)
 
     # ── 5. Bottom Overview Metrics ──
@@ -2606,7 +2852,8 @@ if st.session_state.ai_all and api_key:
             try:
                 pf = database.get_paper_by_id(p["id"])
                 result = ai_engine.summarize_paper(pf.get("full_text", ""), api_provider,
-                                                   api_key, model=api_model or None)
+                                                   api_key, model=api_model or None,
+                                                   base_url=api_base_url or None)
                 pf["summary"] = json.dumps(result, ensure_ascii=False)
                 database.upsert_paper(pf)
             except Exception as e:
@@ -2671,7 +2918,7 @@ def _figs_for_analysis(pid, limit=24):
     return out
 
 
-def render_deep_analysis_panel(p, api_provider, api_key, api_model):
+def render_deep_analysis_panel(p, api_provider, api_key, api_model, api_base_url: str = None):
     """详情页底部：结构化深度分析（可复跑）、arXiv 高清图表升级、导出 Obsidian"""
     pid = p["id"]
     short = pid[:10]
@@ -2706,7 +2953,8 @@ def render_deep_analysis_panel(p, api_provider, api_key, api_model):
             with st.spinner("正在精读全文并结构化…（一篇通常 30~90 秒）"):
                 res = deep_analysis.analyze_paper(
                     p, figures=_figs_for_analysis(pid),
-                    provider=api_provider, api_key=api_key, model=api_model or None)
+                    provider=api_provider, api_key=api_key, model=api_model or None,
+                    base_url=api_base_url or None)
             if res.get("ok"):
                 database.update_paper_deep(pid, res["markdown"], res.get("data") and
                                            deep_analysis.extract_scores(res["data"]) or {},
@@ -2867,12 +3115,237 @@ def render_obsidian_export(p, deep, figs, short):
 # 页签 1：文献库概览与详情
 # ═══════════════════════════════════════════════════
 
-tab1, tab2, tab3 = st.tabs(["📖 文献库概览", "🔬 图片精确检索", "🔍 学术搜索"])
+# ------------------------------------------------------------------
+# 横向对比工作台：多选 → 结构化矩阵 → AI 综合综述
+# ------------------------------------------------------------------
+
+def cmp_basket():
+    """对比篮：只存 paper id，列表顺序即 P1..Pn 的列顺序。"""
+    if "cmp_basket" not in st.session_state:
+        st.session_state["cmp_basket"] = []
+    return st.session_state["cmp_basket"]
+
+
+def cmp_toggle(pid):
+    b = list(cmp_basket())
+    if pid in b:
+        b.remove(pid)
+    else:
+        b.append(pid)
+    st.session_state["cmp_basket"] = b
+
+
+def cmp_goto_workbench():
+    """切到「横向对比」页签。必须走 on_click 回调：tabs 带 key 是 widget，
+    在实例化之后再写它的 session_state 会抛 StreamlitAPIException。"""
+    st.session_state["main_tabs"] = "🧭 横向对比"
+
+
+def cmp_basket_papers():
+    out = []
+    for pid in cmp_basket():
+        p = database.get_paper_by_id(pid)
+        if p:
+            out.append(dict(p))
+    return out
+
+
+def _cmp_parse_extra(raw):
+    txt = (raw or "").replace("，", ",").replace("；", ",").replace(";", ",")
+    return [x.strip() for x in txt.split(",") if x.strip()]
+
+
+def render_compare_workbench(api_provider, api_key, api_model, api_base_url=None):
+    """多篇文献 → 固定维度结构化矩阵 → AI 横向综述。"""
+    papers = cmp_basket_papers()
+
+    st.markdown("""
+    <div class="sc-top-header">
+      <div class="sc-brand">
+        <span class="sc-logo-icon">🧭</span>
+        <div>
+          <span class="sc-app-title">横向对比工作台</span>
+          <span class="sc-app-subtitle">多篇同类文献 · 固定维度结构化抽取 · AI 综合综述</span>
+        </div>
+      </div>
+      <div class="sc-status-chips">
+        <span class="sc-chip"><span class="sc-dot dot-blue"></span> 逐篇抽取 · 结果落库缓存</span>
+        <span class="sc-chip"><span class="sc-dot dot-green"></span> 数值照抄原文</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not papers:
+        st.info("对比篮还是空的 —— 到「📖 文献库概览」给每篇文章点 **＋ 对比**，再回到这里。"
+                "同一篇 + 同一套维度只抽取一次，之后换组合不再花钱。")
+        return
+
+    head1, head2 = st.columns([5, 1.1])
+    with head1:
+        st.markdown("**已选 %d 篇** · 编号顺序就是矩阵列顺序（P1–P%d）" % (len(papers), len(papers)))
+    with head2:
+        if st.button("清空对比篮", key="cmp_clear", use_container_width=True):
+            st.session_state["cmp_basket"] = []
+            st.rerun()
+
+    _cols = st.columns(min(3, len(papers)))
+    for i, p in enumerate(papers):
+        with _cols[i % len(_cols)]:
+            _t = (p.get("title") or p.get("filename") or "")[:22]
+            if st.button("✕ P%d %s" % (i + 1, _t), key="cmp_rm_%s" % p["id"][:12],
+                         use_container_width=True, help="从对比篮移除"):
+                cmp_toggle(p["id"])
+                st.rerun()
+
+    cfg1, cfg2 = st.columns([1.6, 1])
+    with cfg1:
+        preset = st.radio("对比模板", compare_engine.preset_ids(),
+                          format_func=lambda x: compare_engine.get_preset(x)["label"],
+                          horizontal=True, key="cmp_preset")
+    with cfg2:
+        extra_raw = st.text_input("额外维度（逗号分隔，可选）", key="cmp_extra",
+                                  placeholder="例：时空产率, 电化学窗口")
+    extras = _cmp_parse_extra(extra_raw)
+    fields = compare_engine.build_fields(preset, extras)
+    cache_k = compare_engine.cache_key(preset, extras)
+    st.caption(compare_engine.get_preset(preset)["desc"]
+               + " ｜ 本次共 %d 个维度%s" % (len(fields),
+                                          ("（含自定义：%s）" % "、".join(extras)) if extras else ""))
+
+    focus = st.text_area("你最关心的问题（决定综述的落点，可留空）", key="cmp_focus", height=80,
+                         placeholder="例：这几篇的 ee 到底谁高？条件谁更温和？")
+
+    pids = [p["id"] for p in papers]
+    prof_map = database.get_compare_profiles(pids, cache_k)
+    missing = [p for p in papers if p["id"] not in prof_map]
+    _chars = sum(len((p.get("full_text") or "")[:compare_engine.DEFAULT_MAX_TEXT]) for p in missing)
+    st.caption("缓存命中 **%d / %d** 篇 · 待抽取 %d 篇 · 预计新增输入 ≈ %d tokens"
+               % (len(prof_map), len(papers), len(missing), int(_chars / 1.6)))
+
+    b1, b2 = st.columns([1.6, 1.1])
+    with b1:
+        do_extract = st.button("🚀 抽取结构化数据（补足 %d 篇）" % len(missing), type="primary",
+                               use_container_width=True,
+                               disabled=(not api_key) or (not missing))
+    with b2:
+        do_force = st.button("♻️ 强制重抽全部", use_container_width=True,
+                             disabled=(not api_key),
+                             help="模板或抽取提示词改动之后用；会覆盖已有缓存")
+    if not api_key:
+        st.caption("⚠️ 侧边栏还没有可用的 API Key，抽取与综合都跑不了。")
+
+    if do_extract or do_force:
+        todo = papers if do_force else missing
+        prog = st.progress(0.0, "准备抽取…")
+        fails = []
+        ok_n = 0
+        for i, p in enumerate(todo):
+            tag = "P%d" % (papers.index(p) + 1)
+            prog.progress((i + 1) / max(1, len(todo)),
+                          "%d / %d · 正在抽取 %s…" % (i + 1, len(todo), tag))
+            figs = [dict(f) for f in database.get_paper_figures(p["id"])]
+            try:
+                prof = compare_engine.extract_profile(p, figs, fields, api_provider, api_key,
+                                                      api_model, api_base_url)
+            except Exception as e:
+                fails.append((tag, str(e)[:140]))
+                continue
+            if prof.get("raw_ok"):
+                database.save_compare_profile(p["id"], cache_k, prof)
+                ok_n += 1
+            else:
+                fails.append((tag, "模型未返回合法 JSON（可重试）"))
+        prog.empty()
+        if ok_n:
+            st.success("已抽取并缓存 %d 篇。" % ok_n)
+        if fails:
+            st.warning("有 %d 篇失败：%s" % (len(fails), "；".join("%s（%s）" % f for f in fails)))
+        prof_map = database.get_compare_profiles(pids, cache_k)
+
+    profiles = []
+    for i, p in enumerate(papers):
+        prof = prof_map.get(p["id"])
+        if not prof:
+            continue
+        profiles.append({"label": compare_engine.paper_label(i),
+                         "values": prof.get("values") or {},
+                         "metrics": prof.get("metrics") or [],
+                         "evidence": prof.get("evidence") or {},
+                         "one_line": prof.get("one_line") or "",
+                         "paper": p})
+
+    st.divider()
+    sub_matrix, sub_report = st.tabs(["📊 结构化矩阵", "🧠 AI 横向综述"])
+
+    with sub_matrix:
+        if not profiles:
+            st.info("还没有任何抽取结果。点上面的「🚀 抽取结构化数据」开始。")
+        else:
+            rows = compare_engine.matrix_rows(profiles, fields)
+            disp = []
+            for r in rows:
+                d = {}
+                for k, v in r.items():
+                    if k != "key":
+                        d[k] = v
+                disp.append(d)
+            st.dataframe(disp, use_container_width=True, hide_index=True)
+            st.caption("单元格内容全部来自原文抽取；标「未提及」表示原文没写，不代表作者没做。")
+            with st.expander("复制 Markdown 表格 / 逐篇一句话", expanded=False):
+                st.code(compare_engine.to_markdown(rows, profiles), language="markdown")
+                for pr in profiles:
+                    if pr.get("one_line"):
+                        st.markdown("- **%s** %s" % (pr["label"], pr["one_line"]))
+
+    with sub_report:
+        if len(profiles) < 2:
+            st.info("至少 2 篇抽取完成才能做横向综合。当前 %d 篇。" % len(profiles))
+        else:
+            st.caption("综合只吃结构化结果（每篇 1–2 KB），不吃全文，所以篇数再多也不会被截断。")
+            if st.button("🧠 生成横向综合综述", type="primary", disabled=not api_key, key="cmp_synth"):
+                with st.spinner("正在横向比较…"):
+                    try:
+                        txt = compare_engine.synthesize(profiles, fields, focus, api_provider,
+                                                        api_key, api_model, api_base_url)
+                        st.session_state["cmp_report"] = {"text": txt, "key": cache_k,
+                                                          "n": len(profiles), "focus": focus}
+                    except Exception as e:
+                        st.error("综合失败：%s" % e)
+            rep = st.session_state.get("cmp_report") or {}
+            if rep.get("text"):
+                if rep.get("key") != cache_k or rep.get("n") != len(profiles):
+                    st.warning("这份综述是在不同维度 / 文献组合下生成的，建议重跑一次。")
+                st.markdown(rep["text"])
+                st.download_button("📥 下载综述 Markdown", data=rep["text"].encode("utf-8"),
+                                   file_name="横向对比综述.md", mime="text/markdown",
+                                   key="cmp_dl_report")
+            else:
+                st.info("点上面的按钮生成：报告按「共同问题 / 共识 / 分歧 / 演进 / 指标表 / "
+                        "研究空白 / 一句话结论」七段写。")
+
+        if profiles:
+            st.divider()
+            _full = compare_engine.full_markdown(
+                profiles, fields, focus,
+                (st.session_state.get("cmp_report") or {}).get("text", ""),
+                time.strftime("%Y-%m-%d %H:%M"))
+            st.download_button("📦 导出完整对比（矩阵 + 综述 · Markdown）",
+                               data=_full.encode("utf-8"), file_name="文献横向对比.md",
+                               mime="text/markdown", key="cmp_dl_full")
+            st.download_button("📊 导出矩阵 CSV",
+                               data=compare_engine.to_csv(
+                                   compare_engine.matrix_rows(profiles, fields)).encode("utf-8-sig"),
+                               file_name="对比矩阵.csv", mime="text/csv", key="cmp_dl_csv")
+
+
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["📖 文献库概览", "🔬 图片精确检索", "🔍 学术搜索", "🧭 横向对比"],
+    key="main_tabs", default="📖 文献库概览", on_change="rerun")
 
 with tab1:
     selected_pid = st.session_state.get("selected_paper_id")
     if selected_pid:
-        render_paper_detail_page(selected_pid, api_provider, api_key, api_model)
+        render_paper_detail_page(selected_pid, api_provider, api_key, api_model, api_base_url=api_base_url)
         st.stop()
 
     st.markdown("""
@@ -2880,8 +3353,8 @@ with tab1:
       <div class="sc-brand">
         <span class="sc-logo-icon">📚</span>
         <div>
-          <span class="sc-app-title">PaperLibrary <span class="sc-badge-pro">PRO</span></span>
-          <span class="sc-app-subtitle">智能学术文献库 · 空间图表透视 · 毫秒级知识检索</span>
+          <span class="sc-app-title">PaperLibrary <span class="sc-badge-pro">NEXUS</span></span>
+          <span class="sc-app-subtitle">智能学术文献库 · 多维多篇横向对比 · 毫秒级科研枢纽</span>
           <span class="sc-designed-by">designed by AronyounG</span>
         </div>
       </div>
@@ -2892,6 +3365,15 @@ with tab1:
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    _cbn = len(cmp_basket())
+    if _cbn:
+        _cb1, _cb2 = st.columns([5.2, 1.3])
+        with _cb1:
+            st.markdown("**🧭 对比篮已有 %d 篇** —— 继续勾选，或直接进工作台做横向对比" % _cbn)
+        with _cb2:
+            st.button("打开对比工作台 ➡", key="cmp_open_top", type="primary",
+                      use_container_width=True, on_click=cmp_goto_workbench)
 
     try:
         papers = database.get_all_papers(selected_folder if selected_folder != "全部" else None)
@@ -3150,14 +3632,21 @@ with tab1:
                             st.image(thumb_img, width=85)
                             st.caption(f"🖼️ {len(p_figs)} 图")
 
-                # 目录操作栏（极简利落：主按钮进入工作台 + 辅助移出）
-                act1, act2 = st.columns([4.2, 0.8])
+                # 目录操作栏（进入工作台 / ＋加入对比 / 移出）
+                act1, act2, act3 = st.columns([3.5, 0.95, 0.5])
                 with act1:
                     if st.button("📖 进入研读工作台（阅读PDF · AI问答 · 全部图表） ➡",
                                  key=f"enter_wb_{pid[:12]}", type="primary", use_container_width=True):
                         st.session_state["selected_paper_id"] = pid
                         st.rerun()
                 with act2:
+                    _in_cmp = pid in cmp_basket()
+                    if st.button("✓ 已选对比" if _in_cmp else "＋ 对比",
+                                 key=f"cmp_tg_{pid[:12]}", use_container_width=True,
+                                 help="加入横向对比篮；再点一次移除"):
+                        cmp_toggle(pid)
+                        st.rerun()
+                with act3:
                     render_delete_button(p, key_suffix="catalog")
 
 
@@ -3716,3 +4205,9 @@ with tab3:
                     for g in facets["authors"]["items"][:12]:
                         st.caption(f"· {g['value']} —— {g['count']} 条")
                     st.caption(f"开放获取：{facets['oa']['items'][0]['count']} 条")
+
+# ------------------------------------------------------------------
+# 页签 4：横向对比工作台
+# ------------------------------------------------------------------
+with tab4:
+    render_compare_workbench(api_provider, api_key, api_model, api_base_url=api_base_url)

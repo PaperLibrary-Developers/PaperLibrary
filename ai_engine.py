@@ -9,16 +9,30 @@ import time
 from openai import OpenAI
 import anthropic
 
+# 先自愈代理环境变量，再创建任何客户端（否则 NO_PROXY 里的 [::1] 会让 httpx 构造即失败）
+try:
+    import api_manager as _api_manager
+    _api_manager.sanitize_proxy_env()
+except Exception:
+    pass
+
+
+def _openai_client(api_key, base_url=None):
+    return OpenAI(
+        api_key=api_key or "no-key",
+        base_url=base_url or None
+    )
+
 
 def _deepseek_client(api_key, base_url=None):
     return OpenAI(
-        api_key=api_key,
+        api_key=api_key or "no-key",
         base_url=base_url or os.environ.get('DEEPSEEK_BASE_URL', 'https://api.deepseek.com')
     )
 
 
 def _claude_client(api_key):
-    return anthropic.Anthropic(api_key=api_key)
+    return anthropic.Anthropic(api_key=api_key or "no-key")
 
 
 # ── Paper Summarization ──
@@ -40,10 +54,11 @@ def summarize_paper(full_text: str, provider: str, api_key: str, model: str = No
     text = (full_text or '')[:12000]
     prompt = f"请总结以下英文学术论文：\n\n{text}"
 
-    if provider == 'deepseek':
-        client = _deepseek_client(api_key, base_url)
+    if provider in ('deepseek', 'openai_compatible', 'openai'):
+        client = _deepseek_client(api_key, base_url) if provider == 'deepseek' else _openai_client(api_key, base_url)
+        default_model = 'deepseek-chat' if provider == 'deepseek' else 'gpt-4o-mini'
         resp = client.chat.completions.create(
-            model=model or 'deepseek-chat',
+            model=model or default_model,
             messages=[
                 {"role": "system", "content": SUMMARIZE_SYSTEM},
                 {"role": "user", "content": prompt},
@@ -113,11 +128,11 @@ def describe_figure(image_path: str, caption: str, provider: str, api_key: str, 
                 raw = raw[:-3]
         return json.loads(raw)
 
-    elif provider == 'deepseek':
-        # DeepSeek 目前 vision 能力有限，基于 caption 做文本推断描述
-        client = _deepseek_client(api_key, base_url)
+    elif provider in ('deepseek', 'openai_compatible', 'openai'):
+        client = _deepseek_client(api_key, base_url) if provider == 'deepseek' else _openai_client(api_key, base_url)
+        default_model = 'deepseek-chat' if provider == 'deepseek' else 'gpt-4o-mini'
         resp = client.chat.completions.create(
-            model=model or 'deepseek-chat',
+            model=model or default_model,
             messages=[
                 {"role": "system", "content": DESCRIBE_SYSTEM},
                 {"role": "user", "content": f"Figure caption: {caption}\n\nDescribe what this figure likely shows and suggest search tags."},
@@ -196,15 +211,16 @@ def chat_with_paper(paper: dict, figures: list, history: list, user_query: str,
     paper_ctx = build_paper_context(paper, figures)
     sys_prompt = CHAT_SYSTEM_TEMPLATE.format(paper_context=paper_ctx)
 
-    if provider == 'deepseek':
-        client = _deepseek_client(api_key, base_url)
+    if provider in ('deepseek', 'openai_compatible', 'openai'):
+        client = _deepseek_client(api_key, base_url) if provider == 'deepseek' else _openai_client(api_key, base_url)
+        default_model = 'deepseek-chat' if provider == 'deepseek' else 'gpt-4o-mini'
         messages = [{"role": "system", "content": sys_prompt}]
         for h in history:
             messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
         messages.append({"role": "user", "content": user_query})
 
         resp = client.chat.completions.create(
-            model=model or 'deepseek-chat',
+            model=model or default_model,
             messages=messages,
             temperature=0.3,
             max_tokens=3000,
@@ -233,15 +249,16 @@ def chat_with_paper(paper: dict, figures: list, history: list, user_query: str,
 def copilot_chat(system_prompt: str, history: list, user_query: str,
                  provider: str, api_key: str, model: str = None, base_url: str = None) -> str:
     """全库与系统通用智能 Copilot 对话接口"""
-    if provider == 'deepseek':
-        client = _deepseek_client(api_key, base_url=base_url)
+    if provider in ('deepseek', 'openai_compatible', 'openai'):
+        client = _deepseek_client(api_key, base_url=base_url) if provider == 'deepseek' else _openai_client(api_key, base_url=base_url)
+        default_model = 'deepseek-chat' if provider == 'deepseek' else 'gpt-4o-mini'
         messages = [{"role": "system", "content": system_prompt}]
         for turn in (history or [])[-8:]:
             messages.append({"role": turn.get("role", "user"), "content": turn.get("content", "")})
         messages.append({"role": "user", "content": user_query})
 
         resp = client.chat.completions.create(
-            model=model or 'deepseek-chat',
+            model=model or default_model,
             messages=messages,
             temperature=0.3,
             max_tokens=2500,

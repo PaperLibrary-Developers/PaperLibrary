@@ -133,6 +133,22 @@ def init_db():
     except Exception:
         pass
 
+    # 兼容性迁移：横向对比的单篇抽取缓存（同一篇 + 同一维度模板只抽一次）
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS compare_cache (
+                paper_id   TEXT NOT NULL,
+                cache_key  TEXT NOT NULL,
+                payload    TEXT DEFAULT '',
+                one_line   TEXT DEFAULT '',
+                ok         INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT '',
+                PRIMARY KEY (paper_id, cache_key)
+            )
+        """)
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -750,6 +766,95 @@ def get_deep_stats():
     arx = conn.execute("SELECT COUNT(*) FROM papers WHERE arxiv_id != ''").fetchone()[0]
     conn.close()
     return {"total": total, "deep": deep, "arxiv": arx}
+
+
+# ── 横向对比缓存（compare_engine 的 Map 结果） ──
+
+def get_compare_profile(pid, key):
+    """取单篇在某套维度下的抽取结果；没有就返回 None（调用方决定要不要花钱抽）。"""
+    import json as _json
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT payload, one_line, ok FROM compare_cache WHERE paper_id=? AND cache_key=?",
+        (pid, key)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    try:
+        payload = _json.loads(row["payload"] or "{}")
+    except Exception:
+        return None
+    payload["one_line"] = row["one_line"] or payload.get("one_line", "")
+    payload["raw_ok"] = bool(row["ok"])
+    return payload
+
+
+def save_compare_profile(pid, key, payload):
+    import json as _json
+    from datetime import datetime
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO compare_cache "
+        "(paper_id, cache_key, payload, one_line, ok, created_at) VALUES (?,?,?,?,?,?)",
+        (pid, key,
+         _json.dumps({k: payload.get(k) for k in ("values", "metrics", "evidence")},
+                     ensure_ascii=False),
+         payload.get("one_line", ""),
+         1 if payload.get("raw_ok") else 0,
+         datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+
+def get_compare_profiles(pids, key):
+    """批量取缓存，返回 {pid: profile}。列表页一次查完，避免逐篇往返。"""
+    import json as _json
+    if not pids:
+        return {}
+    conn = get_conn()
+    marks = ",".join("?" for _ in pids)
+    rows = conn.execute(
+        "SELECT paper_id, payload, one_line, ok FROM compare_cache "
+        "WHERE cache_key=? AND paper_id IN (" + marks + ")",
+        [key] + list(pids)).fetchall()
+    conn.close()
+    out = {}
+    for r in rows:
+        try:
+            payload = _json.loads(r["payload"] or "{}")
+        except Exception:
+            continue
+        payload["one_line"] = r["one_line"] or payload.get("one_line", "")
+        payload["raw_ok"] = bool(r["ok"])
+        out[r["paper_id"]] = payload
+    return out
+
+
+def delete_compare_profiles(pids, key=None):
+    """删缓存：key 为 None 时清掉这些文献的所有维度缓存。改维度后可强制重抽。"""
+    if not pids:
+        return 0
+    conn = get_conn()
+    marks = ",".join("?" for _ in pids)
+    if key is None:
+        cur = conn.execute("DELETE FROM compare_cache WHERE paper_id IN (" + marks + ")",
+                           list(pids))
+    else:
+        cur = conn.execute("DELETE FROM compare_cache WHERE cache_key=? AND paper_id IN ("
+                           + marks + ")", [key] + list(pids))
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
+def get_compare_stats():
+    """缓存覆盖情况，给对比工作台显示"已抽取 / 需抽取"。"""
+    conn = get_conn()
+    total = conn.execute("SELECT COUNT(DISTINCT paper_id) FROM compare_cache").fetchone()[0]
+    rows = conn.execute("SELECT cache_key, COUNT(*) FROM compare_cache GROUP BY cache_key").fetchall()
+    conn.close()
+    return {"papers": total, "by_key": {r[0]: r[1] for r in rows}}
 
 
 if __name__ == '__main__':

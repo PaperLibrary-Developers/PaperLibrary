@@ -208,7 +208,8 @@ def extract_offline_conclusion(mentions: list, caption: str = "") -> str:
 
 
 def summarize_figure_with_llm(caption: str, mentions: list, fig_label: str,
-                              api_provider: str, api_key: str, api_model: str) -> str:
+                              api_provider: str, api_key: str, api_model: str,
+                              base_url: str = None) -> str:
     """
     在线模式（用户配置了 API Key）：
     调用 LLM 深度梳理图注与正文讨论，提炼出关键实验结论与机理。
@@ -230,11 +231,12 @@ def summarize_figure_with_llm(caption: str, mentions: list, fig_label: str,
     try:
         reply = ai_engine.copilot_chat(
             system_prompt="你是一位专业的学术论文图表与实验机理解析专家。",
-            history_messages=[],
-            user_message=prompt,
-            api_provider=api_provider,
+            history=[],
+            user_query=prompt,
+            provider=api_provider,
             api_key=api_key,
-            api_model=api_model
+            model=api_model or None,
+            base_url=base_url or None
         )
         return reply.strip()
     except Exception as e:

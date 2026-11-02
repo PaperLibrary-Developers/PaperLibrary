@@ -17,10 +17,12 @@ import sys
 import time
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
-DIST_NAME = "个人文献库_便携版"
-DIST = os.path.join(DESKTOP, DIST_NAME)
-ZIP_PATH = os.path.join(DESKTOP, DIST_NAME + ".zip")
+RELEASES_ROOT = os.path.join(APP_DIR, "【版本发布区】")
+VERSION = "v2.5_Nexus"
+DIST_NAME = f"PaperLibrary_{VERSION}_Portable"
+VERSION_DIR = os.path.join(RELEASES_ROOT, f"{VERSION}_{time.strftime('%Y%m%d')}")
+DIST = os.path.join(VERSION_DIR, DIST_NAME)
+ZIP_PATH = os.path.join(VERSION_DIR, DIST_NAME + ".zip")
 
 PY_HOME = r"C:\Program Files\Python311"
 PY_SITE = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "Python", "Python311", "site-packages")
@@ -31,6 +33,7 @@ APP_PY_FILES = [
     "thumbs.py", "metadata_enricher.py", "citation.py", "ai_engine.py", "caption_matcher.py",
     "comparator.py", "doc_classify.py", "figure_anchor.py", "local_rank.py",
     "search_aggregate.py", "search_sources.py", "title_extract.py", "tunnel.py",
+    "compare_engine.py", "api_manager.py", "deep_analysis.py", "figures_arxiv.py", "obsidian_export.py",
 ]
 
 # 从 site-packages 里剔除（打包器、构建残留、测试与无用大件）
@@ -70,6 +73,7 @@ def copy_tree(src, dst, exclude_names=(), exclude_prefixes=()):
 
 def main():
     t0 = time.time()
+    os.makedirs(VERSION_DIR, exist_ok=True)
     if os.path.isdir(DIST):
         log(f"[1/8] 清理旧目录 {DIST}")
         shutil.rmtree(DIST, ignore_errors=True)
@@ -134,6 +138,7 @@ def main():
     # ── 5. 启动器 ──
     log("[6/8] 写入启动器与说明…")
     write_launchers(DIST)
+    add_readme_files(DIST)
 
     # ── 6. 体积统计 ──
     total = sum(os.path.getsize(os.path.join(r, f))
@@ -145,7 +150,7 @@ def main():
     subprocess.run([sys.executable, "-c", (
         "import shutil,os;"
         "shutil.make_archive(r'%s', 'zip', r'%s', r'%s')"
-        % (ZIP_PATH[:-4], DESKTOP, DIST_NAME)
+        % (ZIP_PATH[:-4], VERSION_DIR, DIST_NAME)
     )], check=True)
     zsize = os.path.getsize(ZIP_PATH) / 1024 / 1024
     log("")
@@ -155,6 +160,36 @@ def main():
     log(f"   压缩包：{ZIP_PATH}  ({zsize:.0f} MB)")
     log("=" * 62)
 
+
+
+def add_readme_files(dist):
+    readme_md = os.path.join(APP_DIR, "scripts", "README_portable.md")
+    if not os.path.exists(readme_md):
+        return
+    with open(readme_md, "r", encoding="utf-8") as f:
+        md = f.read()
+
+    # 1. 写入纯文本使用说明
+    with open(os.path.join(dist, "📖 新手使用说明与更新手册.txt"), "w", encoding="utf-8") as f:
+        f.write(md)
+    with open(os.path.join(dist, "README.md"), "w", encoding="utf-8") as f:
+        f.write(md)
+
+    # 2. 转换并写入网页版使用说明（可在浏览器直接打开）
+    try:
+        sys.path.insert(0, os.path.join(APP_DIR, "scripts"))
+        import add_readme_to_release
+        body = add_readme_to_release.md_to_html(md)
+        html = f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>个人文献库 · 新手使用指南与版本更新说明</title>
+<style>{add_readme_to_release.CSS}</style></head>
+<body><div class="wrap">{body}</div></body></html>"""
+        with open(os.path.join(dist, "📖 新手使用说明与更新手册.html"), "w", encoding="utf-8") as f:
+            f.write(html)
+    except Exception as e:
+        print("生成 HTML 说明失败:", e)
 
 def write_launchers(dist):
     app = os.path.join(dist, "app")

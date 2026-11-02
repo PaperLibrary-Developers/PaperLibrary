@@ -162,10 +162,11 @@ def build_context(paper, figures=None, max_chars=MAX_TEXT_CHARS):
 
 
 def _ask(prompt, provider, api_key, model, base_url, max_tokens=4500):
-    if provider == "deepseek":
+    if provider in ("deepseek", "openai_compatible", "openai"):
         client = _deepseek(api_key, base_url)
+        default_model = "deepseek-chat" if provider == "deepseek" else "gpt-4o-mini"
         resp = client.chat.completions.create(
-            model=model or "deepseek-chat",
+            model=model or default_model,
             messages=[{"role": "system", "content": SYSTEM},
                       {"role": "user", "content": prompt}],
             temperature=0.2,

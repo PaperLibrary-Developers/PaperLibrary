@@ -25,6 +25,46 @@ _server_started = False
 # 允许发送的目录（懒加载一次；改过扫描目录后重启服务即生效）
 _allowed_roots = None
 
+# ── 浏览器存活心跳与自动关机守护（用户叉掉浏览器标签页后自动关闭后台服务释放端口） ──
+import time
+import subprocess
+_last_heartbeat = time.time()
+_heartbeat_received = False
+_watchdog_started = False
+
+def record_heartbeat():
+    global _last_heartbeat, _heartbeat_received
+    _last_heartbeat = time.time()
+    _heartbeat_received = True
+
+def _watchdog_loop():
+    """后台监控：若收到过心跳，且超过 15 秒没有任何页面发送心跳，则判定用户已关闭网页，自动清理退出"""
+    global _last_heartbeat, _heartbeat_received
+    # 刚启动时给予 120 秒宽限期，等待用户打开浏览器并加载 Streamlit
+    time.sleep(120)
+    while True:
+        time.sleep(5)
+        # 只有在前端已经连接并发送过心跳的情况下，才根据超时退出
+        if _heartbeat_received:
+            elapsed = time.time() - _last_heartbeat
+            if elapsed > 15:
+                print(f"[file_server] 页面已关闭（心跳中断 {int(elapsed)} 秒），正在自动退出并释放端口…", flush=True)
+                # 清理 8501 (Streamlit) 和 8502 (file_server)
+                # 查找并杀掉占用 8501 与 8502 端口的进程
+                try:
+                    res = subprocess.run(["netstat", "-ano"], capture_output=True, text=True)
+                    target_pids = set()
+                    for line in res.stdout.splitlines():
+                        if ("LISTENING" in line) and (":8501" in line or ":8502" in line):
+                            parts = line.strip().split()
+                            if parts:
+                                target_pids.add(parts[-1])
+                    for pid in target_pids:
+                        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+                except Exception:
+                    pass
+                os._exit(0)
+
 
 def _load_allowed_roots():
     """允许发送的根目录白名单：文献库目录 + 程序自己的 data/ 目录。
@@ -113,6 +153,15 @@ class FileHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+
+        # 0. 浏览器存活心跳路由：/heartbeat
+        if parsed.path == "/heartbeat":
+            record_heartbeat()
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.end_headers()
+            return
 
         # 1. 静态资源路由：/static/pdfjs/xxx
         if parsed.path.startswith("/static/pdfjs/"):
@@ -307,10 +356,15 @@ def start_file_server(port=FILE_SERVER_PORT):
         return
 
     try:
+        global _watchdog_started
         server = _ReusableTCPServer(("127.0.0.1", port), FileHandler)
         t = threading.Thread(target=server.serve_forever, daemon=True)
         t.start()
         _server_started = True
+        if not _watchdog_started:
+            wt = threading.Thread(target=_watchdog_loop, daemon=True)
+            wt.start()
+            _watchdog_started = True
         print(f"[file_server] 已在 127.0.0.1:{port} 监听；"
               f"允许目录：{'、'.join(_load_allowed_roots())}")
     except OSError as e:
