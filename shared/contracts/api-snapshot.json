@@ -1,0 +1,836 @@
+{
+  "generatedAt": "2026-11-06T16:25:08.369Z",
+  "node": "v24.21.0",
+  "note": "端点契约快照：只记录响应形状，不记录内容。network 端点只比较状态类别。",
+  "endpoints": [
+    {
+      "id": "health",
+      "method": "GET",
+      "path": "/api/health",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "app",
+        "bootMs",
+        "dataDir",
+        "ok",
+        "papers",
+        "pid",
+        "port",
+        "rssMB",
+        "updatedAt",
+        "uptimeSeconds",
+        "version"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "stats",
+      "method": "GET",
+      "path": "/api/stats",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "stats"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "prefs-get",
+      "method": "GET",
+      "path": "/api/prefs",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "prefs"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "prefs-put",
+      "method": "PUT",
+      "path": "/api/prefs",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "prefs"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "shutdown-status",
+      "method": "GET",
+      "path": "/api/shutdown/status",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "app",
+        "dataDir",
+        "ok",
+        "papers",
+        "pid",
+        "port",
+        "uptimeSeconds"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "tags-list",
+      "method": "GET",
+      "path": "/api/tags",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "tags"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "tags-rename",
+      "method": "POST",
+      "path": "/api/tags/rename",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "tags-delete",
+      "method": "POST",
+      "path": "/api/tags/delete",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-list",
+      "method": "GET",
+      "path": "/api/papers",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "boolean",
+        "fulltext",
+        "items",
+        "ok",
+        "page",
+        "pageCount",
+        "pageSize",
+        "scope",
+        "total"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-create",
+      "method": "POST",
+      "path": "/api/papers",
+      "status": 201,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "paper"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-bulk",
+      "method": "POST",
+      "path": "/api/papers/bulk",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "changed",
+        "ok",
+        "papers"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-scan-pdfs",
+      "method": "GET",
+      "path": "/api/papers/scan/pdfs",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "scan"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-associate-pdf",
+      "method": "POST",
+      "path": "/api/papers/associate-pdf",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-cleanup-duplicates",
+      "method": "POST",
+      "path": "/api/papers/cleanup-duplicates",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "files",
+        "hint",
+        "moved",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-tidy-pdf-names",
+      "method": "POST",
+      "path": "/api/papers/tidy-pdf-names",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "attachmentResult",
+        "ok",
+        "result"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-fulltext-batch",
+      "method": "POST",
+      "path": "/api/papers/fulltext/batch",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "failed",
+        "ok",
+        "results",
+        "succeeded",
+        "total"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-upload",
+      "method": "POST",
+      "path": "/api/papers/upload",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-get-missing",
+      "method": "GET",
+      "path": "/api/papers/0000000000000000",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-update-missing",
+      "method": "PUT",
+      "path": "/api/papers/0000000000000000",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-delete-missing",
+      "method": "DELETE",
+      "path": "/api/papers/0000000000000000",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-fulltext-get-missing",
+      "method": "GET",
+      "path": "/api/papers/0000000000000000/fulltext",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-fulltext-post-missing",
+      "method": "POST",
+      "path": "/api/papers/0000000000000000/fulltext",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-fulltext-text-missing",
+      "method": "POST",
+      "path": "/api/papers/0000000000000000/fulltext/text",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-attachments-get-missing",
+      "method": "GET",
+      "path": "/api/papers/0000000000000000/attachments",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-attachments-post-missing",
+      "method": "POST",
+      "path": "/api/papers/0000000000000000/attachments",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-attachment-download-missing",
+      "method": "GET",
+      "path": "/api/papers/0000000000000000/attachments/a.bin",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-attachment-delete-missing",
+      "method": "DELETE",
+      "path": "/api/papers/0000000000000000/attachments/a.bin",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-chat-get-missing",
+      "method": "GET",
+      "path": "/api/papers/0000000000000000/chat",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-chat-delete-missing",
+      "method": "DELETE",
+      "path": "/api/papers/0000000000000000/chat",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-chat-post-missing",
+      "method": "POST",
+      "path": "/api/papers/0000000000000000/chat",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-vision-missing",
+      "method": "POST",
+      "path": "/api/papers/0000000000000000/vision",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-transcribe-missing",
+      "method": "POST",
+      "path": "/api/papers/0000000000000000/transcribe",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-cite-missing",
+      "method": "GET",
+      "path": "/api/papers/0000000000000000/cite?format=gb",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-pdf-missing",
+      "method": "GET",
+      "path": "/api/papers/0000000000000000/pdf",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-summary-zh-missing",
+      "method": "POST",
+      "path": "/api/papers/0000000000000000/summary-zh",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-summary-zh-batch",
+      "method": "POST",
+      "path": "/api/papers/summary-zh/batch",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "facets",
+      "method": "GET",
+      "path": "/api/facets",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "authors",
+        "fulltext",
+        "ok",
+        "query",
+        "tags",
+        "venues",
+        "years"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "ai-settings-get",
+      "method": "GET",
+      "path": "/api/ai/settings",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "ready",
+        "settings"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "ai-settings-put",
+      "method": "PUT",
+      "path": "/api/ai/settings",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "ready",
+        "settings"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "ai-test",
+      "statusClass": "4xx"
+    },
+    {
+      "id": "ai-summarize",
+      "method": "POST",
+      "path": "/api/ai/summarize",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "ai-summarize-sync",
+      "method": "POST",
+      "path": "/api/ai/summarize-sync",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "ai-summarize-sync-missing",
+      "method": "POST",
+      "path": "/api/ai/summarize-sync",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "external-sources",
+      "method": "GET",
+      "path": "/api/external/sources",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "settings",
+        "sources"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "external-search",
+      "statusClass": "2xx"
+    },
+    {
+      "id": "sources-settings-get",
+      "method": "GET",
+      "path": "/api/sources/settings",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "settings"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "sources-settings-put",
+      "method": "PUT",
+      "path": "/api/sources/settings",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "settings"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "sources-backfill",
+      "statusClass": "2xx"
+    },
+    {
+      "id": "sources-openalex-test",
+      "statusClass": "2xx"
+    },
+    {
+      "id": "websearch-settings-get",
+      "method": "GET",
+      "path": "/api/websearch/settings",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "ready",
+        "settings"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "websearch-settings-put",
+      "method": "PUT",
+      "path": "/api/websearch/settings",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "ok",
+        "ready",
+        "settings"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "websearch-test",
+      "statusClass": "4xx"
+    },
+    {
+      "id": "websearch-search",
+      "statusClass": "4xx"
+    },
+    {
+      "id": "websearch-answer",
+      "statusClass": "4xx"
+    },
+    {
+      "id": "fetch-doi",
+      "statusClass": "5xx"
+    },
+    {
+      "id": "fetch-title",
+      "statusClass": "5xx"
+    },
+    {
+      "id": "import-pdf-preflight",
+      "method": "POST",
+      "path": "/api/import/pdf",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "import-pdf-abandon",
+      "method": "DELETE",
+      "path": "/api/import/pdf?batch=__none__",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "import-pdf-confirm",
+      "method": "POST",
+      "path": "/api/import/pdf/confirm",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "import-json",
+      "method": "POST",
+      "path": "/api/import/json",
+      "status": 400,
+      "statusClass": "4xx",
+      "jsonKeys": [
+        "error",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "export-json",
+      "method": "GET",
+      "path": "/api/export/json",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "app",
+        "exportedAt",
+        "papers",
+        "version"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "export-bibtex",
+      "method": "GET",
+      "path": "/api/export/bibtex",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": null,
+      "contentType": "text/plain",
+      "kind": "api"
+    },
+    {
+      "id": "export-markdown",
+      "method": "GET",
+      "path": "/api/export/markdown",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": null,
+      "contentType": "text/markdown",
+      "kind": "api"
+    },
+    {
+      "id": "release-build",
+      "skipped": true
+    },
+    {
+      "id": "static-index",
+      "method": "GET",
+      "path": "/",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": null,
+      "contentType": "text/html",
+      "kind": "html"
+    },
+    {
+      "id": "static-css",
+      "method": "GET",
+      "path": "/styles.css",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": null,
+      "contentType": "text/css",
+      "kind": "api"
+    },
+    {
+      "id": "vendor-pdfjs",
+      "method": "GET",
+      "path": "/vendor/pdfjs/build/pdf.mjs",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": null,
+      "contentType": "text/javascript",
+      "kind": "optional"
+    },
+    {
+      "id": "vendor-katex",
+      "method": "GET",
+      "path": "/vendor/katex/katex.min.css",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": null,
+      "contentType": "text/css",
+      "kind": "optional"
+    },
+    {
+      "id": "shutdown",
+      "method": "POST",
+      "path": "/api/shutdown",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "message",
+        "ok"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    }
+  ]
+}
