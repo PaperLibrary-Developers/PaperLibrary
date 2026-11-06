@@ -288,7 +288,14 @@ class HttpServer:
             "static_handler": static_handler,
             "verbose": verbose,
         })
-        self.httpd = ThreadingHTTPServer((host, port), handler_cls)
+        # socketserver 默认 backlog=5：浏览器并行加载 mjs/Range/缩略图时会触发 ECONNREFUSED。
+        # 提到 128（对齐 Node http server 的默认 511 量级，128 对本地单用户足够）。
+        class _Server(ThreadingHTTPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+            request_queue_size = 128
+
+        self.httpd = _Server((host, port), handler_cls)
         self.httpd.daemon_threads = True
         self.thread = None
 
