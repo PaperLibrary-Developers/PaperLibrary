@@ -1,22 +1,18 @@
 # -*- coding: utf-8 -*-
-"""论文深度分析：字段化结论 + 五维评分（无 Key 时本地降级）。
+"""论文深度分析：22 个语义槽位 + 五维评分（无 Key 时本地降级）。
 
 移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\deep_analysis.py
 契约名：deep.get / deep.run（GET|POST /api/papers/:id/deep-analysis）
 
-与旧版的差异：
-  · 去掉 openai / anthropic 直连与 22 字段长报告渲染：合并后只保留契约 §7 的形状
-    （paperId / updatedAt / model / fields / scores / oneLine），模型调用统一走 services.llm；
-  · **无 Key 或调用失败一律本地降级并返回 200**（契约 §8 + 离线目标 G2），
-    fields 里显式写明「未配置大模型，仅本地分析」，scores 由本地信号启发式给出（1-5 分）；
-  · 落库由 api 层走 store.repo.save_analysis(paper_id, "deep", payload)。
-
-本地评分信号（可解释、零网络）：
-  创新性   ← 摘要里 novel/first/unprecedented + 高影响力期刊关键词
-  严谨性   ← 图表数、正文体量、参考文献数、实验段关键词
-  影响力   ← 期刊层级 + 星级/评分 + 年份新近度
-  可复现性 ← 有原文、有实验条件（温度/时间/溶剂/电位）、有补充材料
-  可读性   ← 摘要是否成段、有无笔记/中文总结、标题长度是否合理
+保留全部能力（G3：22 字段 + 五维评分），同时遵守契约 §7 的 6 个顶层键：
+  { paperId, updatedAt, model, fields, scores, oneLine }
+  · fields：24 个语义槽位（原 JSON 的 19 个顶层键，experiments 展开 6 个、applicability 展开 2 个）
+    + 「评分理由」（原 scores.*.reason 的落点）+ 「分析模式」说明；
+  · scores：契约五维（创新性 / 严谨性 / 影响力 / 可复现性 / 可读性），1-5 整数；
+  · 槽位表与系统提示词在 paperlib/legacy/deep_prompt.py（原 SYSTEM 提示词原样搬过来）；
+  · 本地降级在 paperlib/legacy/deep_local.py（24 槽位全给值，取不到的写「未提及」）；
+  · 模型调用统一走 services.llm（T4 适配器）；无 Key 或调用/解析失败一律本地降级返回 200
+    （契约 §8 + 离线目标 G2），不抛错、不编造。
 """
 from __future__ import annotations
 
@@ -24,211 +20,148 @@ import json
 import re
 
 from paperlib.legacy import compare_engine
+from paperlib.legacy import deep_local, deep_prompt
 from paperlib.util import now_iso
 
-FIELDS = ["研究问题", "方法", "核心结论", "创新点", "证据强度", "局限", "适用场景", "对我的价值"]
-SCORE_KEYS = ["创新性", "严谨性", "影响力", "可复现性", "可读性"]
-LOCAL_MODEL = "local-heuristic"
-LOCAL_NOTE = "未配置大模型，仅本地分析（依据题录、摘要、正文体量与图表计数，不编造数据）"
-MAX_TEXT = 26000
+FIELDS = deep_prompt.FIELDS
+SCORE_KEYS = deep_prompt.SCORE_KEYS
+LOCAL_MODEL = deep_prompt.LOCAL_MODEL
+LOCAL_NOTE = deep_prompt.LOCAL_NOTE
+MAX_TEXT = deep_prompt.MAX_TEXT
 
-_NOVEL = re.compile(r"\b(novel|for the first time|unprecedented|first report|unparalleled)\b", re.I)
-_TOP_VENUE = re.compile(r"(nature|science|jacs|journal of the american chemical society|angew|"
-                        r"advanced materials|acs nano|chemical reviews|cell|pnas|"
-                        r"nature (?:chemistry|physics|materials|energy|catalysis|nanotechnology))", re.I)
-_METHOD = re.compile(r"\b(we (?:used|measured|performed|employed|prepared)|dft|nn?mr|xps|xrd|"
-                     r"electrochem\w*|spectroscop\w*|simulation)\b", re.I)
-_CONDITION = re.compile(r"\b\d+\s*(?:°C|℃|K|h|min|V|mA|nm|M)\b|\bph\s*[=~]?\s*\d", re.I)
-_LIMIT = re.compile(r"\b(limitation|drawback|remains? (?:a )?challenge|future work|"
-                    r"however,?\s+(?:the|this|it))\b", re.I)
-_APPLY = re.compile(r"\b(applicable|application|can be (?:used|applied)|toward|for the (?:detection|"
-                    r"synthesis|reduction)|promising)\b", re.I)
-_FINDING = re.compile(r"\b(demonstrates?|reveals?|indicates?|shows? that|confirms?|suggests?|"
-                      r"we (?:find|found|show))\b", re.I)
-_SENT_SPLIT = re.compile(r"(?<=[.!?。！？])\s+|\n+")
+paper_signals = deep_local.paper_signals
+local_scores = deep_local.local_scores
+analyze_local = deep_local.analyze_local
 
 
-def _clean(text, limit=0):
-    value = re.sub(r"\s+", " ", str(text or "")).strip()
-    return value[:limit] if limit else value
+def _lookup(obj, path):
+    """按 'experiments.systems' 这样的路径取值；取不到返回 None。"""
+    current = obj
+    for part in str(path or "").split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+        if current is None:
+            return None
+    return current
 
 
-def _sentences(text, minimum=12):
-    return [_clean(s) for s in _SENT_SPLIT.split(str(text or "")) if len(_clean(s)) >= minimum]
+def _as_text(value, limit=0):
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        text = "；".join(str(item).strip() for item in value if str(item or "").strip())
+    elif isinstance(value, dict):
+        text = json.dumps(value, ensure_ascii=False)
+    else:
+        text = str(value)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit] if limit else text
 
 
-def _pick(sentences, regex, fallback=""):
-    for sentence in sentences:
-        if regex.search(sentence):
-            return sentence[:320]
-    return fallback
+def _as_formula(value):
+    if not isinstance(value, list):
+        return _as_text(value)
+    lines = []
+    for item in value:
+        if isinstance(item, dict):
+            latex = _as_text(item.get("latex"), 200)
+            meaning = _as_text(item.get("meaning"), 200)
+            if latex:
+                lines.append("$$" + latex + "$$" + (" — " + meaning if meaning else ""))
+        elif str(item or "").strip():
+            lines.append(_as_text(item, 200))
+    return "；".join(lines)
 
 
-def _clamp(value, low=1, high=5):
+def _map_fields(parsed):
+    """把模型 JSON（原英文键结构）映射成 24 个中文字段 + 评分理由 + 分析模式。"""
+    fields = {}
+    for name, path, kind in deep_prompt.FIELD_SLOTS:
+        value = _lookup(parsed, path)
+        if value is None:
+            value = parsed.get(name)  # 容错：模型忽略嵌套、直接用中文键平铺
+        if kind == "formula":
+            text = _as_formula(value)
+        elif kind == "list":
+            text = _as_text(value)
+        else:
+            text = _as_text(value)
+        fields[name] = text.strip() if text and text.strip() else "未提及"
+    return fields
+
+
+def _scale(raw):
+    """把模型给的分数压到 1-5：原提示词是 0-10 时按 /2 折算，越界夹紧。"""
     try:
-        number = int(round(float(value)))
+        number = float(raw)
     except (TypeError, ValueError):
-        return low
-    return max(low, min(high, number))
+        return None
+    if number > 5:
+        number = number / 2.0
+    return max(1, min(5, int(number + 0.5)))  # 四舍五入（不用 round()，避免 4.5→4 的银行家舍入）
 
 
-def paper_signals(paper, figures=None, full_text=""):
-    """把卡片/图表/正文压成评分信号（本地降级与测试都用它）。"""
-    abstract = _clean(paper.get("abstract"))
-    text = _clean(full_text)
-    venue = str(paper.get("venue") or paper.get("journal") or "")
-    refs = paper.get("refs") or []
-    attachments = paper.get("attachments") or []
-    return {
-        "abstractChars": len(abstract),
-        "fullTextChars": len(text),
-        "figures": len(figures or []),
-        "refs": len(refs) if isinstance(refs, list) else 0,
-        "attachments": len(attachments) if isinstance(attachments, list) else 0,
-        "novelWords": len(_NOVEL.findall(abstract + " " + text[:4000])),
-        "topVenue": bool(_TOP_VENUE.search(venue)),
-        "hasMethodWords": bool(_METHOD.search(abstract + " " + text[:8000])),
-        "hasConditions": bool(_CONDITION.search(abstract + " " + text[:8000])),
-        "limits": _pick(_sentences(abstract + " " + text[:6000]), _LIMIT),
-        "rating": int(paper.get("rating") or 0),
-        "starred": bool(paper.get("starred")),
-        "notesChars": len(_clean(paper.get("notes"))),
-        "summaryZhChars": len(_clean(paper.get("summaryZh"))),
-        "year": paper.get("year"),
-    }
-
-
-def local_scores(signals):
-    """五维本地启发式评分（1-5 整数，可解释）。"""
-    novelty = 2
-    if signals["novelWords"]:
-        novelty += 1
-    if signals["topVenue"]:
-        novelty += 1
-    if signals["figures"] >= 6:
-        novelty += 1
-
-    rigor = 1
-    if signals["figures"] >= 3:
-        rigor += 1
-    if signals["fullTextChars"] >= 8000:
-        rigor += 1
-    if signals["refs"] >= 15:
-        rigor += 1
-    if signals["hasConditions"]:
-        rigor += 1
-
-    impact = 2
-    if signals["topVenue"]:
-        impact += 1
-    if signals["rating"] >= 4 or signals["starred"]:
-        impact += 1
-    try:
-        year = int(signals.get("year") or 0)
-    except (TypeError, ValueError):
-        year = 0
-    if year >= 2021:
-        impact += 1
-
-    reproducible = 1
-    if signals["fullTextChars"] >= 3000:
-        reproducible += 1
-    if signals["hasMethodWords"]:
-        reproducible += 1
-    if signals["hasConditions"]:
-        reproducible += 1
-    if signals["attachments"] >= 1:
-        reproducible += 1
-
-    readable = 2
-    if signals["abstractChars"] >= 300:
-        readable += 1
-    if signals["notesChars"] or signals["summaryZhChars"]:
-        readable += 1
-    if signals["figures"] >= 2:
-        readable += 1
-
-    return {
-        "创新性": _clamp(novelty),
-        "严谨性": _clamp(rigor),
-        "影响力": _clamp(impact),
-        "可复现性": _clamp(reproducible),
-        "可读性": _clamp(readable),
-    }
-
-
-def analyze_local(paper, figures=None, full_text=""):
-    """本地降级分析：字段尽量取原文句子，缺就如实写「未提及」。"""
-    abstract = _clean(paper.get("abstract"))
-    sentences = _sentences(abstract + " " + _clean(full_text)[:12000])
-    signals = paper_signals(paper, figures, full_text)
-
-    question = sentences[0] if sentences else _clean(paper.get("title"), 200)
-    method = _pick(sentences, _METHOD, "未提及（摘要里没有方法描述）")
-    finding = _pick(sentences, _FINDING, "未提及（摘要里没有结论句）")
-    novelty = _pick(sentences, _NOVEL, "未提及（摘要未强调新颖性）")
-    limits = signals["limits"] or "未提及（作者未在摘要中陈述局限）"
-    apply = _pick(sentences, _APPLY, "未提及")
-
-    evidence = ("图表 %d 张；正文 %d 字；参考文献 %d 条；补充材料 %d 个；条件描述%s"
-                % (signals["figures"], signals["fullTextChars"], signals["refs"],
-                   signals["attachments"], "有" if signals["hasConditions"] else "无"))
-
-    tags = paper.get("tags") or []
-    keywords = paper.get("keywords") or []
-    interest = "；".join(str(t) for t in (list(keywords) + list(tags))[:6]) or "未标注关键词/标签"
-    value = "建议按「%s」方向归档；可用于与同类工作做横向对比。" % (
-        _clean(paper.get("venue") or paper.get("journal") or "未指定期刊", 60))
-
-    scores = local_scores(signals)
-    fields = {
-        "研究问题": question or "未提及",
-        "方法": method,
-        "核心结论": finding,
-        "创新点": novelty,
-        "证据强度": evidence,
-        "局限": limits,
-        "适用场景": apply,
-        "对我的价值": value + ("（关注点：%s）" % interest if interest else ""),
-        "分析模式": LOCAL_NOTE,
-    }
-    one_line = "本地分析：%s（%s）—— 五维均分 %.1f/5" % (
-        _clean(paper.get("title") or paper.get("id") or "未命名文献", 80),
-        (str(paper.get("year")) + "，" if paper.get("year") else "") +
-        (str(paper.get("venue") or paper.get("journal") or "未指定来源")),
-        sum(scores.values()) / max(1, len(scores)),
-    )
-    return {"fields": fields, "scores": scores, "oneLine": one_line}
+def _map_scores(parsed):
+    """返回 (scores, 评分理由文本)；模型用英文键（novelty…）也能认。"""
+    raw_scores = parsed.get("scores") if isinstance(parsed.get("scores"), dict) else {}
+    scores, reasons = {}, []
+    for key in SCORE_KEYS:
+        slot = None
+        for alias in deep_prompt.SCORE_ALIASES.get(key, [key]):
+            if alias in raw_scores:
+                slot = raw_scores[alias]
+                break
+        score, reason = None, ""
+        if isinstance(slot, dict):
+            score = _scale(slot.get("score"))
+            reason = _as_text(slot.get("reason"), 300)
+        elif slot is not None:
+            score = _scale(slot)
+        if score is None:
+            score = 3
+        scores[key] = score
+        reasons.append("%s %d%s" % (key, score, ("：" + reason) if reason else ""))
+    return scores, "；".join(reasons)
 
 
 def _llm_prompt(paper, figures, full_text):
     parts = ["# 题录"]
     for label, key in (("标题", "title"), ("作者", "authors"), ("期刊", "venue"),
-                       ("年份", "year"), ("DOI", "doi")):
+                       ("年份", "year"), ("DOI", "doi"), ("标签", "tags")):
         value = paper.get(key)
-        if isinstance(value, list):
-            value = "、".join(str(v) for v in value)
-        if value:
+        if isinstance(value, (list, tuple)):
+            value = "、".join(str(v) for v in value if str(v).strip())
+        if value not in (None, ""):
             parts.append("- %s：%s" % (label, value))
+
     if figures:
-        parts.append("\n# 图表清单")
-        for fig in figures[:20]:
-            caption = _clean(fig.get("caption"), 200)
+        parts.append("\n# 图表清单（按序，含图注）")
+        for figure in figures[:30]:
+            caption = re.sub(r"\s+", " ", str(figure.get("caption") or "")).strip()
+            line = "- [Figure %s]" % (figure.get("fig_index") or figure.get("figIndex") or "")
+            figure_type = str(figure.get("figure_type") or figure.get("figureType") or "")
+            if figure_type:
+                line += " (%s)" % figure_type
             if caption:
-                parts.append("- [Figure %s] %s" % (fig.get("fig_index"), caption))
-    body = _clean(full_text)[:MAX_TEXT]
-    if body:
-        parts.append("\n# 正文节选\n" + body)
+                line += " 图注: " + caption[:220]
+            parts.append(line)
+
+    text = str(full_text or "").strip()
+    if text:
+        if len(text) > MAX_TEXT:
+            head = text[: int(MAX_TEXT * 0.62)]
+            tail = text[-int(MAX_TEXT * 0.30):]
+            text = head + "\n\n……（中段省略）……\n\n" + tail
+        parts.append("\n# 正文\n" + text)
     else:
-        abstract = _clean(paper.get("abstract"))
+        abstract = str(paper.get("abstract") or paper.get("summary") or "").strip()
         if abstract:
-            parts.append("\n# 摘要\n" + abstract)
-    parts.append("\n# 任务\n只依据上面的材料，输出 JSON："
-                 '{"fields": {"研究问题": "", "方法": "", "核心结论": "", "创新点": "",'
-                 ' "证据强度": "", "局限": "", "适用场景": "", "对我的价值": ""},'
-                 ' "scores": {"创新性": 1-5, "严谨性": 1-5, "影响力": 1-5,'
-                 ' "可复现性": 1-5, "可读性": 1-5}, "oneLine": ""}。'
-                 "数值必须来自原文，没有就写「未提及」，不要编造。")
+            parts.append("\n# 摘要\n" + abstract[:6000])
+        else:
+            parts.append("\n# 正文\n（本地没有抽取到正文与摘要，请仅基于题录与图表清单做保守分析）")
+
+    parts.append("\n请深度分析这篇论文，严格按系统消息里的 JSON 结构输出。")
     return "\n".join(parts)
 
 
@@ -236,12 +169,8 @@ def _parse_json_object(raw):
     text = str(raw or "").strip()
     tick = chr(96) * 3
     if text.startswith(tick):
-        text = text[len(tick):]
-        if text.lstrip().lower().startswith("json"):
-            text = text.lstrip()[4:]
-        if text.rstrip().endswith(tick):
-            text = text.rstrip()[:-len(tick)]
-        text = text.strip()
+        text = re.sub(r"^" + re.escape(tick) + r"[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*" + re.escape(tick) + r"$", "", text).strip()
     try:
         obj = json.loads(text)
         return obj if isinstance(obj, dict) else None
@@ -257,66 +186,73 @@ def _parse_json_object(raw):
     return None
 
 
-def analyze_with_llm(services, paper, figures, full_text):
-    """返回 (fields, scores, oneLine, model)；没有可用模型/失败时返回 None。"""
+def _call_llm(services, messages):
     llm = getattr(services, "llm", None)
-    if not compare_engine.llm_ready(llm):
-        return None
-    messages = [
-        {"role": "system", "content": "你是严谨的化学/材料领域审稿人，只输出合法 JSON。"},
-        {"role": "user", "content": _llm_prompt(paper, figures, full_text)},
-    ]
     try:
-        response = llm.chat(messages, {"maxTokens": 1600, "temperature": 0.2, "json": True})
+        response = llm.chat(messages, {"maxTokens": 2400, "temperature": 0.2})
     except (NotImplementedError, Exception):  # noqa: BLE001 - 在线失败必须降级
-        return None
+        return ""
     text = response if isinstance(response, str) else ""
     if isinstance(response, dict):
         for key in ("content", "text", "message", "answer"):
-            if isinstance(response.get(key), str):
-                text = response[key]
+            value = response.get(key)
+            if isinstance(value, str) and value.strip():
+                text = value
                 break
-    parsed = _parse_json_object(text)
-    if not parsed:
+    return text
+
+
+def analyze_with_llm(services, paper, figures, full_text):
+    """返回 {fields, scores, oneLine, model}；无可用模型或解析失败返回 None。"""
+    llm = getattr(services, "llm", None)
+    if not compare_engine.llm_ready(llm):
         return None
 
-    raw_fields = parsed.get("fields") if isinstance(parsed.get("fields"), dict) else {}
-    if not raw_fields:
-        # 模型有时忽略嵌套直接平铺：仍按契约字段名认领
-        raw_fields = {name: parsed.get(name) for name in FIELDS if name in parsed}
-    fields = {}
-    for name in FIELDS:
-        value = raw_fields.get(name)
-        if isinstance(value, (list, tuple)):
-            value = "；".join(str(v) for v in value)
-        fields[name] = _clean(value, 800) or "未提及"
+    messages = [
+        {"role": "system", "content": deep_prompt.SYSTEM_PROMPT},
+        {"role": "user", "content": _llm_prompt(paper, figures, full_text)},
+    ]
+    texts = [_call_llm(services, messages)]
+    parsed = _parse_json_object(texts[0])
+    if parsed is None:
+        # 原实现的补正重试：只要求它把 JSON 修好，最多一次
+        retry = list(messages)
+        retry[-1] = {"role": "user",
+                     "content": messages[-1]["content"] +
+                     "\n\n注意：上一次输出不是合法 JSON。这次只输出 JSON 本体，不要围栏与解释。"}
+        texts.append(_call_llm(services, retry))
+        parsed = _parse_json_object(texts[-1])
+    if parsed is None:
+        return None
 
-    raw_scores = parsed.get("scores") if isinstance(parsed.get("scores"), dict) else {}
-    scores = {key: _clamp(raw_scores.get(key, 3)) for key in SCORE_KEYS}
-    one_line = _clean(parsed.get("oneLine") or parsed.get("one_line"), 300)
-    if not one_line:
-        one_line = "模型分析：%s" % _clean(paper.get("title"), 80)
-    model = ""
+    fields = _map_fields(parsed)
+    scores, reasons = _map_scores(parsed)
+    fields["评分理由"] = reasons
     try:
-        model = str((llm.settings or {}).get("model") or "")
+        model = str((llm.settings or {}).get("model") or "llm")
     except Exception:  # noqa: BLE001
-        model = ""
-    return {"fields": fields, "scores": scores, "oneLine": one_line, "model": model or "llm"}
+        model = "llm"
+    fields["分析模式"] = "大模型分析（model=%s）" % model
+
+    one_line = (_as_text(parsed.get("one_liner"), 300) or fields.get("一句话概括")
+                or ("模型分析：" + _as_text(paper.get("title"), 80)))
+    return {"fields": fields, "scores": scores, "oneLine": one_line, "model": model}
 
 
 def run(services, paper, figures=None, full_text=""):
-    """契约 §7/§8 的 analysis 对象（6 个键，一个不多一个不少）。"""
-    paper_id = paper.get("id")
+    """契约 §7/§8 的 analysis 对象（6 个顶层键，一个不多一个不少）。"""
     result = analyze_with_llm(services, paper, figures, full_text)
     if result:
-        fields, scores, one_line = result["fields"], result["scores"], result["oneLine"]
-        model = result.get("model") or "llm"
+        fields, scores, one_line, model = (result["fields"], result["scores"],
+                                          result["oneLine"], result["model"])
     else:
         local = analyze_local(paper, figures, full_text)
-        fields, scores, one_line = local["fields"], local["scores"], local["oneLine"]
+        fields = local["fields"]
+        scores = local["scores"]
+        one_line = local["oneLine"]
         model = LOCAL_MODEL
     return {
-        "paperId": paper_id,
+        "paperId": paper.get("id"),
         "updatedAt": now_iso(),
         "model": model,
         "fields": fields,

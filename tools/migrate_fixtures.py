@@ -176,6 +176,10 @@ def main(argv=None):
                                     for k, v in sources.items()}))
     store = _open_store(args)
     try:
+        if args.verify and not args.apply:          # 只自检已有数据目录（不跑迁移）
+            check = _verify(store)
+            print(json.dumps(check, ensure_ascii=False, indent=2))
+            return 0 if not check["errors"] else 1
         report = migrate_from_legacy(store, config, dry_run=not args.apply)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         if args.verify and args.apply:

@@ -55,6 +55,9 @@ class ServerFixture:
         shutil.rmtree(self.data_dir, ignore_errors=True)
 
     def call(self, method, path, body=None, raw=None, headers=None):
+        # 用 http.client 而不是 urllib：避免其它测试对 urllib 全局 opener 的 monkeypatch 串味
+        import http.client
+
         data = None
         hdrs = dict(headers or {})
         if raw is not None:
@@ -63,12 +66,13 @@ class ServerFixture:
         elif body is not None:
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
             hdrs["Content-Type"] = "application/json"
-        req = urllib.request.Request(self.base + path, data=data, method=method, headers=hdrs)
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.port, timeout=20)
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                return resp.status, resp.headers.get("Content-Type", ""), resp.read()
-        except urllib.error.HTTPError as exc:
-            return exc.code, exc.headers.get("Content-Type", ""), exc.read()
+            conn.request(method, path, body=data, headers=hdrs)
+            resp = conn.getresponse()
+            return resp.status, resp.headers.get("Content-Type", ""), resp.read()
+        finally:
+            conn.close()
 
     def json(self, method, path, body=None):
         status, ctype, payload = self.call(method, path, body)

@@ -169,7 +169,7 @@ def build_note(paper, figures=None, data_dir=None, now=None, note_name=None):
     if len(meta) > 1:
         body += meta + [""]
 
-    abstract = str(paper.get("abstract") or "").strip()
+    abstract = str(paper.get("abstract") or paper.get("summary") or "").strip()
     if abstract:
         body += ["## 摘要", "", abstract, ""]
 

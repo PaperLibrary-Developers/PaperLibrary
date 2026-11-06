@@ -11,7 +11,9 @@
   figures          PDF 图表提取（PyMuPDF）    ← parser.py（extract_figures）+ figures_arxiv 的落盘规则
   lexicon          中英术语表（155 条）        ← local_rank.py 的 GLOSSARY + 补充
   compare_engine   横向对比模板/矩阵/报告      ← compare_engine.py
-  deep_analysis    深度分析字段与五维评分      ← deep_analysis.py
+  deep_prompt      深度分析系统提示词 + 24 语义槽位表 ← deep_prompt.py
+  deep_local       深度分析的本地降级（无 Key）        ← deep_analysis.py
+  deep_analysis    深度分析编排 + LLM 结果映射          ← deep_analysis.py
   obsidian_note    Obsidian 笔记拼装           ← obsidian_export.py（落盘改由 adapters/obsidian.py）
 """
 from __future__ import annotations
@@ -22,6 +24,8 @@ __all__ = [
     "figures",
     "lexicon",
     "compare_engine",
+    "deep_prompt",
+    "deep_local",
     "deep_analysis",
     "obsidian_note",
 ]

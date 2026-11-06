@@ -14,7 +14,8 @@ class ContractSnapshotTest(unittest.TestCase):
     def test_snapshot_zero_fail(self):
         proc = subprocess.run(
             [sys.executable, str(ROOT / "tools" / "contract_check.py")],
-            cwd=str(ROOT), capture_output=True, text=True, timeout=300,
+            cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=300,
             env={**__import__("os").environ, "PYTHONUTF8": "1"},
         )
         output = (proc.stdout or "") + (proc.stderr or "")

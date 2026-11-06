@@ -75,6 +75,12 @@ CROSSREF_DOI = {"message": {
     "container-title": ["J. Supramol. Chem."], "volume": "12", "issue": "3", "page": "100-110",
     "publisher": "Wiley", "type": "journal-article", "URL": "https://doi.org/10.1000/abc",
     "abstract": "Crossref abstract.", "subject": ["Chemistry"]}}
+# 摘要纯函数（shared/pure/abstract.py）有「至少 200 字符才算可用」的门槛，夹具要够长
+_LONG_WORDS = ("comprehensive study cucurbituril host guest chemistry aqueous media revealing "
+               "thermodynamic control binding equilibrium counterions wide range temperature "
+               "conditions entropic enthalpy compensating salt dependent association constants "
+               "isothermal titration calorimetry molecular dynamics simulation experiments "
+               "reported quantitative agreement measured values explicit solvent correction").split()
 OPENALEX_DOI = {
     "id": "https://openalex.org/W1", "doi": "https://doi.org/10.1000/abc",
     "title": "Cucurbituril host-guest chemistry in water", "publication_year": 2019,
@@ -83,7 +89,7 @@ OPENALEX_DOI = {
     "primary_location": {"source": {"display_name": "J. Supramol. Chem."}},
     "authorships": [{"author": {"display_name": "Alice Nitschke"}},
                     {"author": {"display_name": "Bob Lee"}}],
-    "abstract_inverted_index": {"A": [0], "much": [1], "longer": [2], "abstract": [3], "here": [4]},
+    "abstract_inverted_index": {word: [index] for index, word in enumerate(_LONG_WORDS)},
     "keywords": [{"display_name": "supramolecular"}]}
 
 

@@ -439,96 +439,88 @@ def resolve(doi=None, title=None, limit=None):
 # ---------------------------------------------------------------- 从 PDF 反查
 
 
-def pdf_title_candidates(abs_path, pages=2) -> tuple:
-    """PDF 首屏的字体级标题候选（PyMuPDF）：字号最大的那几行 + 内嵌元数据标题。
+def pdf_scan(abs_path, pages=2) -> tuple:
+    """PDF 首屏的题录线索（复用 T3 的文本层 pdf_text 与标题规则 pdf_rules）。
 
-    返回 (candidates, info, warning)。启发式而非解析器：够用就好，
-    T6 的 legacy/title_extract 到位后可替换这里。
+    返回 (candidates, head, warning)：
+      candidates = [{"text", "from": "metadata"|"rule"}]（内嵌标题在前，规则挑的在后）
+      head = {"info", "xmp", "lines", "lineY"}（extract_head 的返回；失败时为空字典）
     """
-    try:
-        import pymupdf
-    except ImportError as exc:  # pragma: no cover - PyMuPDF 随包内置
-        return [], {}, "缺少 PyMuPDF，无法读取 PDF：" + str(exc)
+    from paperlib.adapters import pdf_rules, pdf_text
+
     path = str(abs_path or "")
     if not path or not os.path.isfile(path):
         return [], {}, "PDF 文件不存在：" + os.path.basename(path)
-    candidates = []
-    info = {}
     try:
-        doc = pymupdf.open(path)
-    except Exception as exc:  # noqa: BLE001
+        head = pdf_text.extract_head(path, pages)
+    except NotImplementedError:
+        return [], {}, "PDF 文本层未就绪"
+    except Exception as exc:  # noqa: BLE001 - 坏 PDF（0 页 / 加密）只影响这一次
         return [], {}, "打不开这个 PDF：" + str(exc)
-    try:
-        info = dict(doc.metadata or {})
-        for index in range(min(int(pages), doc.page_count)):
-            page = doc.load_page(index)
-            height = float(page.rect.height or 0)
-            blocks = (page.get_text("dict") or {}).get("blocks") or []
-            for block in blocks:
-                for line in block.get("lines") or []:
-                    spans = [span for span in (line.get("spans") or [])
-                             if str(span.get("text") or "").strip()]
-                    if not spans:
-                        continue
-                    text = "".join(str(span.get("text")) for span in spans).strip()
-                    if len(text) < 8 or len(text) > 250:
-                        continue
-                    bbox = line.get("bbox") or (0, 0, 0, 0)
-                    top = float(bbox[1] or 0)
-                    if height and top > height * 0.72:
-                        continue  # 页脚不要
-                    size = max(float(span.get("size") or 0) for span in spans)
-                    candidates.append({"text": clean_title(text), "size": round(size, 1),
-                                       "page": index + 1, "line": index})
-    finally:
-        doc.close()
+    info = dict((head or {}).get("info") or {})
+    picked = pdf_rules.title_candidates((head or {}).get("lines") or []) or {}
+    candidates = []
     embedded = clean_title(info.get("Title") or "")
-    seen = set()
-    ordered = []
-    if embedded and len(embedded) >= 8:
-        ordered.append({"text": embedded, "size": 0.0, "page": 0, "line": -1, "from": "metadata"})
-        seen.add(embedded.lower())
-    for item in sorted(candidates, key=lambda row: (-row["size"], row["page"], row["line"])):
-        key = item["text"].lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        item["from"] = "font"
-        ordered.append(item)
-    return ordered, info, ""
+    if len(embedded) >= 8:
+        candidates.append({"text": embedded, "from": "metadata"})
+    for value in picked.get("candidates") or []:
+        text = clean_title(value)
+        if text and all(text.lower() != row["text"].lower() for row in candidates):
+            candidates.append({"text": text, "from": "rule"})
+    return candidates, dict(head or {}), ""
 
 
 def resolve_from_pdf(abs_path, fallback_title=None, limit=None) -> dict:
-    """从 PDF 首屏取标题，再用 Crossref 反查题录（T3 的 PDF 建档与摘要回填可用）。"""
-    candidates, info, warning = pdf_title_candidates(abs_path)
-    titles = [item["text"] for item in candidates if item.get("text")]
-    if fallback_title and str(fallback_title).strip():
+    """从 PDF 反查题录：内嵌 DOI 优先 → 首屏标题候选 → Crossref 模糊搜索。
+
+    供 T3 的 PDF 建档与摘要回填使用；返回 {ok, title, doi, items, paper, source, warning}。
+    """
+    from paperlib.adapters import pdf_rules
+
+    candidates, head, warning = pdf_scan(abs_path)
+    titles = [row["text"] for row in candidates if row.get("text")]
+    if str(fallback_title or "").strip():
         titles.insert(0, clean_title(fallback_title))
+    doi = ""
+    try:
+        doi = normalize_doi(pdf_rules.doi_from_meta((head or {}).get("xmp") or ""))
+    except Exception:  # noqa: BLE001 - XMP 解析失败就当没有 DOI
+        doi = ""
     result = {
         "ok": False,
         "file": os.path.basename(str(abs_path or "")),
-        "title": "",
-        "doi": normalize_doi((info or {}).get("doi") or ""),
-        "candidates": [item["text"] for item in candidates][:8],
+        "title": titles[0] if titles else "",
+        "doi": doi,
+        "titleCandidates": titles[:8],
         "items": [],
         "paper": None,
+        "source": "",
         "warning": warning,
         "resolvedAt": now_iso(),
     }
-    if not titles:
-        if not result["warning"]:
-            result["warning"] = "这个 PDF 前两页里没有可识别的标题（可能是扫描件），请手动填写"
-        return result
-    result["title"] = titles[0]
-    try:
-        items = search_by_title(titles[0], limit or 5)
-    except MetadataError as exc:
-        result["warning"] = result["warning"] or ("标题反查失败：" + exc.message)
-        return result
-    result["items"] = items
-    if items:
-        result["paper"] = items[0]
-        result["ok"] = True
-    else:
-        result["warning"] = result["warning"] or "Crossref 里没搜到这个标题，请手动确认"
+
+    # ① 内嵌 DOI：最可靠，直接走多源合并
+    if doi:
+        try:
+            found = fetch_by_doi_detailed(doi)
+            result.update({"ok": True, "paper": found["paper"], "items": [found["paper"]],
+                           "source": "doi", "title": found["paper"].get("title") or result["title"]})
+            return result
+        except MetadataError as exc:
+            result["warning"] = "按内嵌 DOI 抓题录失败：" + exc.message
+
+    # ② 标题候选：逐个在 Crossref 里模糊搜索，第一个有结果的就用
+    for title in titles[:4]:
+        try:
+            items = search_by_title(title, limit or 3)
+        except MetadataError as exc:
+            result["warning"] = result["warning"] or ("标题反查失败：" + exc.message)
+            break
+        if items:
+            result.update({"ok": True, "paper": items[0], "items": items,
+                           "source": "title", "title": title})
+            return result
+
+    if not result["warning"]:
+        result["warning"] = "PDF 里没找到可用的题录线索（可能是扫描件），请手动填写或按 DOI 抓取"
     return result

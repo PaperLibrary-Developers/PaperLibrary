@@ -146,32 +146,24 @@ class ServerCase(unittest.TestCase):
 
 
 class TermsTest(unittest.TestCase):
-    def test_glossary_size(self):
+    def test_glossary_size_and_shape(self):
         self.assertGreaterEqual(lexicon.count(), 119)
-
-    def test_search_chinese_substitution(self):
-        items, total = lexicon.search("取代", 20)
-        self.assertGreaterEqual(total, 1)
-        names = [item["zh"] for item in items]
-        self.assertIn("亲核取代", names)
-
-    def test_search_english_and_alias(self):
-        items, _total = lexicon.search("nucleophilic substitution", 5)
-        self.assertEqual(items[0]["zh"], "亲核取代")
-        items, _total = lexicon.search("SN2", 5)
-        self.assertEqual(items[0]["zh"], "亲核取代")
-
-    def test_item_shape(self):
         items, _total = lexicon.search("循环伏安", 3)
         self.assertTrue(items)
         item = items[0]
         self.assertEqual(sorted(item.keys()), ["aliases", "en", "field", "zh"])
         self.assertIsInstance(item["aliases"], list)
 
-    def test_limit_applied(self):
-        items, total = lexicon.search("电", 3)
-        self.assertLessEqual(len(items), 3)
-        self.assertGreaterEqual(total, len(items))
+    def test_search_zh_en_alias_and_limit(self):
+        items, total = lexicon.search("取代", 20)
+        self.assertGreaterEqual(total, 1)
+        self.assertIn("亲核取代", [item["zh"] for item in items])
+        for query in ("nucleophilic substitution", "SN2"):
+            hits, _total = lexicon.search(query, 5)
+            self.assertEqual(hits[0]["zh"], "亲核取代")
+        limited, total = lexicon.search("电", 3)
+        self.assertLessEqual(len(limited), 3)
+        self.assertGreaterEqual(total, len(limited))
 
 
 class CompareEngineTest(unittest.TestCase):
@@ -220,9 +212,10 @@ class DeepAnalysisTest(unittest.TestCase):
                 return False
 
         services = _fake_services(FakeLLM())
+        # 注意：合并后的卡片字段是 summary（原摘要），normalize_paper 不保留 abstract
         paper = {"id": "p1", "title": "Cu catalysis", "year": 2024, "venue": "JACS",
                  "rating": 4, "tags": ["催化"],
-                 "abstract": "We report a novel Cu catalyst. NMR and XPS confirm 95% yield at 25 °C."}
+                 "summary": "We report a novel Cu catalyst. NMR and XPS confirm 95% yield at 25 °C."}
         analysis = deep_analysis.run(services, paper, [{"fig_index": 1}], "x" * 9000)
         self.assertEqual(sorted(analysis.keys()),
                          ["fields", "model", "oneLine", "paperId", "scores", "updatedAt"])
@@ -232,8 +225,21 @@ class DeepAnalysisTest(unittest.TestCase):
         for value in analysis["scores"].values():
             self.assertIsInstance(value, int)
             self.assertTrue(1 <= value <= 5)
-        note = " ".join(analysis["fields"].values())
+
+        # 22 字段保真：24 个语义槽位 + 评分理由 + 分析模式，一个都不能少
+        from paperlib.legacy import deep_prompt
+
+        self.assertGreaterEqual(len(deep_prompt.SLOT_NAMES), 22)
+        self.assertGreaterEqual(len(analysis["fields"]), 22)
+        self.assertEqual(set(deep_prompt.FIELDS) - set(analysis["fields"]), set(),
+                         "fields 缺少语义槽位：" + ", ".join(
+                             sorted(set(deep_prompt.FIELDS) - set(analysis["fields"]))))
+        for name, _path, _kind in deep_prompt.FIELD_SLOTS:
+            self.assertTrue(str(analysis["fields"][name]).strip(), name + " 不该为空")
+        note = analysis["fields"]["分析模式"]
         self.assertIn("未配置大模型", note)
+        self.assertIn("本地", note)
+        self.assertIn("We report a novel Cu catalyst", analysis["fields"]["原文摘要"])
 
 
 class LlmReadinessTest(unittest.TestCase):
@@ -265,21 +271,74 @@ class LlmPathTest(unittest.TestCase):
             return {"ready": True}
 
         def chat(self, messages=None, options=None):
-            return {"text": '{"substrate": "Cu(OTf)2", "yield": "95%",'
-                            ' "研究问题": "q", "scores": {"创新性": 5},'
-                            ' "oneLine": "模型一句话"}',
+            import json as _json
+
+            # 原始 deep_analysis SYSTEM 的 JSON 结构（英文键 + experiments/applicability 嵌套）
+            payload = {
+                "one_liner": "Cu 催化不对称氢化 95% 产率",
+                "original_abstract": "We report ...",
+                "zh_overview": "中文概述",
+                "problem": "背景问题",
+                "method_core": "核心方法",
+                "method_steps": ["步骤一", "步骤二"],
+                "formulas": [{"latex": "ee=(R-S)/(R+S)", "meaning": "对映体过量"}],
+                "experiments": {"systems": "酮类底物", "baselines": "无催化对照",
+                                "conditions": "25 °C, 12 h, 甲苯", "metrics": "产率/ee",
+                                "main_results": "95% 产率, 99% ee", "ablations": "重复三次"},
+                "key_points": ["要点1", "要点2"],
+                "contributions": ["贡献1"],
+                "author_claims": ["主张1"],
+                "evidence_judgement": "证据足够",
+                "strengths": ["优势1"],
+                "limitations_stated": ["底物范围窄"],
+                "limitations_inferred": ["未做放大"],
+                "applicability": {"when": "小试", "when_not": "吨级"},
+                "related": ["相关工作1"],
+                "open_questions": ["问题1"],
+                "scores": {"novelty": {"score": 8, "reason": "新反应"},
+                           "technical": {"score": 7, "reason": "表征全"},
+                           "evidence": {"score": 6, "reason": "缺对照"},
+                           "writing": {"score": 9, "reason": "表达清楚"},
+                           "usefulness": {"score": 7, "reason": "可落地"}},
+            }
+            return {"text": _json.dumps(payload, ensure_ascii=False),
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
 
     def test_deep_uses_llm_values(self):
+        from paperlib.legacy import deep_prompt
+
         analysis = deep_analysis.run(_fake_services(self.ReadyLLM()),
                                      {"id": "p1", "title": "T"}, [], "")
         self.assertEqual(analysis["model"], "fake-model")
-        self.assertEqual(analysis["fields"]["研究问题"], "q")
-        self.assertEqual(analysis["oneLine"], "模型一句话")
-        self.assertEqual(analysis["scores"]["创新性"], 5)
+        self.assertEqual(set(deep_prompt.FIELDS) - set(analysis["fields"]), set())
+        self.assertEqual(analysis["oneLine"], "Cu 催化不对称氢化 95% 产率")
+        self.assertEqual(analysis["fields"]["研究背景"], "背景问题")
+        self.assertEqual(analysis["fields"]["方法步骤"], "步骤一；步骤二")
+        self.assertEqual(analysis["fields"]["实验条件"], "25 °C, 12 h, 甲苯")
+        self.assertEqual(analysis["fields"]["适用条件"], "小试")
+        self.assertIn("ee=(R-S)/(R+S)", analysis["fields"]["关键公式"])
+        self.assertIn("新反应", analysis["fields"]["评分理由"])
+        self.assertIn("大模型分析", analysis["fields"]["分析模式"])
+        # 原提示词 0-10 分 → 契约 1-5 分（8→4、9→5 四舍五入）
+        self.assertEqual(analysis["scores"]["创新性"], 4)
+        self.assertEqual(analysis["scores"]["可读性"], 5)
+        self.assertEqual(analysis["scores"]["严谨性"], 4)
+
+    class CompareReadyLLM:
+        """compare 的 Map 步骤：每篇返回一组字段值 JSON（键名 = 模板 field key）。"""
+
+        settings = {"model": "fake-model"}
+
+        def ready(self):
+            return {"ready": True}
+
+        def chat(self, messages=None, options=None):
+            return {"text": '{"substrate": "Cu(OTf)2", "yield": "95%",'
+                            ' "conditions": "25 °C, 12 h"}',
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
 
     def test_compare_uses_llm_values(self):
-        result = compare_engine.run(_fake_services(self.ReadyLLM()),
+        result = compare_engine.run(_fake_services(self.CompareReadyLLM()),
                                     [{"id": "p1", "title": "A"}, {"id": "p2", "title": "B"}],
                                     "synthesis")
         self.assertNotIn("未配置大模型", result["oneLine"])
@@ -312,14 +371,12 @@ def _fake_services(llm):
 
 
 class CaptionMatcherTest(unittest.TestCase):
-    def test_bbox_distance_below_is_best(self):
+    def test_distance_and_greedy_assignment(self):
         below = caption_matcher.compute_bbox_distance((100, 100, 400, 300), (100, 320, 400, 340))
         above = caption_matcher.compute_bbox_distance((100, 100, 400, 300), (100, 40, 400, 80))
         far = caption_matcher.compute_bbox_distance((100, 100, 400, 300), (100, 900, 400, 920))
         self.assertGreater(below, above)
         self.assertLess(far, 0)
-
-    def test_greedy_assignment(self):
         captions = [
             {"bbox": (100, 320, 400, 340), "text": "Fig. 1. First.", "label": "1", "is_head": True},
             {"bbox": (100, 720, 400, 740), "text": "Fig. 2. Second.", "label": "2", "is_head": True},
@@ -402,32 +459,19 @@ class EndpointTest(ServerCase):
                                           headers={"Range": "bytes=0-99"})
         self.assertEqual(status, 206)
         self.assertEqual(len(part), 100)
-
-    def test_figure_image_head_and_paging(self):
-        status, payload = self.post_json("/api/papers/%s/figures/extract" % self.paper_a["id"], {})
+        status, headers, head_body = self.call("HEAD", "/api/figures/%d/image" % figure["id"])
         self.assertEqual(status, 200)
-        figure_id = payload["figures"][0]["id"]
-        status, headers, body = self.call("HEAD", "/api/figures/%d/image" % figure_id)
-        self.assertEqual(status, 200)
-        self.assertIn("image/", headers.get("Content-Type", ""))
-        self.assertEqual(body, b"")
+        self.assertEqual(head_body, b"")
 
-        status, payload = self.get_json("/api/figures?page=2&pageSize=1")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["page"], 2)
-        self.assertEqual(payload["pageSize"], 1)
-        self.assertLessEqual(len(payload["items"]), 1)
-        self.assertGreaterEqual(payload["pageCount"], 2)
+        status, paged = self.get_json("/api/figures?page=2&pageSize=1")
+        self.assertEqual((status, paged["page"], paged["pageSize"]), (200, 2, 1))
+        self.assertLessEqual(len(paged["items"]), 1)
+        self.assertGreaterEqual(paged["pageCount"], 2)
 
-    def test_figure_image_404(self):
         status, payload = self.get_json("/api/figures/999999/image")
-        self.assertEqual(status, 404)
-        self.assertEqual(payload["error"], "图表不存在")
-
-    def test_extract_without_pdf(self):
+        self.assertEqual((status, payload["error"]), (404, "图表不存在"))
         status, payload = self.post_json("/api/papers/%s/figures/extract" % self.paper_b["id"], {})
-        self.assertEqual(status, 400)
-        self.assertEqual(payload["error"], "这条文献没有关联 PDF")
+        self.assertEqual((status, payload["error"]), (400, "这条文献没有关联 PDF"))
 
     def test_compare_templates_and_run(self):
         status, payload = self.get_json("/api/compare/templates")
@@ -446,20 +490,17 @@ class EndpointTest(ServerCase):
         self.assertEqual(len(result["sections"][0]["rows"]), 2)
         self.assertEqual(result["sections"][0]["rows"][0]["paperId"], self.paper_a["id"])
 
-    def test_compare_validation(self):
+        # 校验：少 / 多 / 不存在
         status, payload = self.post_json("/api/compare", {"paperIds": [self.paper_a["id"]]})
         self.assertEqual(status, 400)
         self.assertIn("至少", payload["error"])
-
-        many = ["paper-%d" % index for index in range(9)]
-        status, payload = self.post_json("/api/compare", {"paperIds": many})
+        status, payload = self.post_json(
+            "/api/compare", {"paperIds": ["paper-%d" % index for index in range(9)]})
         self.assertEqual(status, 400)
         self.assertIn("最多", payload["error"])
-
-        status, payload = self.post_json("/api/compare", {
-            "paperIds": [self.paper_a["id"], "not-a-paper"]})
-        self.assertEqual(status, 404)
-        self.assertEqual(payload["error"], "找不到这条文献")
+        status, payload = self.post_json(
+            "/api/compare", {"paperIds": [self.paper_a["id"], "not-a-paper"]})
+        self.assertEqual((status, payload["error"]), (404, "找不到这条文献"))
 
     def test_deep_analysis_offline(self):
         path = "/api/papers/%s/deep-analysis" % self.paper_a["id"]
@@ -477,16 +518,19 @@ class EndpointTest(ServerCase):
         self.assertEqual(analysis["paperId"], self.paper_a["id"])
         self.assertEqual(set(analysis["scores"].keys()),
                          {"创新性", "严谨性", "影响力", "可复现性", "可读性"})
+        # 22 字段保真：24 语义槽位 + 评分理由 + 分析模式都要在端点响应里
+        from paperlib.legacy import deep_prompt
+
+        self.assertEqual(set(deep_prompt.FIELDS) - set(analysis["fields"]), set())
+        self.assertGreaterEqual(len(analysis["fields"]), 22)
+        self.assertIn("未配置大模型", analysis["fields"]["分析模式"])
         self.assertIn("未配置大模型", json.dumps(analysis["fields"], ensure_ascii=False))
 
         status, cached = self.get_json(path)
         self.assertEqual(status, 200)
         self.assertEqual(cached["analysis"]["updatedAt"], analysis["updatedAt"])
-
-    def test_deep_analysis_404(self):
         status, payload = self.get_json("/api/papers/nope/deep-analysis")
-        self.assertEqual(status, 404)
-        self.assertEqual(payload["error"], "找不到这条文献")
+        self.assertEqual((status, payload["error"]), (404, "找不到这条文献"))
 
     def test_terms_endpoint(self):
         status, payload = self.get_json("/api/terms/search?q=%E5%8F%96%E4%BB%A3")

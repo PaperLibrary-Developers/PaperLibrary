@@ -37,25 +37,36 @@ class PickPassagesTests(AiTestBase):
         self.assertLessEqual(len(picked["text"]), 3200)
         self.assertEqual(picked["anchors"], 1)
 
-    def test_pick_prefers_services_pick_passages(self):
+    def test_pick_uses_shared_report_when_available(self):
         services = self.make_services()
+        body = "A" * 3000 + " S − 55 图注说明 " + "B" * 3000
+        picked = chat_domain.pick_passages(services, body, "S55 那一页的图", 3000, 500, 300)
+        self.assertIn("S − 55", picked["text"])
+        self.assertIn("……（以下是与问题相关的片段）……", picked["text"])   # 与 JS 同构的报告形态
+        self.assertTrue(picked["passages"] >= 1)
+        self.assertLessEqual(len(picked["text"]), 3200)
+
+    def test_pick_degrades_to_services_then_local(self):
+        services = self.make_services()
+        origin = chat_domain._shared_report
         calls = []
 
         def fake_pick(text, question, options=None):
             calls.append((text, question, options))
-            return [{"text": "片段一"}, {"text": "片段二"}]
+            return [{"kind": "hit", "text": "片段一"}, {"kind": "hit", "text": "片段二"}]
 
-        services.pick_passages = fake_pick
-        picked = chat_domain.pick_passages(services, "原文", "问题", 1000, 200, 100)
-        self.assertEqual(calls[0][1], "问题")
-        self.assertEqual(picked["text"], "片段一\n……\n片段二")
-        self.assertEqual(picked["passages"], 2)
-
-    def test_pick_falls_back_when_services_missing(self):
-        services = self.make_services()
-        services.pick_passages = None
-        picked = chat_domain.pick_passages(services, "原文", "问题", 1000, 200, 100)
-        self.assertEqual(picked["text"], "原文")
+        try:
+            chat_domain._shared_report = None
+            services.pick_passages = fake_pick
+            picked = chat_domain.pick_passages(services, "原文", "问题", 1000, 200, 100)
+            self.assertEqual(calls[0][1], "问题")
+            self.assertEqual(picked["text"], "片段一\n……\n片段二")
+            self.assertEqual(picked["passages"], 2)
+            services.pick_passages = None            # 全都没有 → 本地实现
+            self.assertEqual(chat_domain.pick_passages(services, "原文", "问题", 1000, 200, 100)["text"],
+                             "原文")
+        finally:
+            chat_domain._shared_report = origin
 
 
 class BuildContextTests(AiTestBase):

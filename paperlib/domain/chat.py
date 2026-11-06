@@ -18,6 +18,11 @@ import re
 from paperlib.domain.ai import build_excerpt, read_attachment_text, safe_extract
 from paperlib.util import CJK_RE, now_iso, tokenize
 
+try:  # T1 的纯函数：给的是与 JS pickPassages 同构的报告（text/used/passages/anchors）
+    from shared.pure.passages import pick_passages_report as _shared_report
+except Exception:  # noqa: BLE001 - 未交付时退到本地实现
+    _shared_report = None
+
 CHAT_SYSTEM_PROMPT = "\n".join([
     "你是这位研究者的文献助手。你可以看到一个固定的资料包：某篇文献的题录、它的正文节选、它的补充材料（SI）节选，",
     "以及可选的「本库相关文献」「网络资料（Exa 检索到的网页正文片段）」「网络深度检索（带引用的答案）」。",
@@ -193,12 +198,19 @@ def _normalize_picked(value):
 
 
 def pick_passages(services, text, question, budget, head_chars, tail_chars):
-    """优先用 shared.pure.passages（T1），不可用或返回形状不符时退到本地实现。"""
+    """按问题挑片段：T1 的 shared 报告 → services.pick_passages → 本地实现，逐级降级。"""
+    options = {"budget": budget, "headChars": head_chars, "tailChars": tail_chars}
+    if _shared_report is not None:
+        try:
+            picked = _normalize_picked(_shared_report(text, question, options))
+            if picked:
+                return picked
+        except Exception:  # noqa: BLE001
+            pass
     fn = getattr(services, "pick_passages", None)
     if callable(fn):
         try:
-            picked = _normalize_picked(fn(text, question, {
-                "budget": budget, "headChars": head_chars, "tailChars": tail_chars}))
+            picked = _normalize_picked(fn(text, question, options))
             if picked:
                 return picked
         except Exception:  # noqa: BLE001

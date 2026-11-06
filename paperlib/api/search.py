@@ -17,16 +17,20 @@
 from __future__ import annotations
 
 import os
+import re
 
+from paperlib.adapters import pdf_text
 from paperlib.adapters.external_sources.common import SourceError
 from paperlib.util import now_iso
-from shared.pure.html_text import to_plain_text
+from shared.pure import abstract as pure_abstract
+from shared.pure import abstract_extract
 
 # 同一时间只允许一次补摘要（逐篇调外部 API，并发只会被限流）
 BACKFILL = {"running": False}
 
 NO_SOURCE = "PDF 与 OpenAlex 都没有可用的摘要（这本刊/这篇可能本来就没印摘要）"
-ABSTRACT_MAX = 4000
+# 摘要只可能在前几页：抽前 2 页就够（与 Node 的 headPages 默认值一致）
+HEAD_PAGES = 2
 
 
 # ---------------------------------------------------------------- 外部源
@@ -65,10 +69,10 @@ def _mark_in_library(ctx, items) -> None:
     for paper in papers:
         if paper.get("doi"):
             by_doi[str(paper["doi"]).lower()] = paper.get("id")
-        titles.add(str(paper.get("title") or "").lower().replace("\s+", " ").strip())
+        titles.add(re.sub(r"\s+", " ", str(paper.get("title") or "").lower()).strip())
     for item in items:
         key = str(item.get("doi") or "").lower()
-        title_key = str(item.get("title") or "").lower().replace("\s+", " ").strip()
+        title_key = re.sub(r"\s+", " ", str(item.get("title") or "").lower()).strip()
         item["inLibrary"] = bool((key and key in by_doi) or title_key in titles)
         item["localId"] = by_doi.get(key) if key else None
 
@@ -134,89 +138,12 @@ def _public_settings(services) -> dict:
 # ---------------------------------------------------------------- 摘要回填
 
 
-def _abstract_pure():
-    """摘要纯函数（T1 交付）；缺失时用本文件的本地兜底，保证回填不因依赖未就绪而挂掉。"""
-    try:
-        from shared.pure import abstract as pure_abstract
-        from shared.pure import abstract_extract
-    except Exception:  # noqa: BLE001
-        return None, None
-    return pure_abstract, abstract_extract
-
-
-def _clean_abstract(text) -> str:
-    return to_plain_text(str(text or "")).strip()[:ABSTRACT_MAX]
-
-
-def _choose_abstract(pdf_text=None, openalex_text=None):
-    """选一条摘要：PDF 优先，OpenAlex 兜底；PDF 只是位置推断时取更长的那份。"""
-    pure_abstract, _extract = _abstract_pure()
-    if pure_abstract is not None:
-        try:
-            picked = pure_abstract.choose_abstract({"pdf": pdf_text, "openalex": openalex_text})
-            if picked:
-                return dict(picked) if isinstance(picked, dict) else {"text": str(picked), "source": "pdf"}
-        except Exception:  # noqa: BLE001 - 纯函数签名不一致时退回本地兜底
-            pass
-    pdf = _clean_abstract(pdf_text)
-    openalex = _clean_abstract(openalex_text)
-    if pdf:
-        return {"text": pdf, "source": "pdf", "method": "position"}
-    if openalex:
-        return {"text": openalex, "source": "openalex"}
-    return None
-
-
-def _describe_source(source, method=None) -> str:
-    pure_abstract, _extract = _abstract_pure()
-    if pure_abstract is not None and hasattr(pure_abstract, "describe_source"):
-        try:
-            return str(pure_abstract.describe_source(source, method))
-        except Exception:  # noqa: BLE001
-            pass
-    return {"pdf": "PDF 正文", "openalex": "OpenAlex"}.get(str(source or ""), str(source or ""))
-
-
-def _pdf_head_text(services, paper, pages=2):
-    """PDF 前几页的文本与行（T3 的文本层）；拿不到返回 (None, 原因)。"""
-    pdf_file = str(paper.get("pdfFile") or "")
-    if not pdf_file:
-        return None, ""
-    try:
-        abs_path = services.db.path_for_paper_file(pdf_file)
-    except Exception:  # noqa: BLE001
-        return None, ""
-    if not abs_path or not os.path.isfile(str(abs_path)):
-        return None, "PDF 文件不存在：" + pdf_file
-    try:
-        from paperlib.adapters import pdf_text
-    except Exception:  # noqa: BLE001
-        return None, "PDF 文本层未就绪"
-    try:
-        data = pdf_text.extract_text(str(abs_path), {"maxPages": pages})
-    except NotImplementedError:
-        return None, "PDF 文本层未就绪（T3 待交付）"
-    except Exception as exc:  # noqa: BLE001
-        return None, "PDF 抽取失败：" + str(exc)
-    text = str((data or {}).get("text") or "")
-    return (text or None), ""
-
-
-def _extract_abstract_from_text(text, title) -> str:
-    _pure_abstract, abstract_extract = _abstract_pure()
-    if abstract_extract is not None and text:
-        lines = [line.strip() for line in str(text).splitlines() if line.strip()]
-        try:
-            found = abstract_extract.extract_abstract_from_lines(lines, {"title": title or ""})
-            if isinstance(found, dict) and found.get("text"):
-                return _clean_abstract(found["text"])
-        except Exception:  # noqa: BLE001
-            return ""
-    return ""
-
-
 def backfill_abstracts(services) -> dict:
-    """给「摘要为空」的文献补摘要；只补空的，绝不覆盖已有内容。"""
+    """给「摘要为空」的文献补摘要；只补空的，绝不覆盖已有内容（移植自 abstract-backfill.js）。
+
+    顺序与导入时一致：PDF 本地抽取 → OpenAlex 兜底（PDF 只是位置推断时取更长的那份）；
+    Crossref 不重复问——摘要是空的正说明它那儿没有。每篇都记住来源，界面能看到哪来的。
+    """
     targets = [paper for paper in services.library.all() if not str(paper.get("summary") or "").strip()]
     results = []
     for paper in targets:
@@ -231,37 +158,63 @@ def backfill_abstracts(services) -> dict:
             "error": "",
         }
         try:
-            # ① PDF 本地抽取
-            pdf_text, pdf_note = _pdf_head_text(services, paper)
-            pdf_abstract = _extract_abstract_from_text(pdf_text, paper.get("title")) if pdf_text else ""
-            picked = _choose_abstract(pdf_text=pdf_abstract or None)
+            # ① PDF 本地抽取（前两页：摘要不会跑得更远）
+            pdf = None
+            if paper.get("pdfFile"):
+                abs_path = _paper_pdf_path(services, paper)
+                if abs_path:
+                    try:
+                        head = pdf_text.extract_head(str(abs_path), HEAD_PAGES)
+                        pdf = abstract_extract.extract_abstract_from_lines(
+                            head.get("lines") or [],
+                            {"title": paper.get("title") or "", "lineY": head.get("lineY") or []})
+                    except Exception as exc:  # noqa: BLE001 - 坏 PDF 只影响这一篇
+                        entry["error"] = "PDF 抽取失败：" + (str(exc) or "未知原因")
+            picked = pure_abstract.choose_abstract({"pdf": pdf})
 
             # ② OpenAlex 兜底
             doi = str(paper.get("doi") or "").strip()
             if doi:
                 try:
-                    remote = _clean_abstract(services.external.fetch_openalex_abstract(doi))
+                    remote = pure_abstract.clean_source_abstract(services.external.fetch_openalex_abstract(doi))
                     if not picked:
-                        picked = _choose_abstract(openalex_text=remote or None)
-                    elif picked.get("source") == "pdf" and picked.get("method") == "position" \
-                            and len(remote) > len(picked.get("text") or ""):
+                        picked = pure_abstract.choose_abstract({"pdf": pdf, "openalex": remote})
+                    elif (picked.get("source") == "pdf" and picked.get("method") == "position"
+                          and len(remote) > len(picked.get("text") or "")):
+                        # PDF 的「无标题首段」只是位置推断，OpenAlex 更长更干净时换它
                         picked = {"text": remote, "source": "openalex"}
                 except Exception as exc:  # noqa: BLE001 - 单篇失败不影响整体
                     entry["error"] = str(exc) or "OpenAlex 取摘要失败"
 
-            if picked and picked.get("text"):
-                text = _clean_abstract(picked["text"])
-                services.library.update(paper.get("id"), {"summary": text, "summarySource": picked.get("source")})
+            if picked and str(picked.get("text") or "").strip():
+                text = str(picked["text"]).strip()
+                services.library.update(paper.get("id"), {"summary": text,
+                                                          "summarySource": picked.get("source") or ""})
                 entry.update({"ok": True, "source": picked.get("source") or "",
-                              "sourceLabel": _describe_source(picked.get("source"), picked.get("method")),
+                              "sourceLabel": pure_abstract.describe_source(picked.get("source"),
+                                                                           picked.get("method")),
                               "chars": len(text), "error": ""})
-            else:
-                entry["error"] = entry["error"] or pdf_note or NO_SOURCE
+            elif not entry["error"]:
+                entry["error"] = NO_SOURCE
         except Exception as exc:  # noqa: BLE001
             entry["error"] = str(exc) or "未知错误"
         results.append(entry)
     return {"total": len(targets), "filled": sum(1 for row in results if row["ok"]),
             "results": results, "updatedAt": now_iso()}
+
+
+def _paper_pdf_path(services, paper):
+    """这条文献的 PDF 绝对路径（不存在返回 None）。"""
+    pdf_file = str(paper.get("pdfFile") or "")
+    if not pdf_file:
+        return None
+    try:
+        abs_path = services.db.path_for_paper_file(pdf_file)
+    except Exception:  # noqa: BLE001
+        return None
+    if not abs_path or not os.path.isfile(str(abs_path)):
+        return None
+    return abs_path
 
 
 def sources_backfill(ctx):
