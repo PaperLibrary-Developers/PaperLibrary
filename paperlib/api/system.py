@@ -84,6 +84,62 @@ def shutdown_now(ctx):
         pass
 
 
+_release_running = False
+
+
 def release_build(ctx):
-    # 发布打包：由 tools/release.py 承担；API 触发属于运维端点（T-settings 实现）
-    ctx.fail(501, "待实现：POST /api/release/build")
+    """打一个发布包（POST /api/release/build）：调 tools/release.py，返回产物信息。
+
+    契约：200 {ok,name,path,relPath,size,mtime,papers,files,seconds}；409 已在打包；400 环境不满足。
+    """
+    global _release_running
+    if _release_running:
+        return ctx.fail(409, "已经有一个打包任务在跑，请稍后再试")
+    import subprocess
+    import sys
+    import time
+
+    root = ctx.services.runtime.root
+    script = root / "tools" / "release.py"
+    if not script.is_file():
+        return ctx.fail(400, "缺少打包脚本 tools/release.py")
+    started = time.time()
+    _release_running = True
+    try:
+        proc = subprocess.run([sys.executable, str(script)], cwd=str(root),
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=900)
+    finally:
+        _release_running = False
+    if proc.returncode != 0:
+        return ctx.fail(400, "打包失败：" + ((proc.stderr or proc.stdout or "").strip()[-300:] or "未知原因"))
+    dist = root / "dist"
+    targets = sorted([p for p in dist.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime) if dist.is_dir() else []
+    if not targets:
+        return ctx.fail(500, "打包完成但找不到产物目录")
+    target = targets[-1]
+    stat = target.stat()
+    files = 0
+    size = 0
+    for base, _dirs, names in __import__("os").walk(target):
+        for name in names:
+            files += 1
+            try:
+                size += __import__("os").path.getsize(__import__("os").path.join(base, name))
+            except OSError:
+                pass
+    try:
+        rel = target.relative_to(root)
+    except ValueError:
+        rel = target.name
+    return ctx.json(200, {
+        "ok": True,
+        "name": target.name,
+        "path": str(target),
+        "relPath": str(rel).replace("\\", "/"),
+        "size": size,
+        "mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
+        "papers": ctx.services.db.count(),
+        "files": files,
+        "seconds": round(time.time() - started, 1),
+    })

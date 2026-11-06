@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\Users\\wzxle\\Desktop\\WB比赛\\Nexus\\.archify\\architecture-merged-library-20261107-032337\\candidate.json",
+    "sha256": "74658ef1a57581796266c2467df498878609f7b9cb9a2400fcdfda1728d0c94d",
+    "bytes": 18713
+  },
+  "artifact": {
+    "path": "C:\\Users\\wzxle\\Desktop\\WB比赛\\Nexus\\docs\\architecture\\architecture-merged-library-20261107.html",
+    "sha256": "5829651000e5aa3cc3404d2bab7a747a4219cde2962c95efabf1861896d1e389",
+    "bytes": 882815
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "C:\\Users\\wzxle\\Desktop\\WB比赛\\Nexus\\docs\\architecture\\architecture-merged-library-20261107.finalize.json",
+    "summaryReceipt": "C:\\Users\\wzxle\\Desktop\\WB比赛\\Nexus\\docs\\architecture\\architecture-merged-library-20261107.finalize-summary.json",
+    "browserCheckReceipt": "C:\\Users\\wzxle\\Desktop\\WB比赛\\Nexus\\docs\\architecture\\architecture-merged-library-20261107.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-06T16:45:41.535Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 4365,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "53d8ece9-1ab2-4ce7-acad-83f9fbb79c41",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\wzxle\\Desktop\\WB比赛\\Nexus\\.archify\\architecture-merged-library-20261107-032337\\candidate.json",
+  "output": "C:\\Users\\wzxle\\Desktop\\WB比赛\\Nexus\\docs\\architecture\\architecture-merged-library-20261107.html",
+  "specification": {
+    "sha256": "74658ef1a57581796266c2467df498878609f7b9cb9a2400fcdfda1728d0c94d",
+    "bytes": 18713
+  },
+  "artifact": {
+    "sha256": "5829651000e5aa3cc3404d2bab7a747a4219cde2962c95efabf1861896d1e389",
+    "bytes": 882815
+  }
+}

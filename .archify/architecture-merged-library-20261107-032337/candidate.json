@@ -1,0 +1,819 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "PaperLibrary 合并后的架构：单进程 Python + SQLite",
+    "locale": "zh-CN",
+    "output": "docs/architecture/architecture-merged-library-20261107.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/yijiey53-svg/paper-library-app.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "242e724cf3019b22f45b59d7da0ddd0ef99891af"
+    }
+  },
+  "components": [
+    {
+      "id": "launcher",
+      "type": "external",
+      "label": "启动.cmd",
+      "sublabel": "PYTHONUTF8 + chcp 65001",
+      "tag": "双击即用",
+      "pos": [
+        40,
+        60
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "启动.cmd",
+          "line": 8,
+          "end_line": 14,
+          "label": "选解释器并 -m paperlib"
+        }
+      ]
+    },
+    {
+      "id": "portable",
+      "type": "external",
+      "label": "便携 Python 运行时",
+      "sublabel": "runtime\\portable\\python.exe",
+      "tag": "缺则回落系统 python",
+      "pos": [
+        40,
+        170
+      ],
+      "size": [
+        210,
+        68
+      ],
+      "sources": [
+        {
+          "path": "tools/make_portable.py",
+          "line": 1,
+          "end_line": 14,
+          "label": "embeddable + PyMuPDF + Pillow"
+        },
+        {
+          "path": "启动.cmd",
+          "line": 8,
+          "end_line": 12
+        }
+      ]
+    },
+    {
+      "id": "process",
+      "type": "backend",
+      "label": "paperlib/app.py",
+      "sublabel": "python -m paperlib · build()",
+      "tag": "单进程",
+      "pos": [
+        30,
+        290
+      ],
+      "size": [
+        220,
+        80
+      ],
+      "sources": [
+        {
+          "path": "paperlib/app.py",
+          "line": 80,
+          "end_line": 106,
+          "label": "build() 装配"
+        },
+        {
+          "path": "paperlib/app.py",
+          "line": 110,
+          "end_line": 140,
+          "label": "main() 起服务"
+        }
+      ]
+    },
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "浏览器",
+      "sublabel": "同源打开 127.0.0.1:4321",
+      "tag": "用户侧",
+      "pos": [
+        330,
+        130
+      ],
+      "size": [
+        190,
+        68
+      ],
+      "sources": [
+        {
+          "path": "public/index.html",
+          "line": 17,
+          "end_line": 23
+        },
+        {
+          "path": "public/main.mjs",
+          "line": 5,
+          "end_line": 14,
+          "label": "ESM 唯一入口"
+        }
+      ]
+    },
+    {
+      "id": "http",
+      "type": "backend",
+      "label": "HTTP 服务",
+      "sublabel": "127.0.0.1:4321 · 静态 + /api/*",
+      "tag": "stdlib",
+      "pos": [
+        330,
+        300
+      ],
+      "size": [
+        240,
+        88
+      ],
+      "sources": [
+        {
+          "path": "paperlib/http/server.py",
+          "line": 280,
+          "end_line": 296,
+          "label": "ThreadingHTTPServer"
+        },
+        {
+          "path": "paperlib/http/server.py",
+          "line": 122,
+          "end_line": 160,
+          "label": "send_file：Range/ETag"
+        },
+        {
+          "path": "paperlib/http/static.py",
+          "line": 74,
+          "end_line": 111,
+          "label": "public/ 静态与版本号"
+        }
+      ]
+    },
+    {
+      "id": "webui",
+      "type": "frontend",
+      "label": "public/ 前端",
+      "sublabel": "ESM 单入口 · 9 个视图",
+      "tag": "同源静态",
+      "pos": [
+        900,
+        470
+      ],
+      "size": [
+        220,
+        84
+      ],
+      "sources": [
+        {
+          "path": "public/js/app.mjs",
+          "line": 403,
+          "end_line": 425,
+          "label": "路由注册"
+        },
+        {
+          "path": "public/main.mjs",
+          "line": 1,
+          "end_line": 14
+        }
+      ]
+    },
+    {
+      "id": "router",
+      "type": "backend",
+      "label": "routes.py 路由表",
+      "sublabel": "68 条记录 · 唯一事实来源",
+      "tag": "顺序即优先级",
+      "pos": [
+        330,
+        470
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "sources": [
+        {
+          "path": "paperlib/routes.py",
+          "line": 30,
+          "end_line": 100,
+          "label": "ROUTES 列表"
+        },
+        {
+          "path": "paperlib/http/router.py",
+          "line": 27,
+          "end_line": 70,
+          "label": "match / handle"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "API 域",
+      "sublabel": "9 个 Sci-lib 域 + 5 个新增模块",
+      "tag": "入参校验",
+      "pos": [
+        330,
+        660
+      ],
+      "size": [
+        240,
+        88
+      ],
+      "sources": [
+        {
+          "path": "paperlib/api/papers.py",
+          "line": 137,
+          "end_line": 150,
+          "label": "列表/检索"
+        },
+        {
+          "path": "paperlib/api/figures.py",
+          "line": 177,
+          "end_line": 200,
+          "label": "图表提取"
+        },
+        {
+          "path": "paperlib/api/files.py",
+          "line": 280,
+          "end_line": 290,
+          "label": "PDF 流"
+        }
+      ]
+    },
+    {
+      "id": "pure",
+      "type": "backend",
+      "label": "shared/pure",
+      "sublabel": "纯函数 · 零 I/O",
+      "tag": "有对照测试",
+      "pos": [
+        30,
+        840
+      ],
+      "size": [
+        210,
+        78
+      ],
+      "sources": [
+        {
+          "path": "shared/pure/boolean_query.py",
+          "line": 84,
+          "end_line": 98,
+          "label": "布尔/字段判定"
+        },
+        {
+          "path": "shared/pure/boolean_query.py",
+          "line": 191,
+          "end_line": 200,
+          "label": "parse_query"
+        },
+        {
+          "path": "shared/pure/passages.py",
+          "line": 68,
+          "end_line": 76
+        }
+      ]
+    },
+    {
+      "id": "domain",
+      "type": "backend",
+      "label": "领域层 domain/",
+      "sublabel": "查询·导入·PDF·AI·对话",
+      "tag": "业务规则",
+      "pos": [
+        330,
+        840
+      ],
+      "size": [
+        240,
+        84
+      ],
+      "sources": [
+        {
+          "path": "paperlib/domain/library.py",
+          "line": 1,
+          "end_line": 16,
+          "label": "业务门面"
+        },
+        {
+          "path": "paperlib/domain/query.py",
+          "line": 276,
+          "end_line": 300,
+          "label": "query 编排"
+        },
+        {
+          "path": "paperlib/domain/search.py",
+          "line": 90,
+          "end_line": 115,
+          "label": "bigram 倒排"
+        }
+      ]
+    },
+    {
+      "id": "legacy",
+      "type": "backend",
+      "label": "legacy/ 移植能力",
+      "sublabel": "图注匹配·对比·深度分析·术语表",
+      "tag": "本地可降级",
+      "pos": [
+        650,
+        840
+      ],
+      "size": [
+        230,
+        84
+      ],
+      "sources": [
+        {
+          "path": "paperlib/legacy/figures.py",
+          "line": 100,
+          "end_line": 111,
+          "label": "抽图并落盘"
+        },
+        {
+          "path": "paperlib/legacy/compare_engine.py",
+          "line": 1,
+          "end_line": 10
+        },
+        {
+          "path": "paperlib/legacy/deep_analysis.py",
+          "line": 1,
+          "end_line": 10
+        }
+      ]
+    },
+    {
+      "id": "adapters",
+      "type": "backend",
+      "label": "适配器 adapters/",
+      "sublabel": "PyMuPDF · LLM · Exa · 5 学术源",
+      "tag": "全部外部 I/O",
+      "pos": [
+        30,
+        1040
+      ],
+      "size": [
+        250,
+        84
+      ],
+      "sources": [
+        {
+          "path": "paperlib/adapters/pdf_text.py",
+          "line": 28,
+          "end_line": 35,
+          "label": "PyMuPDF 载入"
+        },
+        {
+          "path": "paperlib/adapters/llm.py",
+          "line": 26,
+          "end_line": 31,
+          "label": "供应商预设"
+        },
+        {
+          "path": "paperlib/adapters/external.py",
+          "line": 41,
+          "end_line": 51,
+          "label": "5 个学术源"
+        }
+      ]
+    },
+    {
+      "id": "data",
+      "type": "backend",
+      "label": "data/ 写穿存储层",
+      "sublabel": "store → repository · library.db 10 表",
+      "tag": "唯一 SQL 落点",
+      "pos": [
+        330,
+        1040
+      ],
+      "size": [
+        250,
+        88
+      ],
+      "sources": [
+        {
+          "path": "paperlib/data/schema.py",
+          "line": 15,
+          "end_line": 23,
+          "label": "SCHEMA_VERSION + papers DDL"
+        },
+        {
+          "path": "paperlib/data/repository.py",
+          "line": 1,
+          "end_line": 10,
+          "label": "SQL 只在这里"
+        },
+        {
+          "path": "paperlib/data/store.py",
+          "line": 33,
+          "end_line": 42,
+          "label": "目录约定"
+        }
+      ]
+    },
+    {
+      "id": "external",
+      "type": "external",
+      "label": "外部服务（可选）",
+      "sublabel": "LLM 供应商 · Exa · 学术源",
+      "tag": "有 Key 才走",
+      "pos": [
+        30,
+        1240
+      ],
+      "size": [
+        240,
+        84
+      ],
+      "sources": [
+        {
+          "path": "paperlib/adapters/llm.py",
+          "line": 202,
+          "end_line": 210,
+          "label": "readiness"
+        },
+        {
+          "path": "paperlib/adapters/websearch.py",
+          "line": 177,
+          "end_line": 184
+        },
+        {
+          "path": "paperlib/adapters/websearch.py",
+          "line": 26,
+          "end_line": 33,
+          "label": "Exa API"
+        }
+      ]
+    },
+    {
+      "id": "files",
+      "type": "database",
+      "label": "data/ 用户文件",
+      "sublabel": "papers · attachments · fulltext",
+      "tag": "磁盘",
+      "pos": [
+        330,
+        1240
+      ],
+      "size": [
+        240,
+        84
+      ],
+      "sources": [
+        {
+          "path": "paperlib/data/store.py",
+          "line": 193,
+          "end_line": 211,
+          "label": "attach_file 存 PDF"
+        },
+        {
+          "path": "paperlib/data/store.py",
+          "line": 217,
+          "end_line": 226,
+          "label": "get_text/set_text"
+        }
+      ]
+    },
+    {
+      "id": "images",
+      "type": "database",
+      "label": "data/images",
+      "sublabel": "<paperId>/fig_NNN.png",
+      "tag": "磁盘",
+      "pos": [
+        650,
+        1240
+      ],
+      "size": [
+        220,
+        80
+      ],
+      "sources": [
+        {
+          "path": "paperlib/legacy/figures.py",
+          "line": 44,
+          "end_line": 49,
+          "label": "路径约定"
+        },
+        {
+          "path": "paperlib/api/figures.py",
+          "line": 211,
+          "end_line": 216,
+          "label": "复用已迁移图片"
+        }
+      ]
+    },
+    {
+      "id": "v_contract",
+      "type": "backend",
+      "label": "contract_check.py",
+      "sublabel": "重放契约快照 69 行",
+      "tag": "验",
+      "pos": [
+        930,
+        90
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "sources": [
+        {
+          "path": "tools/contract_check.py",
+          "line": 1,
+          "end_line": 14
+        }
+      ]
+    },
+    {
+      "id": "v_e2e",
+      "type": "backend",
+      "label": "e2e.py",
+      "sublabel": "Node 参照逐字段 diff",
+      "tag": "验",
+      "pos": [
+        930,
+        168
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "sources": [
+        {
+          "path": "tools/e2e.py",
+          "line": 1,
+          "end_line": 14
+        }
+      ]
+    },
+    {
+      "id": "v_test",
+      "type": "backend",
+      "label": "test/ unittest",
+      "sublabel": "16 个文件 · 353 个 test 方法",
+      "tag": "验",
+      "pos": [
+        930,
+        246
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "sources": [
+        {
+          "path": "test/test_api_smoke.py",
+          "line": 1,
+          "end_line": 6,
+          "label": "API 冒烟"
+        }
+      ]
+    },
+    {
+      "id": "v_release",
+      "type": "backend",
+      "label": "bench / make_portable / release",
+      "sublabel": "体积·启动·便携包·发布",
+      "tag": "验",
+      "pos": [
+        930,
+        324
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "sources": [
+        {
+          "path": "tools/bench.py",
+          "line": 1,
+          "end_line": 14
+        },
+        {
+          "path": "tools/release.py",
+          "line": 1,
+          "end_line": 8
+        },
+        {
+          "path": "tools/make_portable.py",
+          "line": 1,
+          "end_line": 14
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "单进程 Python · 127.0.0.1:4321",
+      "wraps": [
+        "process",
+        "http",
+        "router",
+        "api",
+        "pure",
+        "domain",
+        "legacy",
+        "adapters",
+        "data"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "验收与发布工具链（开发期，不参与运行时）",
+      "wraps": [
+        "v_contract",
+        "v_e2e",
+        "v_test",
+        "v_release"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "id": "launcher-portable",
+      "from": "launcher",
+      "to": "portable",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "portable-process",
+      "from": "portable",
+      "to": "process",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "process-http",
+      "from": "process",
+      "to": "http",
+      "label": "启动服务",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "browser-http",
+      "from": "browser",
+      "to": "http",
+      "label": "/api/* 同源",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "webui-http",
+      "from": "webui",
+      "to": "http",
+      "label": "静态资源",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "http-router",
+      "from": "http",
+      "to": "router",
+      "label": "API 请求",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "router-api",
+      "from": "router",
+      "to": "api",
+      "label": "handler(ctx)",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "api-domain",
+      "from": "api",
+      "to": "domain",
+      "label": "业务调用",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "api-legacy",
+      "from": "api",
+      "to": "legacy",
+      "label": "合并新增",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "domain-pure",
+      "from": "domain",
+      "to": "pure",
+      "label": "布尔求值",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "domain-adapters",
+      "from": "domain",
+      "to": "adapters",
+      "label": "抽取/抓取",
+      "fromSide": "left",
+      "toSide": "top"
+    },
+    {
+      "id": "domain-data",
+      "from": "domain",
+      "to": "data",
+      "label": "读写记录",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "adapters-data",
+      "from": "adapters",
+      "to": "data",
+      "label": "正文",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "adapters-external",
+      "from": "adapters",
+      "to": "external",
+      "label": "HTTPS 有 Key",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "data-files",
+      "from": "data",
+      "to": "files",
+      "label": "PDF/正文",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "legacy-images",
+      "from": "legacy",
+      "to": "images",
+      "label": "写图表 PNG",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "运行时与入口",
+      "items": [
+        "启动.cmd 选 runtime\\portable\\python.exe（缺则系统 python），执行 python -m paperlib --port 4321",
+        "app.py build() 装配 Store、services、StaticHandler、Router(ROUTES)，再 new HttpServer(...) 并 start_background()",
+        "同源单进程：/api/* 走路由表，其余路径走 public/ 静态；HTML 里的 css/js 换成 /__v/<mtime>/ 版本号"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "数据落点（SQLite 单一真源）",
+      "items": [
+        "data/library.db：papers / attachments / tags / paper_tags / paper_text / chat_messages / figures / analysis / legacy_ids / jobs 十张业务表 + meta；PRAGMA user_version=3 幂等迁移",
+        "article/papers 存 PDF 副本（api/files 上传 → store.attach_file）；article/attachments 存补充材料",
+        "images/<paperId>/fig_NNN.png 由 legacy/figures.py 抽图时写入；fulltext/*.txt 是正文缓存（adapters 的 FullText → store.set_text）",
+        "figures 表的 imagePath 存相对 data/ 的路径，图片流端点按它定位文件"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "合并进来的两套能力",
+      "items": [
+        "64 条 Sci-lib 契约端点：paperlib/api/ 下 9 个域（papers/files/ai/chat/search/import_/settings/tags/system）",
+        "10 条合并新增：figures（画廊+抽图+图片流）、compare（模板+Map-Reduce）、deep（契约 22 字段+五维评分）、terms、export/obsidian",
+        "PaperLibrary 能力整体搬进 paperlib/legacy/：caption_matcher + figure_anchor + figures、compare_engine、deep_analysis/deep_prompt/deep_local、lexicon+terms.json、obsidian_note",
+        "无 Key 时 compare/deep 由 legacy 本地降级仍返回 200（契约 §6/§8），deep_local 用启发式评分，不编造数值"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "检索、阅读与验收",
+      "items": [
+        "中文检索走 bigram 倒排（domain/search.py），布尔语法与字段限定由 shared/pure/boolean_query.py 求值",
+        "PDF 与附件走 send_file：Range 206 / ETag 304 / 416；SSE 走 http/sse.py（summarize / chat / vision）",
+        "验收：contract_check.py 重放 69 行快照、e2e.py 对照 Node 参照逐字段 diff、test/ 16 个文件 353 个 test 方法、bench.py 量体积与启动、make_portable+release 出便携包"
+      ]
+    }
+  ]
+}
