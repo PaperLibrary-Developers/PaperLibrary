@@ -13,7 +13,7 @@
 | `architecture-merged-library-20261107.finalize.json` / `.finalize-summary.json` | 生成回执：validate / deliver / check / browser-check 四道闸门 |
 | `architecture-merged-library-20261107.browser-check.json` | 浏览器实测证据（1440×900 与 2048×1320，两套主题） |
 | `architecture-merged-library-20261107.delivery.json` | 交付记录（产物哈希、来源候选） |
-| `.archify/architecture-merged-library-20261107-032337/` | 候选 JSON（图的数据源，可改后重新 finalize）、visual-check 的 4 张截图与接触表 |
+| `.archify/architecture-merged-library-20261107-032337/` | 候选 JSON（图的数据源，改它再重新 finalize）、`review-3/` 的闸门回执、`review-4/` 的 4 张截图与接触表（已随本次提交入库） |
 
 图的数据源是 `candidate.json`（Archify architecture schema v1）——改图请改它再重新生成，不要手改 HTML。
 
@@ -24,6 +24,7 @@
 - **两条能力来源**：API 域下面分两支——`domain/`（Sci-lib 移植过来的业务规则）与 `legacy/`（PaperLibrary 原样搬来的图表/对比/深度分析/术语/Obsidian）。10 条合并新增端点就是后者挂上来的。
 - **边界**：橙色大框 = 单进程 Python（所有分层都在一个进程里，端口 4321）；右上独立小框 = 验收与发布工具链，**开发期**跑，不在运行时拓扑里，所以不画连线。
 - **底部四张卡片**：运行时入口、数据落点、合并的两套能力、检索/阅读/验收 —— 图里放不下但必须交代的事实都在这里（表名、目录、Range/SSE、验收工具）。
+- **尺寸**：2048×1320 下整张图（含图例）一屏可见；1440×900 下需要向下滚动一点，viewer 的缩放/拖动/「路径」面板都可用。
 - 图是"每层一个方框"的抽象：**没有**展开 68 条路由的逐条端点，也**没有**展开 10 张表的列；这两类细节分别看 `shared/contracts/api.md` 与 `paperlib/data/schema.py`。
 
 ## 图里每条事实的出处
@@ -64,11 +65,13 @@ node "$ARCH" finalize architecture \
 
 # 需要截图/接触表时（会写 4 张 PNG + contact sheet）
 node "$ARCH" visual-check docs/architecture/architecture-merged-library-20261107.html \
-  --out-dir .archify/architecture-merged-library-20261107-032337/review-2 \
+  --out-dir .archify/architecture-merged-library-20261107-032337/review-4 \
   --summary --require-provenance
 ```
 
-本次生成结果：四道闸门全 `pass`、`diagnostics: []`、无交叉线，浏览器实测 1440×900 与 2048×1320 两套主题通过可读性/包含性检查（automated，不是人眼结论）。
+本次生成结果：四道闸门全 `pass`、`diagnostics: []`、`routeReview.crossings: []`（零交叉线），浏览器实测 1440×900 与 2048×1320 两套主题通过包含性/可读性/主题切换检查（automated，不是人眼结论；我另外看了截图，见预览图）。
+
+可读性数字（来自 finalize 回执 `desktopReadability`）：最紧的一处是「启动服务」这条边标签，8px 源字号在 1440 视口下投影 6.27px —— 过了 6px 硬下限，但没到 7.5px 的推荐目标。原因是画布宽约 1180px、读者按 930px 预算缩放（20 个节点 + 中文子标题已经压到很紧）。要提到 7.5px 只能把宽度压到 ~990px 或整体减节点，属另一次重构，这次没做。
 
 ## 已知边界与未决点
 
@@ -78,4 +81,4 @@ node "$ARCH" visual-check docs/architecture/architecture-merged-library-20261107
 4. **图注与正文锚定**（`figure_anchor`）与 **Obsidian 笔记拼装**（`legacy/obsidian_note.py` + `adapters/obsidian.py`）在图上合并进了 legacy 与 adapters 两个方框，没有再拆。
 5. **生成时工作区不干净**：`test/test_search_adapters.py` 有未提交改动（不是本次任务），图上所有证据路径都不涉及它；引用的行号以 HEAD 为准。
 
-维护：`docs/architecture/` 只放产物与回执；候选 JSON 与截图证据在 `.archify/`（未纳入 git，建议加进 `.gitignore` 或按需删除）。
+维护：`docs/architecture/` 放产物与回执（可直接给评审看）；候选 JSON 与截图证据在 `.archify/architecture-merged-library-20261107-032337/`（已随 2026-11-07 的提交入库；若要瘦仓可只留 `candidate.json`，删掉 `review-*/` 与 `visual-check/`）。改图只改 `candidate.json`，改完按上面「重新生成」跑一遍，并换一个新的 `--out-dir review-<n>`。
