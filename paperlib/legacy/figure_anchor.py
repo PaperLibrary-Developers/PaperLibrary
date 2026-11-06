@@ -5,6 +5,10 @@
 契约名：figure_anchor（extract_figure_identity / find_figure_mentions_in_paper /
         extract_offline_conclusion）
 
+保留待用：当前 10 条合并端点没有直接调用它（图表画廊用 figures.py 的提取结果）；
+下一版「图表详情里标出正文中讨论该图的段落」会接 find_figure_mentions_in_paper。
+不要因为暂时没接线就删掉——它是 PaperLibrary 图表闭环的一部分（功能回归表第 10 行）。
+
 与旧版的差异（去 Streamlit / 去直连 sqlite3 / 去在线依赖）：
   · 删除 summarize_figure_with_llm 与 save_figure_conclusion（在线调用归 services.llm，
     落库归 store.repo.save_analysis / insert_figures，由 api 层决定）；
