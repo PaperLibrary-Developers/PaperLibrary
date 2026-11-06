@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 
+from paperlib.legacy import compare_engine
 from paperlib.util import now_iso
 
 FIELDS = ["研究问题", "方法", "核心结论", "创新点", "证据强度", "局限", "适用场景", "对我的价值"]
@@ -259,12 +260,7 @@ def _parse_json_object(raw):
 def analyze_with_llm(services, paper, figures, full_text):
     """返回 (fields, scores, oneLine, model)；没有可用模型/失败时返回 None。"""
     llm = getattr(services, "llm", None)
-    if llm is None:
-        return None
-    try:
-        if not llm.ready():
-            return None
-    except (NotImplementedError, Exception):  # noqa: BLE001 - ready() 未实现或抛错都算不可用
+    if not compare_engine.llm_ready(llm):
         return None
     messages = [
         {"role": "system", "content": "你是严谨的化学/材料领域审稿人，只输出合法 JSON。"},
@@ -285,6 +281,9 @@ def analyze_with_llm(services, paper, figures, full_text):
         return None
 
     raw_fields = parsed.get("fields") if isinstance(parsed.get("fields"), dict) else {}
+    if not raw_fields:
+        # 模型有时忽略嵌套直接平铺：仍按契约字段名认领
+        raw_fields = {name: parsed.get(name) for name in FIELDS if name in parsed}
     fields = {}
     for name in FIELDS:
         value = raw_fields.get(name)

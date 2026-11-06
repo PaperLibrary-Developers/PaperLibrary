@@ -214,6 +214,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
 
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # 客户端提前断开（阅读器拖进度条、SSE 关页签）是正常现象，不要打堆栈
+            self.close_connection = True
+
     def do_GET(self):
         self._dispatch()
 

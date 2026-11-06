@@ -265,6 +265,10 @@ class LLM:
                 body = exc.read().decode("utf-8", "replace")
             except Exception:  # noqa: BLE001
                 body = ""
+            try:
+                exc.close()
+            except Exception:  # noqa: BLE001
+                pass
             raise LLMError(_status_message(exc.code, body)) from None
         except urllib.error.URLError as exc:
             reason = getattr(exc, "reason", exc)

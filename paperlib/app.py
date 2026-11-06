@@ -84,7 +84,10 @@ def build(config):
     # 旧库迁移（Sci-lib data/library.json、PaperLibrary data/papers.db）——B8 实现，缺失时跳过
     if os.environ.get("PAPERLIB_SKIP_MIGRATE") != "1":
         try:
-            from paperlib.data.migrate import migrate_from_legacy
+            try:
+                from paperlib.migrate import migrate_from_legacy
+            except ImportError:
+                from paperlib.data.migrate import migrate_from_legacy
 
             migration = migrate_from_legacy(store, config)
             if migration:

@@ -2,6 +2,7 @@
 
   GET /api/terms/search?q=取代&limit=20
 
+移植自 PaperLibrary/app/local_rank.py 的 GLOSSARY（见 paperlib/legacy/lexicon.py）。
 契约：docs/合并新增端点契约-20261107.md §9（q 必填；limit 1-100，默认 20）。
 术语数据在 paperlib/legacy/terms.json（155 条，含 zh/en/aliases/field）。
 """

@@ -81,3 +81,9 @@ class Router:
                     ctx.end_stream()
                 except Exception:
                     pass
+        if not ctx.started:
+            # handler 提前 return 且没写响应：给客户端明确的 500，而不是断连接
+            try:
+                ctx.fail(500, "端点未返回响应：" + (route.get("name") or route["pattern"]))
+            except Exception:
+                pass

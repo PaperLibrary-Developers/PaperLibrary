@@ -4,7 +4,11 @@
 零 I/O、零全局态。
 
 导出：repair_ligatures / tidy_dashes / tidy_spacing / join_hyphen_breaks / build_word_set /
-      repair_text（别名 repair）/ LIGATURES
+      normalize_ligatures / repair_text（别名 repair）/ LIGATURES / LIGATURE_CHARS
+
+两处刻意（已记录在 test_pure_parity.py）的增强，其余与 JS 逐例一致：
+  ① JS 的词首替换 '$1$3$4' 是笔误（正则只有 3 组），会把 "st art" 写成 "a$4rt"；这里按意图接成 "start"。
+  ② JS 只认「e ffi cient」式碎片；PyMuPDF 文本层会给真连字字形 ﬁ/ﬂ，这里先归一成 ASCII 再修。
 """
 from __future__ import annotations
 
@@ -13,6 +17,10 @@ import re
 # 常见连字组合（按长度从长到短，避免 ffi 被 fi 抢先吃掉）
 LIGATURES = ("ffi", "ffl", "ff", "fi", "fl", "ft", "fj", "st")
 _LIG_ALT = "|".join(LIGATURES)
+
+# PDF 里真正的连字字形（PyMuPDF 常常原样给出 U+FB00..U+FB06；pdfjs 则是「e ffi cient」式碎片）。
+# JS 版只处理碎片形态，Python 版在 repair_text 里多做这一步字符归一，否则搜 efficient 匹配不到。
+LIGATURE_CHARS = {"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"}
 
 # Python 的 re 没有 \p{L}：用「非非字母」的写法近似（字母，排除数字与下划线）
 LETTER = r"[^\W\d_]"
@@ -60,8 +68,11 @@ def repair_ligatures(text) -> str:
             + m.group(3),
             s,
         )
-        # ② 真正的词首：行首，或紧跟在句末标点/括号/引号之后
-        s = _LIG_HEAD_RE.sub(r"\1\3", s)   # JS 的 '$1$3$4' 里 $4 不存在，等价于 起始符+字母
+        # ② 真正的词首：行首，或紧跟在句末标点/括号/引号之后（"fi ne" → "fine"）
+        # 注：JS 写的是 '$1$3$4'，但该正则只有 3 个捕获组，JS 会把 $4 当字面量输出，
+        # 于是 "st art" 变成 "a$4rt"（丢了连字、还塞进 "$4"）。这是参考实现的笔误，
+        # 我们按意图接词（$1$2$3 = 起始符 + 连字 + 首字母），见 test_known_divergence。
+        s = _LIG_HEAD_RE.sub(r"\1\2\3", s)
         if s == before:
             break
     return s
@@ -99,9 +110,20 @@ def join_hyphen_breaks(text, vocab) -> str:
     return _HYPHEN_BREAK_RE.sub(repl, _s(text))
 
 
+def normalize_ligatures(text) -> str:
+    """把真正的连字字形（ﬁ ﬂ ﬀ ﬃ ﬄ）换成 ASCII 字母（PyMuPDF 文本层常见）。"""
+    s = _s(text)
+    if not s:
+        return ""
+    for char, ascii_form in LIGATURE_CHARS.items():
+        if char in s:
+            s = s.replace(char, ascii_form)
+    return s
+
+
 def repair_text(text, vocab=None) -> str:
-    """一次性做完：连字 → 断词（给了 vocab 才做）→ 破折号 → 空白。"""
-    s = repair_ligatures(text)
+    """一次性做完：连字字形 → 连字碎片 → 断词（给了 vocab 才做）→ 破折号 → 空白。"""
+    s = repair_ligatures(normalize_ligatures(text))
     if vocab:
         s = join_hyphen_breaks(s, vocab)
     return tidy_spacing(tidy_dashes(s))

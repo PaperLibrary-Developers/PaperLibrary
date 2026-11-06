@@ -243,18 +243,21 @@ def parse_xmp(xml_text):
 
     for element in root.iter():
         key = _local(element.tag)
+        # rdf 的结构标签本身不是字段；rdf:Description / rdf:RDF 是容器，逐个子元素处理
         if key in ("li", "Bag", "Seq", "Alt", "Description", "RDF"):
             continue
         prefix = prefixes.get(_ns_of(element.tag), "")
         name = (prefix + ":" + key) if prefix else key
+        # 结构化容器（dc:creator 里套 rdf:Bag/rdf:Seq 的 rdf:li）：取全部后代 li
+        values = [(node.text or "").strip() for node in element.iter()
+                  if _local(node.tag) == "li" and (node.text or "").strip()]
+        if values:
+            for value in values:
+                add(name, value)
+            continue
         text = (element.text or "").strip()
         if text:
             add(name, text)
-        # 结构化容器（dc:creator 里套 rdf:Bag/rdf:Seq 的 rdf:li）
-        children = [(_local(child.tag), (child.text or "").strip()) for child in list(element)]
-        for child_key, child_text in children:
-            if child_key == "li" and child_text:
-                add(name, child_text)
     flat = {}
     for key, values in out.items():
         flat[key] = values[0] if len(values) == 1 else values

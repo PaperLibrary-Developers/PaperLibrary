@@ -5,6 +5,8 @@
   GET  /api/papers/:id/figures           某篇文献的图表
   POST /api/papers/:id/figures/extract   从 PDF 重新提取（PyMuPDF 渲染 + 图注 bbox 匹配）
 
+移植自 PaperLibrary/app/parser.py（extract_figures）+ figure_anchor.py（图注锚定）；
+提取与匹配算法在 paperlib/legacy/{figures,caption_matcher,figure_anchor}.py。
 契约：docs/合并新增端点契约-20261107.md §1-§4（形状/状态码/错误文案逐字段对齐）。
 数据访问一律经 store / store.repo（figures 表），本文件不出现 SQL。
 """

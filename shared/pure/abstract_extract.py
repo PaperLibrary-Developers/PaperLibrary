@@ -1,4 +1,4 @@
-"""共享内核 · 从 PDF 行文本抽摘要（移植自 Sci-lib shared/pure/abstract-extract.js）。
+r"""共享内核 · 从 PDF 行文本抽摘要（移植自 Sci-lib shared/pure/abstract-extract.js）。
 
 契约：输入是 PDF 头几页的「视觉行」数组（按 y 坐标聚合，不是整页一行），两步走：
   ① 找标题 ABSTRACT / CONSPECTUS / Summary / 摘要；

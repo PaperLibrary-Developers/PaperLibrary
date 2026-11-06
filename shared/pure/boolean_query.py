@@ -129,12 +129,8 @@ def tokenize(query):
         if ch.isspace():
             i += 1
             continue
-        if ch == "(":
-            tokens.append({"type": "lparen"})
-            i += 1
-            continue
-        if ch == ")":
-            tokens.append({"type": "rparen"})
+        if ch in ("(", ")"):
+            tokens.append({"type": "lparen" if ch == "(" else "rparen"})
             i += 1
             continue
         if ch in ('"', "“", "”"):
@@ -142,28 +138,16 @@ def tokenize(query):
             if phrase:
                 tokens.append({"type": "term", "value": phrase, "phrase": True})
             continue
-        if ch == "&" and i + 1 < n and text[i + 1] == "&":
-            tokens.append({"type": "AND"})
-            i += 2
-            continue
-        if ch == "|" and i + 1 < n and text[i + 1] == "|":
-            tokens.append({"type": "OR"})
+        if ch in ("&", "|") and i + 1 < n and text[i + 1] == ch:
+            tokens.append({"type": "AND" if ch == "&" else "OR"})
             i += 2
             continue
         if ch == "!":
             tokens.append({"type": "NOT"})
             i += 1
             continue
-        if ch == "与":
-            tokens.append({"type": "AND"})
-            i += 1
-            continue
-        if ch == "或":
-            tokens.append({"type": "OR"})
-            i += 1
-            continue
-        if ch == "非":
-            tokens.append({"type": "NOT"})
+        if ch in ("与", "或", "非"):
+            tokens.append({"type": {"与": "AND", "或": "OR", "非": "NOT"}[ch]})
             i += 1
             continue
         j = i

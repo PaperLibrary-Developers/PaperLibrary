@@ -211,6 +211,10 @@ class WebSearch:
             detail = ""
             if isinstance(parsed, dict):
                 detail = parsed.get("error") or parsed.get("message") or parsed.get("detail") or ""
+            try:
+                exc.close()
+            except Exception:  # noqa: BLE001
+                pass
             if not detail:
                 detail = text[:200]
             hint = ""

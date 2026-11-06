@@ -68,7 +68,7 @@ def read_attachment_text(services, paper_id, file):
     if not base:
         return ""
     store = services.db
-    for key in ("att-" + base, "att-" + str(file)):
+    for key in ("att-" + base, "att-" + base + ".txt", "att-" + str(file)):
         try:
             text = store.get_text(key) or ""
         except Exception:  # noqa: BLE001

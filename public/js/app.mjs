@@ -139,11 +139,11 @@ const { h, toast, debounce } = util
     return h('aside.sidebar', { id: 'sidebar' },
       h('div.brand',
         // logo 是图片（白底），所以放在一个白色小圆角块里，深浅主题下都立得住
-        h('div.brand-mark', h('img', { src: '/sci-lib-mark.png', alt: 'PaperLibrary', draggable: 'false' })),
+        h('div.brand-mark', h('img', { src: '/paperlibrary-mark.png', alt: 'PaperLibrary', draggable: 'false' })),
         // 名称按 logo 的配色：Sci 深蓝、-lib 青色（颜色在 CSS 变量里，夜间主题会换成亮一点的同色系）
         h('div.brand-name',
-          h('span.brand-navy', 'Sci'),
-          h('span.brand-teal', '-lib')
+          h('span.brand-navy', 'Paper'),
+          h('span.brand-teal', 'Library')
         )
       ),
       h('nav.nav', totalEl, starredEl,

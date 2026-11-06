@@ -1,5 +1,6 @@
-/* 深度分析视图 #/deep 与 #/deep/:id（合并后新增；PaperLibrary deep_analysis 的浏览器前端）
-   契约：docs/合并新增端点契约-20261107.md
+/* 深度分析视图 #/deep 与 #/deep/:id（合并后新增的浏览器视图）
+   移植自 PaperLibrary app/deep_analysis.py（22 字段 + 五维评分报告的展示面），
+   数据面换成 Nexus 的 HTTP 端点。契约：docs/合并新增端点契约-20261107.md
         §7 GET  /api/papers/:id/deep-analysis → { analysis: null | {paperId,updatedAt,model,fields{},scores{},oneLine} }
         §8 POST /api/papers/:id/deep-analysis { force } → { analysis, saved:true }
            无 Key 时服务端做本地降级，**仍返回 200**（fields 里会标注「未配置大模型，仅本地分析」）

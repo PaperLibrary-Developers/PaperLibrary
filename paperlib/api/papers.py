@@ -42,18 +42,17 @@ def _query_params(ctx):
 
 
 def _fulltext_available(fulltext):
-    """pdfjs/依赖是否可用：对应 Node 的 fulltext._available !== false。"""
+    """依赖是否可用：`None` 表示还没探测过（与 Node 的 fulltext.stats().available 同义）。"""
     flag = getattr(fulltext, "_available", None)
     if flag is not None:
-        return bool(flag)
+        return flag
     for name in ("availability_known", "availabilityKnown", "available"):
         fn = getattr(fulltext, name, None)
         if callable(fn):
             try:
-                value = fn()
+                return fn()
             except Exception:  # noqa: BLE001
                 return True
-            return True if value is None else bool(value)
     return True
 
 
@@ -352,7 +351,7 @@ def get_one(ctx):
         "pdfExists": services.library.pdf_exists(paper.get("pdfFile")),
         "fulltext": {
             "has": bool(getattr(fulltext, "has", lambda _id: False)(paper.get("id"))),
-            "available": _fulltext_available(fulltext),
+            "available": _fulltext_available(fulltext) is not False,
         },
     })
 

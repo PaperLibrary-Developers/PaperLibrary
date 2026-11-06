@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 import pymupdf
@@ -16,6 +18,7 @@ import pymupdf
 from paperlib.adapters import pdf_rules, pdf_text
 from paperlib.domain import pdf_import
 
+ROOT = Path(__file__).resolve().parent.parent
 CJK_FONT = r"C:\Windows\Fonts\msyh.ttc"
 SAMPLE_TITLE = "Porous Metal-Organic Cages for Gas Separation"
 SAMPLE_DOI = "10.1021/jacs.3b12345"
@@ -43,6 +46,7 @@ def make_sample_pdf(path, *, chinese=True, title=SAMPLE_TITLE):
         "author": "Khaleel I. Assaf; Werner M. Nau",
         "creationDate": "D:20230415120000",
     })
+    doc.subset_fonts()  # 不子集化会整份嵌入 msyh.ttc（~19MB）
     doc.save(str(path))
     doc.close()
 
@@ -80,6 +84,27 @@ class PdfTextTest(unittest.TestCase):
         self.assertIn(SAMPLE_TITLE, head["lines"])
         self.assertEqual(head["info"]["Title"], SAMPLE_TITLE)
         self.assertIn("Assaf", head["info"]["Author"])
+
+    def test_parse_xmp_flattens_dc_and_prism(self):
+        xml = (
+            '<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+            '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:prism="http://prismstandard.org/namespaces/basic/2.0/">'
+            '<rdf:Description rdf:about="">'
+            '<prism:doi>10.1021/jacs.3b12345</prism:doi>'
+            '<prism:publicationDate>2023-04-15</prism:publicationDate>'
+            '<dc:creator><rdf:Seq><rdf:li>Khaleel I. Assaf</rdf:li>'
+            '<rdf:li>Werner M. Nau</rdf:li></rdf:Seq></dc:creator>'
+            '</rdf:Description></rdf:RDF></x:xmpmeta>'
+        )
+        xmp = pdf_text.parse_xmp(xml)
+        self.assertEqual(xmp["prism:doi"], "10.1021/jacs.3b12345")
+        self.assertEqual(xmp["dc:creator"], ["Khaleel I. Assaf", "Werner M. Nau"])
+        self.assertEqual(pdf_rules.doi_from_meta(xmp), "10.1021/jacs.3b12345")
+        self.assertEqual(pdf_rules.year_from_meta({}, xmp), 2023)
+        self.assertIsNone(pdf_text.parse_xmp(""))
+        self.assertIsNone(pdf_text.parse_xmp("not xml"))
 
     def test_extract_page(self):
         page = pdf_text.extract_page(self.pdf, 1)
@@ -303,6 +328,89 @@ class CleanupTest(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="t3-clean2-")
         services = SimpleNamespace(runtime=SimpleNamespace(data_dir=tmp))
         self.assertEqual(pdf_import.cleanup_import_tmp(services), {"removed": 0})
+
+
+class FulltextSearchTest(unittest.TestCase):
+    """全文检索（list/facets 的 scope=fulltext 依赖 FullText.search / excerpts）。"""
+
+    def setUp(self):
+        from paperlib.config import Config
+        from paperlib.data.store import Store
+        from paperlib.services import create_services
+
+        self.tmp = tempfile.mkdtemp(prefix="t3-search-")
+        config = Config(root=ROOT, data_dir=Path(self.tmp), port=4392)
+        config.started_at = time.time()
+        self.store = Store(config.data_dir)
+        self.store.load()
+        self.services = create_services(config, self.store)
+        self.ids = {}
+        for name, text in (
+            ("cage", "本文研究超分子化学与金属有机笼的自组装行为"),
+            ("imaging", "超分辨率成像技术用于材料表征"),
+            ("gas", "金属有机笼的气体分离性能研究"),
+            ("mof", "metal organic frameworks for gas uptake"),
+        ):
+            paper = self.services.library.create({"title": name})
+            self.store.set_text(paper["id"], text)
+            self.ids[name] = paper["id"]
+
+    def tearDown(self):
+        try:
+            self.store.repo.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def hits(self, terms, limit=200):
+        return [hit["id"] for hit in self.services.fulltext.search(terms, limit)]
+
+    def test_chinese_whole_word_requires_all_bigrams(self):
+        # 「超分子」的 token 是 超/超分/分/分子/子：只出现「超分」的正文不应命中
+        self.assertEqual(self.hits("超分子"), [self.ids["cage"]])
+        self.assertIn(self.ids["gas"], self.hits("气体分离"))
+        self.assertNotIn(self.ids["imaging"], self.hits("气体分离"))
+
+    def test_latin_terms_and_chinese_union(self):
+        # 一个 term 的 token 全中才算；不同 term 之间是并集（与 Node 的全文粗筛一致）
+        self.assertEqual(self.hits("metal organic frameworks"), [self.ids["mof"]])
+        self.assertEqual(self.hits("cages"), [])
+        self.assertIn(self.ids["mof"], self.hits("metal organic cages"))
+        self.assertEqual(sorted(self.hits("金属有机笼")),
+                         sorted([self.ids["cage"], self.ids["gas"]]))
+
+    def test_attachment_text_not_searchable(self):
+        self.store.set_text("att-" + self.ids["cage"] + "-SI.txt", "超分子补充材料")
+        self.assertTrue(all(not str(hit).startswith("att-") for hit in self.hits("超分子")))
+
+    def test_unknown_query_and_limit(self):
+        self.assertEqual(self.hits("完全不存在的词"), [])
+        self.assertEqual(self.services.fulltext.search("", 200), [])
+        self.assertEqual(len(self.hits("超分", limit=1)), 1)
+
+    def test_index_tracks_save_and_remove(self):
+        paper = self.services.library.create({"title": "新文献"})
+        self.services.fulltext.save(paper["id"], "这里讨论超分子识别")
+        self.assertIn(paper["id"], self.hits("超分子"))
+        self.services.fulltext.save(paper["id"], "改成了别的主题")
+        self.assertNotIn(paper["id"], self.hits("超分子"))
+        self.services.fulltext.remove(paper["id"])
+        self.assertNotIn(paper["id"], self.hits("别的主题"))
+
+    def test_excerpts(self):
+        fulltext = self.services.fulltext
+        snippets = fulltext.excerpts(self.ids["cage"], "超分子", 1)
+        self.assertEqual(len(snippets), 1)
+        self.assertIn("超分子", snippets[0])
+        self.assertEqual(fulltext.excerpts(self.ids["cage"], "不存在的词", 1), [])
+        self.assertEqual(fulltext.excerpts("deadbeefdeadbeef", "超分子", 1), [])
+        self.assertGreaterEqual(len(fulltext.excerpts(self.ids["cage"], "超分子 金属有机笼", 2)), 1)
+
+    def test_stats_counts_indexed_and_tokens(self):
+        self.hits("超分子")
+        stats = self.services.fulltext.stats()
+        self.assertEqual(stats["indexed"], 4)
+        self.assertGreater(stats["tokens"], 0)
+        self.assertIsNotNone(stats["available"])
 
 
 if __name__ == "__main__":

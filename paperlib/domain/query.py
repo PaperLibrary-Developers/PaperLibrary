@@ -22,6 +22,7 @@ from pathlib import Path
 from paperlib.domain.naming import display_file_name
 from paperlib.domain.repository import SORTABLE
 from paperlib.util import clamp_int, safe_path_join, to_string_array, truncate
+from shared.pure.text import zh_collation_key
 
 try:  # T1 交付；暂缺时布尔/字段查询降级（测试用 skip 标记）
     from shared.pure import boolean_query as bool_query
@@ -82,27 +83,12 @@ def _cmp(a, b):
     return -1 if a < b else (1 if a > b else 0)
 
 
-def _is_cjk(text):
-    for ch in str(text):
-        code = ord(ch)
-        if 0x3400 <= code <= 0x9FFF or 0xF900 <= code <= 0xFAFF or 0x3040 <= code <= 0x30FF:
-            return True
-    return False
+# 中文/拉丁混排的近似排序键由 shared/pure/text.py 提供（Node 那边是 localeCompare(..., 'zh-Hans-CN')）
 
 
-def _locale_key(text):
-    """近似 JS 的 localeCompare(..., 'zh-Hans-CN') 排序键。
-
-    ICU 实测（node v24）：汉字排在拉丁字母**前面**，拉丁部分大小写不敏感。
-    汉字之间的拼音顺序无法用标准库复现（没有拼音表），退化为码位顺序——只影响并列项的次序。
-    """
-    raw = str(text)
-    return (0 if _is_cjk(raw) else 1, raw.casefold(), raw)
-
-
-def _locale_cmp(a, b):
-    ka, kb = _locale_key(a), _locale_key(b)
-    return -1 if ka < kb else (1 if ka > kb else 0)
+def _name_key(name):
+    """并列项的次序键：与 Node 的 localeCompare 一致（汉字在前、拉丁不分大小写）。"""
+    return zh_collation_key(name)
 
 
 def _number(value):
@@ -116,6 +102,12 @@ def _number(value):
 def _round1(value):
     """对应 JS 的 Math.round(x*10)/10（四舍五入，不是银行家舍入）。"""
     return math.floor(float(value) * 10 + 0.5) / 10
+
+
+def _js_number(value):
+    """JS 的 JSON 表示：整数不带小数点（Math.round(...)/10 给 5 而不是 5.0）。"""
+    result = _round1(value)
+    return int(result) if float(result).is_integer() else result
 
 
 def _limit_of(value, fallback):
@@ -142,8 +134,7 @@ class QueryEngine:
             for tag in paper.get("tags") or []:
                 counter[tag] = counter.get(tag, 0) + 1
         items = [{"name": name, "count": count} for name, count in counter.items()]
-        items.sort(key=cmp_to_key(
-            lambda a, b: (b["count"] - a["count"]) or _locale_cmp(a["name"], b["name"])))
+        items.sort(key=lambda row: (-row["count"], _name_key(row["name"])))
         return items
 
     def authors(self, limit=None):
@@ -156,8 +147,7 @@ class QueryEngine:
                     continue
                 counter[name] = counter.get(name, 0) + 1
         items = [{"name": name, "count": count} for name, count in counter.items()]
-        items.sort(key=cmp_to_key(
-            lambda a, b: (b["count"] - a["count"]) or _locale_cmp(a["name"], b["name"])))
+        items.sort(key=lambda row: (-row["count"], _name_key(row["name"])))
         return items[: _limit_of(limit, 300)]
 
     def venues(self, limit=None):
@@ -169,8 +159,7 @@ class QueryEngine:
                 continue
             counter[venue] = counter.get(venue, 0) + 1
         items = [{"name": name, "count": count} for name, count in counter.items()]
-        items.sort(key=cmp_to_key(
-            lambda a, b: (b["count"] - a["count"]) or _locale_cmp(a["name"], b["name"])))
+        items.sort(key=lambda row: (-row["count"], _name_key(row["name"])))
         return items[: _limit_of(limit, 300)]
 
     # ------------------------------------------------------------------ 统计
@@ -208,7 +197,7 @@ class QueryEngine:
             "starred": starred,
             "pdfMissing": len([p for p in papers
                                if p.get("pdfFile") and not self.pdf_exists(p.get("pdfFile"))]),
-            "avgRating": _round1(rating_sum / rating_count) if rating_count else 0,
+            "avgRating": _js_number(rating_sum / rating_count) if rating_count else 0,
             "noteChars": words,
             "byYear": years,
             "byType": types,
@@ -341,7 +330,10 @@ class QueryEngine:
         sort_key = opts.get("sort") if opts.get("sort") in SORTABLE else None
         if sort_key is None and not index_query:
             sort_key = "updatedAt"
-        if sort_key:
+        if sort_key == "title":
+            # Node 这里用 localeCompare(..., 'zh-Hans-CN')：汉字在拉丁之前、拉丁不分大小写
+            rows = sorted(rows, key=lambda paper: _name_key(paper.get("title") or ""))
+        elif sort_key:
             rows = sorted(rows, key=cmp_to_key(SORTABLE[sort_key]))
         elif scored:
             rows = sorted(rows, key=lambda paper: -(scored.get(paper.get("id")) or 0))
@@ -492,8 +484,10 @@ class QueryEngine:
                         continue
                     counter[value] = counter.get(value, 0) + 1
             rows = [{"value": value, "count": count} for value, count in counter.items()]
-            rows.sort(key=cmp_to_key(compare or (
-                lambda a, b: (b["count"] - a["count"]) or _locale_cmp(a["value"], b["value"]))))
+            if compare:
+                rows.sort(key=cmp_to_key(compare))
+            else:
+                rows.sort(key=lambda row: (-row["count"], _name_key(row["value"])))
             return {"items": rows[: _limit_of(base.get("facetLimit"), 6)],
                     "distinct": len(rows)}
 
@@ -538,7 +532,7 @@ class QueryEngine:
             "updatedAt": paper.get("updatedAt"),
         }
         if score is not None:
-            item["score"] = _round1(score)
+            item["score"] = _js_number(score)
         return item
 
     def pdf_exists(self, pdf_file):

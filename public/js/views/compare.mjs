@@ -1,5 +1,6 @@
-/* 横向对比视图 #/compare（合并后新增；PaperLibrary compare_engine 的浏览器前端）
-   契约：docs/合并新增端点契约-20261107.md
+/* 横向对比视图 #/compare（合并后新增的浏览器视图）
+   移植自 PaperLibrary app/compare_engine.py（模板与字段、Map-Reduce 两段式的展示面），
+   数据面换成 Nexus 的 HTTP 端点。契约：docs/合并新增端点契约-20261107.md
         §5 GET  /api/compare/templates → { templates:[{id,name,desc,fields[]}] }（至少 4 套，无 Key 也能列）
         §6 POST /api/compare { paperIds[2..8], template } → { result:{ template, oneLine, sections:[{title,rows:[{paperId,value}]}], usage } }
         错误：400（少于 2 条 / 超过 8 条）、404（任一文献不存在）

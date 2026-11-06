@@ -254,17 +254,25 @@ def build_llm_prompt(paper, fields, blob):
     return "\n".join(lines)
 
 
+def llm_ready(llm):
+    """把 services.llm.ready() 归一成 bool（适配器可能返回 bool / dict / Readiness 对象）。"""
+    if llm is None:
+        return False
+    try:
+        state = llm.ready()
+    except Exception:  # noqa: BLE001 - ready() 未实现或抛错都算不可用
+        return False
+    if isinstance(state, bool):
+        return state
+    if isinstance(state, dict):
+        return bool(state.get("ready"))
+    return bool(getattr(state, "ready", False))
+
+
 def _extract_with_llm(services, paper, fields, blob):
     """返回 (values, usage)；失败/无 Key 返回 (None, 空用量)。"""
     llm = getattr(services, "llm", None)
-    if llm is None:
-        return None, None
-    try:
-        if not llm.ready():
-            return None, None
-    except NotImplementedError:
-        return None, None
-    except Exception:  # noqa: BLE001
+    if not llm_ready(llm):
         return None, None
 
     messages = [

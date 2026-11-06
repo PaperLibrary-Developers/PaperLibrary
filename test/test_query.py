@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 from paperlib.data.store import Store
 from paperlib.domain.library import Library
@@ -148,8 +149,11 @@ class SortTest(QueryTestBase):
         ids = self.order("yearAsc")
         self.assertEqual(ids[0], "p06")
 
-    def test_title_sort(self):
-        self.assertEqual(self.order("title")[0], "p01")   # 'AAA…' 最小
+    def test_title_sort_uses_zh_collation(self):
+        # Node 用 localeCompare(..., 'zh-Hans-CN')：汉字在拉丁字母之前
+        ids = self.order("title")
+        self.assertEqual(ids[0], "p05")                   # 超分子化学导论
+        self.assertEqual(ids[1], "p01")                   # 'AAA…' 是拉丁里最小的
 
     def test_rating_sort(self):
         ids = self.order("rating")
@@ -304,6 +308,8 @@ class FacetsTest(QueryTestBase):
         self.assertEqual(types["journal"], 3)
         self.assertEqual(types["conference"], 1)
         self.assertEqual(result["authors"]["distinct"], 5)
+        # 并列项的次序用 zh_collation_key（汉字先于拉丁）
+        self.assertEqual(result["authors"]["items"][0]["value"], "张三")
 
 
 class ListItemStatsTest(QueryTestBase):
@@ -322,6 +328,9 @@ class ListItemStatsTest(QueryTestBase):
     def test_score_rounded_to_one_decimal(self):
         item = self.library.to_list_item(dict(FIXTURE[0]), 12.345)
         self.assertEqual(item["score"], 12.3)
+        # JS 的 JSON 表示：整数不带小数点
+        self.assertEqual(self.library.to_list_item(dict(FIXTURE[0]), 12.0)["score"], 12)
+        self.assertIsInstance(self.library.to_list_item(dict(FIXTURE[0]), 12.0)["score"], int)
 
     def test_pdf_display_name_strips_id_prefix(self):
         item = self.library.to_list_item(paper(id="x", pdfFile="abcdef12-capsule.pdf"))
@@ -338,6 +347,14 @@ class ListItemStatsTest(QueryTestBase):
         self.assertFalse(self.library.pdf_exists("../outside.pdf"))
         self.assertFalse(self.library.pdf_exists(""))
         self.assertFalse(self.library.pdf_exists("nope.pdf"))
+
+    def test_avg_rating_is_int_when_integral(self):
+        self.store.replace_paper("p01", dict(FIXTURE[0], rating=5))
+        for victim in [item["id"] for item in FIXTURE[1:]]:
+            self.store.remove_paper(victim)
+        stats = self.library.stats()
+        self.assertEqual(stats["avgRating"], 5)
+        self.assertIsInstance(stats["avgRating"], int)
 
     def test_stats_totals(self):
         stats = self.library.stats()
@@ -356,7 +373,7 @@ class ListItemStatsTest(QueryTestBase):
         self.assertEqual({row["name"]: row["count"] for row in tags},
                          {"catalysis": 2, "CB": 2, "supramolecular": 2, "教材": 1})
         authors = self.library.authors()
-        self.assertEqual(authors[0]["name"], "Fujita")
+        self.assertEqual(authors[0]["name"], "张三")       # 计数并列时汉字在拉丁之前
         self.assertEqual(len(self.library.authors(1)), 1)
         venues = self.library.venues(2)
         self.assertEqual(len(venues), 2)
@@ -381,6 +398,138 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(bundle["terms"], ["cucurbituril"])
         self.assertEqual(bundle["allTerms"], ["capsule", "cucurbituril"])
         self.assertEqual(bundle["fieldTerms"], [{"field": "title", "value": "capsule"}])
+
+
+
+
+class FakeFullText:
+    """假的全文索引：只实现 api/papers.py 用到的形状（T3 落地前也能测通 scope=fulltext）。"""
+
+    def __init__(self, hits=None, bodies=None):
+        self.hits = hits or []
+        self.bodies = bodies or {}
+        self.search_calls = []
+
+    def search(self, query, limit):
+        self.search_calls.append((query, limit))
+        return list(self.hits)
+
+    def excerpts(self, paper_id, query, limit):
+        return ["…" + self.bodies.get(paper_id, "")[:20] + "…"]
+
+    def stats(self):
+        return {"available": None, "indexed": 0, "dir": "x", "tokens": 0}
+
+    def has(self, paper_id):
+        return paper_id in self.bodies
+
+    def remove(self, paper_id):
+        self.bodies.pop(paper_id, None)
+
+
+class FakeCtx:
+    """最小的 ctx 桩：只给 api/papers.py 用到的成员。"""
+
+    def __init__(self, services, query=None, params=None):
+        self.services = services
+        self.params = params or {}
+        self._query = dict(query or {})
+        self.status = None
+        self.payload = None
+
+    def query(self, name, default=""):
+        return self._query.get(name, default)
+
+    def query_all(self, name):
+        return [self._query[name]] if name in self._query else []
+
+    def json(self, status, data):
+        self.status = status
+        self.payload = data
+        return data
+
+    def fail(self, status, message, extra=None):
+        self.status = status
+        self.payload = {"ok": False, "error": message}
+        return self.payload
+
+    def read_json(self, limit=None):
+        return {}
+
+
+class ApiListFacetsTest(unittest.TestCase):
+    """api/papers.py 的 list/facets：fulltext 命中集联调（T3 未就绪时用假全文索引）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = Store(self.tmp.name)
+        self.store.load()
+        self.library = Library(self.store)
+        self.addCleanup(self.store.repo.close)
+        for item in FIXTURE:
+            self.store.insert_paper(dict(item))
+            self.library.index.set(dict(item))
+        self.fulltext = FakeFullText(
+            hits=[{"id": "p03", "score": 2.0}, {"id": "p07", "score": 1.0}],
+            bodies={"p03": "capsules at interfaces in water", "p07": "capsule assembly"})
+        self.services = SimpleNamespace(
+            library=self.library, db=self.store, fulltext=self.fulltext,
+            fulltext_budget={"value": 0}, runtime=SimpleNamespace(data_dir=self.tmp.name),
+            llm=SimpleNamespace(settings={}, readiness=lambda: {"ready": False}),
+            trigger_auto_summary_zh=lambda paper_id: None)
+
+    def run_list(self, query):
+        from paperlib.api import papers as papers_api
+
+        ctx = FakeCtx(self.services, query)
+        papers_api.list_papers(ctx)
+        return ctx
+
+    def test_scope_fulltext_clears_q_and_uses_ids(self):
+        ctx = self.run_list({"q": "capsules", "scope": "fulltext"})
+        self.assertEqual(ctx.status, 200)
+        ids = [item["id"] for item in ctx.payload["items"]]
+        self.assertEqual(ids, ["p03", "p07"])
+        self.assertEqual(ctx.payload["scope"], "fulltext")
+        self.assertTrue(all(item.get("fulltextExcerpt") for item in ctx.payload["items"]))
+        self.assertEqual(self.fulltext.search_calls[0][1], 200)
+
+    def test_scope_fulltext_keeps_boolean_query(self):
+        ctx = self.run_list({"q": "capsules NOT interfaces", "scope": "fulltext"})
+        # 粗筛用「全部正项词」（含字段项的值），这里没有字段项 → 原查询里的正项词
+        self.assertEqual(self.fulltext.search_calls[0][0], "capsules")
+        self.assertTrue(ctx.payload["boolean"])
+
+    def test_scope_metadata_does_not_touch_fulltext_index(self):
+        ctx = self.run_list({"q": "capsule"})
+        self.assertEqual(self.fulltext.search_calls, [])
+        self.assertEqual(ctx.payload["scope"], "metadata")
+        self.assertGreaterEqual(ctx.payload["total"], 1)
+
+    def test_scope_all_merges_fulltext_hits(self):
+        ctx = self.run_list({"q": "capsules", "scope": "all"})
+        ids = [item["id"] for item in ctx.payload["items"]]
+        self.assertIn("p03", ids)
+        self.assertIn("p07", ids)      # 只在正文里命中的 p07 也要并进结果
+
+    def test_budget_set_from_scope(self):
+        self.run_list({"q": "capsules", "scope": "fulltext"})
+        self.assertEqual(self.services.fulltext_budget["value"], 60)
+        self.run_list({"q": "capsule"})
+        self.assertEqual(self.services.fulltext_budget["value"], 0)
+
+    def test_facets_fulltext_branch_matches_list_semantics(self):
+        from paperlib.api import papers as papers_api
+
+        ctx = FakeCtx(self.services, {"q": "capsules", "scope": "fulltext"})
+        papers_api.facets(ctx)
+        self.assertEqual(ctx.status, 200)
+        self.assertEqual(ctx.payload["query"]["total"], 2)
+        types = {row["value"]: row["count"] for row in ctx.payload["query"]["types"]["items"]}
+        self.assertEqual(types, {"conference": 1, "journal": 1})   # p03 / p07
+        self.assertTrue(any(row["name"] == "supramolecular" for row in ctx.payload["tags"]))
+        self.assertIsNone(ctx.payload["fulltext"]["available"])   # 未探测 → null（与 Node 一致）
 
 
 if __name__ == "__main__":

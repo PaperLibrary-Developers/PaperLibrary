@@ -6,16 +6,22 @@
   · 正文的**唯一真源是 SQLite 的 paper_text 表**（store.get_text / set_text），不再以
     data/fulltext/<id>.txt 为准；store.set_text 会顺手在 data/fulltext/ 镜像一份老布局的 .txt，
     旧备份/外部工具有需要时还能读。
-  · 倒排索引不在这里：检索由 domain/search_index（T2）负责，启动时按 store 里的正文重建，
-    所以本类只做「抽取 + 缓存 + 附件文本」。
+  · **全文倒排索引在本类里（内存、按需建）**：Node 启动时 fulltext.loadAll 就把正文索引进内存；
+    这里改为第一次 search() 时扫一遍 paper_text 建索引（省下冷启动时间），之后由 save/remove
+    与 _ensure_index 的「字数比对」增量维护。检索语义：一个 term 的全部 token 都要命中
+    （中文 bigram 全命中 = 整词），term 之间取并集——与 Node 的全文粗筛一致。
+  · stats() 的 available 沿用 Node 语义：没探测过是 None，探测过后才是 True/False。
   · 附件文本的键是 att-<附件文件名>（摊平后的文件名本身已带 <文献id>- 前缀，不再叠 paperId）。
 """
 from __future__ import annotations
 
+import math
 import os
+import re
 from pathlib import Path
 
 from paperlib.adapters import pdf_text
+from paperlib.util import query_terms, tokenize
 
 # 每篇文献参与检索的最大字符数（与 Node 一致）
 INDEX_CHARS = 200000
@@ -30,6 +36,11 @@ class FullText:
         self.store = store
         base = Path(getattr(store, "data_dir", Path(".")))
         self.dir = Path(getattr(store, "fulltext_dir", base / "fulltext"))
+        # 内存倒排索引：token -> {paperId: 词频}；按需建（第一次检索时扫一遍 paper_text）。
+        # 附件文本（att- 前缀）不进索引：那是给大模型读的 SI 正文，不参与文献检索。
+        self._postings = {}
+        self._lengths = {}
+        self._sizes = {}  # paperId -> 正文字符数（判断库里正文有没有被别处改过）
 
     # ---------------------------------------------------------------- 依赖状态
     def available(self):
@@ -60,11 +71,15 @@ class FullText:
 
     def save(self, paper_id, text):
         value = str(text or "")
-        self.store.set_text(str(paper_id), value)
+        key = str(paper_id)
+        self.store.set_text(key, value)
+        if key in self._sizes:  # 索引已建过：把这本同步进去
+            self._index_doc(key, value)
         return {"chars": len(value)}
 
     def remove(self, paper_id):
         key = str(paper_id)
+        self._unindex_doc(key)
         try:
             self.store.repo.delete_text(key)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001 - 老 store 没有 delete_text 时退化成清空
@@ -92,10 +107,131 @@ class FullText:
             keys = []
         return {
             "available": self.availability_known(),
-            "indexed": len(keys),
+            "indexed": len(self._lengths) if self._lengths else len(keys),
             "dir": str(self.dir),
-            "tokens": 0,  # 倒排已交给 domain/search_index
+            "tokens": len(self._postings),
         }
+
+    # ---------------------------------------------------------------- 全文检索
+    def _ensure_index(self):
+        """按需建/增量维护倒排：库里新增或字数变了的正文，逐篇重建索引。"""
+        try:
+            keys = [str(k) for k in self.store.list_text_keys() if not str(k).startswith("att-")]
+        except Exception:  # noqa: BLE001
+            return
+        for key in keys:
+            try:
+                size = int(self.store.text_chars(key))
+            except Exception:  # noqa: BLE001
+                continue
+            if self._sizes.get(key) == size:
+                continue
+            self._index_doc(key, self.store.get_text(key) or "")
+        # 库里被删掉的正文也要从索引里摘掉
+        alive = set(keys)
+        for stale in [key for key in self._sizes if key not in alive]:
+            self._unindex_doc(stale)
+
+    def _index_doc(self, key, text):
+        self._unindex_doc(key)
+        value = str(text or "")[:INDEX_CHARS]
+        tokens = tokenize(value)
+        if not tokens:
+            self._sizes[key] = len(str(text or ""))
+            return
+        counts = {}
+        for token in tokens:
+            counts[token] = counts.get(token, 0) + 1
+        for token, freq in counts.items():
+            self._postings.setdefault(token, {})[key] = freq
+        self._lengths[key] = len(tokens)
+        self._sizes[key] = len(str(text or ""))
+
+    def _unindex_doc(self, key):
+        if key not in self._sizes and key not in self._lengths:
+            return
+        self._sizes.pop(key, None)
+        self._lengths.pop(key, None)
+        for token in [t for t, bucket in self._postings.items() if key in bucket]:
+            bucket = self._postings[token]
+            bucket.pop(key, None)
+            if not bucket:
+                self._postings.pop(token, None)
+
+    def search(self, terms, limit=200):
+        """全文检索：返回 [{id, score}] 按分数降序（无命中给空列表，不抛异常）。
+
+        语义：terms 是「正项词」用空白/逗号拼起来的字符串；**每个词的全部 token 都要命中**
+        才算这个词命中——中文 bigram 全命中就等于整词（「超分子」不会命中只有「超分」的正文）。
+        打分沿用 Node：词频饱和 + 文档长度归一，避免长文档一味占优。
+        """
+        text = str(terms or "").strip()
+        if not text:
+            return []
+        self._ensure_index()
+        try:
+            wanted = int(limit or 200)
+        except (TypeError, ValueError):
+            wanted = 200
+        scores = {}
+        for term in query_terms(text):
+            tokens = []
+            for token in tokenize(term):
+                if token not in tokens:
+                    tokens.append(token)
+            if not tokens:
+                continue
+            buckets = [self._postings.get(token) for token in tokens]
+            if any(bucket is None for bucket in buckets):
+                continue
+            hit_ids = set(buckets[0])
+            for bucket in buckets[1:]:
+                hit_ids &= set(bucket)
+                if not hit_ids:
+                    break
+            if not hit_ids:
+                continue
+            for paper_id in hit_ids:
+                norm = math.sqrt((self._lengths.get(paper_id) or 1) / 1000 + 1)
+                total = 0.0
+                for bucket in buckets:
+                    freq = bucket.get(paper_id) or 0
+                    total += (1 + math.log(1 + freq)) / norm
+                scores[paper_id] = scores.get(paper_id, 0.0) + total
+        ordered = sorted(scores.items(), key=lambda kv: -kv[1])[: max(0, wanted)]
+        return [{"id": paper_id, "score": score} for paper_id, score in ordered]
+
+    def excerpts(self, paper_id, query, limit=1):
+        """正文里包含查询词的一段摘录（前后各约 80 字，空白压平）；无命中返回 []。"""
+        text = self.read(paper_id)
+        if not text:
+            return []
+        words = []
+        for raw in re.split(r"[\s,，;；]+", str(query or "")):
+            word = raw.strip()
+            if len(word) >= 2 and word not in words:
+                words.append(word)
+        if not words:
+            return []
+        try:
+            wanted = max(1, int(limit or 1))
+        except (TypeError, ValueError):
+            wanted = 1
+        lower = text.lower()
+        out = []
+        for word in words:
+            at = lower.find(word.lower())
+            if at < 0:
+                continue
+            start = max(0, at - 80)
+            end = min(len(text), at + len(word) + 80)
+            snippet = re.sub(r"\s+", " ", text[start:end]).strip()
+            if not snippet:
+                continue
+            out.append(("…" if start > 0 else "") + snippet + ("…" if end < len(text) else ""))
+            if len(out) >= wanted:
+                break
+        return out
 
     # ---------------------------------------------------------------- 抽取
     def extract_from_file(self, abs_path):

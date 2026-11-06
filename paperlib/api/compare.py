@@ -3,6 +3,7 @@
   GET  /api/compare/templates   4 套模板（合成 / 电化学 / 材料 / 通用）
   POST /api/compare             { paperIds[], template? } → 横向对比结果
 
+移植自 PaperLibrary/app/compare_engine.py（模板/Map-Reduce，见 paperlib/legacy/compare_engine.py）。
 契约：docs/合并新增端点契约-20261107.md §5-§6。
 无 Key（offline 目标 G2）时由 legacy.compare_engine 本地降级，**仍然 200**，不编造数值。
 """

@@ -271,6 +271,11 @@ def _open(url, timeout_seconds, headers):
             body = exc.read() or b""
         except Exception:  # noqa: BLE001
             body = b""
+        finally:
+            try:
+                exc.close()
+            except Exception:  # noqa: BLE001
+                pass
         return int(exc.code), dict(exc.headers.items()) if exc.headers else {}, body
     except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
         raise _network_error(exc) from exc
@@ -444,7 +449,7 @@ def query_for_source(source, query) -> str:
     if boolexpr.has_field_syntax(raw):
         # 字段限定：search= 只放词，字段约束靠 field_filters_for 下推，推不了的交本地复核。
         plain = boolexpr.plain_query(raw)
-        return plain or " ".join(boolexpr.parse(raw)["allTerms"]) or raw
+        return plain or " ".join(boolexpr.all_terms(raw)) or raw
     if source in ("openalex", "europepmc"):
         return raw
     if source == "arxiv":

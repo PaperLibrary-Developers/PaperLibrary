@@ -251,7 +251,7 @@ class BooleanQueryParity(NodeParity):
 class TextRepairParity(NodeParity):
     SAMPLES = [
         "e ffi cient", "de fi ne", "classi fi cation", "the fi nding", "bene fi t", "we fl ow",
-        "hello world", "", None, "o ffi cial e ffi ciency", "st art", "ﬁ nding fl ow",
+        "hello world", "", None, "o ffi cial e ffi ciency", "ﬁ nding fl ow",
         "well - defined", "16213 - 16219", "sp -rich", "a—b", "a – b", "a - b",
         "  a   b  ", "a , b .", "( a )", "a  ,  b",
     ]
@@ -262,6 +262,16 @@ class TextRepairParity(NodeParity):
                          ("tidySpacing", tr.tidy_spacing)):
             expected = js("text-repair", name, [[s] for s in self.SAMPLES])
             self.assertEqual(expected, [fn(s) for s in self.SAMPLES], name)
+
+    def test_known_divergence_start_ligature(self):
+        """已知（刻意）分歧：JS 的 '$1$3$4' 只有 3 个捕获组，$4 会当字面量输出，
+        于是「词首连字」被写成 "a$4rt"（丢连字 + 塞入 $4）。Python 版按意图接成真词。
+        这里把两边都钉住：JS 一侧确认缺陷仍在，Python 一侧确认输出是干净单词。"""
+        samples = ["st art", "fi ne", "fl ow"]
+        js_out = js("text-repair", "repairLigatures", [[s] for s in samples])
+        py_out = [tr.repair_ligatures(s) for s in samples]
+        self.assertTrue(all("$4" in item for item in js_out), js_out)
+        self.assertEqual(py_out, ["start", "fine", "flow"])
 
     def test_build_word_set(self):
         samples = ["The quick brown fox jumps", "low lower lowest", "", "Cucurbit[8]uril chemistry"]

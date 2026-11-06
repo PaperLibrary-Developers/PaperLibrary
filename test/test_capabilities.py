@@ -236,6 +236,59 @@ class DeepAnalysisTest(unittest.TestCase):
         self.assertIn("未配置大模型", note)
 
 
+class LlmReadinessTest(unittest.TestCase):
+    """真实 LLM 适配器未配置 Key 时，compare/deep 必须本地降级且**不触网**（离线目标 G2）。"""
+
+    def test_unconfigured_llm_is_never_called(self):
+        from paperlib.adapters.llm import LLM
+
+        llm = LLM(tempfile.mkdtemp(prefix="nexus-llm-"))
+        calls = []
+        llm.chat = lambda *args, **kwargs: calls.append(1) or {"text": "{}"}
+        services = _fake_services(llm)
+
+        result = compare_engine.run(services, [{"id": "p1", "title": "A"}, {"id": "p2", "title": "B"}],
+                                    "general")
+        self.assertIn("未配置大模型", result["oneLine"])
+        analysis = deep_analysis.run(services, {"id": "p1", "title": "A"}, [], "")
+        self.assertEqual(analysis["model"], deep_analysis.LOCAL_MODEL)
+        self.assertEqual(calls, [])
+
+
+class LlmPathTest(unittest.TestCase):
+    """配置了模型（ready=True）时，走 LLM 结果，并把 usage 累加到响应里。"""
+
+    class ReadyLLM:
+        settings = {"model": "fake-model"}
+
+        def ready(self):
+            return {"ready": True}
+
+        def chat(self, messages=None, options=None):
+            return {"text": '{"substrate": "Cu(OTf)2", "yield": "95%",'
+                            ' "研究问题": "q", "scores": {"创新性": 5},'
+                            ' "oneLine": "模型一句话"}',
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+
+    def test_deep_uses_llm_values(self):
+        analysis = deep_analysis.run(_fake_services(self.ReadyLLM()),
+                                     {"id": "p1", "title": "T"}, [], "")
+        self.assertEqual(analysis["model"], "fake-model")
+        self.assertEqual(analysis["fields"]["研究问题"], "q")
+        self.assertEqual(analysis["oneLine"], "模型一句话")
+        self.assertEqual(analysis["scores"]["创新性"], 5)
+
+    def test_compare_uses_llm_values(self):
+        result = compare_engine.run(_fake_services(self.ReadyLLM()),
+                                    [{"id": "p1", "title": "A"}, {"id": "p2", "title": "B"}],
+                                    "synthesis")
+        self.assertNotIn("未配置大模型", result["oneLine"])
+        self.assertEqual(result["usage"], {"prompt_tokens": 20, "completion_tokens": 10})
+        first = result["sections"][0]
+        self.assertEqual(first["title"], "原料")
+        self.assertEqual(first["rows"][0]["value"], "Cu(OTf)2")
+
+
 def _fake_services(llm):
     class FakeRepo:
         @staticmethod

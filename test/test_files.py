@@ -49,6 +49,7 @@ def pdf_bytes():
     if os.path.isfile(CJK_FONT):
         page.insert_text((72, 320), "金属有机笼：设计、合成与应用", fontsize=13,
                          fontname="cjk", fontfile=CJK_FONT)
+    doc.subset_fonts()  # 不子集化会把整个 msyh.ttc（~19MB）嵌进去，fixture 会变成 19MB
     data = doc.write()
     doc.close()
     return data
@@ -223,6 +224,20 @@ class FulltextTest(Base):
         ctx = FakeCtx(self.services, params={"id": "0" * 16})
         files.fulltext_extract(ctx)
         self.assertEqual(ctx.status, 404)
+
+    def test_stats_available_is_null_until_probed(self):
+        # Node 语义：availabilityKnown() 在首次探测前是 null（不是 true/false）
+        from paperlib.adapters import pdf_text
+
+        pdf_text._probed = False
+        pdf_text._available = None
+        try:
+            self.assertIsNone(self.services.fulltext.availability_known())
+            self.assertIsNone(self.services.fulltext.stats()["available"])
+        finally:
+            self.assertTrue(self.services.fulltext.available())
+        self.assertTrue(self.services.fulltext.availability_known())
+        self.assertTrue(self.services.fulltext.stats()["available"])
 
     def test_fulltext_batch_extracts_pending(self):
         self.upload()

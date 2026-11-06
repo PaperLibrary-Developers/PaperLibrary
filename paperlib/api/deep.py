@@ -3,6 +3,7 @@
   GET  /api/papers/:id/deep-analysis    取已存结果（没有则 analysis: null）
   POST /api/papers/:id/deep-analysis    运行分析（无 Key 时本地降级，仍 200）
 
+移植自 PaperLibrary/app/deep_analysis.py（字段与五维评分，见 paperlib/legacy/deep_analysis.py）。
 契约：docs/合并新增端点契约-20261107.md §7-§8。
 落库走 store.repo.get_analysis / save_analysis（analysis 表，kind = "deep"）。
 """

@@ -369,7 +369,10 @@ def fetch_by_doi_multi(doi_input, options=None) -> dict:
 
     if not papers:
         detail = "；".join(errors[name] for name in ("crossref", "openalex") if errors.get(name))
-        raise MetadataError("两个来源都没抓到这个 DOI：" + detail, not_found=True, errors=errors)
+        # 只有「某个源明确回了 404」才算 404（没这个 DOI）；纯网络/5xx 失败要按 502 报，
+        # 否则用户断网时看到的是「没抓到这个 DOI」，把网络问题说成了文献不存在。
+        any_missing = any((settled.get(name) or {}).get("not_found") for name in ("crossref", "openalex"))
+        raise MetadataError("两个来源都没抓到这个 DOI：" + detail, not_found=any_missing, errors=errors)
 
     crossref = papers.get("crossref")
     openalex = papers.get("openalex")

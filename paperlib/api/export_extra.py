@@ -2,6 +2,7 @@
 
   GET /api/export/obsidian[?ids=a,b][?limit=n]
 
+移植自 PaperLibrary/app/obsidian_export.py（见 paperlib/legacy/obsidian_note.py）。
 契约：docs/合并新增端点契约-20261107.md §10（zip 文件流，
       Content-Disposition: attachment; filename="paperlibrary-obsidian-<date>.zip"）。
 zip 内容：每篇一个 .md（frontmatter + 摘要/笔记/AI 总结/图表链接）+ media/ 下引用的图表。

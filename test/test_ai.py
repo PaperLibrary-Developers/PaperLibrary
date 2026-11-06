@@ -1,9 +1,8 @@
-"""T4 自测：AI 总结（adapters/llm.py、domain/ai.py、api/ai.py）。
+"""T4 自测：大模型适配器 + AI 总结编排 + Exa 网络检索。
 
-覆盖：配置读写与打码、readiness、strip_echoed_material、SSE 流解析（本地假 OpenAI 服务）、
-错误映射（401/404/429/500/超时/连不上）、domain 的 summary_zh/summarize_sync/summarize_stream、
-api 层的状态码与「参数校验先于开流」。
-
+覆盖：LLM 配置/打码/readiness、strip_echoed_material、SSE 流解析（本地假 OpenAI 服务）、
+错误映射（401/402/404/429/500/超时/连不上）、domain 的 summary_zh/summarize_sync/summarize_stream、
+api 层的状态码与「校验先于开流」、WebSearch 的预算护栏/缓存/条目映射。
 跑法：python -m unittest test.test_ai -v
 """
 from __future__ import annotations
@@ -27,11 +26,13 @@ from paperlib.domain.repository import normalize_paper
 from paperlib.services import create_services
 
 
-# ---------------------------------------------------------------- 本地假 OpenAI 服务
+# ---------------------------------------------------------------- 本地假模型服务
+def delta(text):
+    return {"choices": [{"delta": {"content": text}}]}
+
+
 def _sse_bytes(chunks):
-    out = []
-    for chunk in chunks:
-        out.append(b"data: " + json.dumps(chunk, ensure_ascii=False).encode("utf-8") + b"\n\n")
+    out = [b"data: " + json.dumps(c, ensure_ascii=False).encode("utf-8") + b"\n\n" for c in chunks]
     out.append(b": keep-alive\n\n")
     out.append(b"data: [DONE]\n\n")
     return b"".join(out)
@@ -49,22 +50,21 @@ class _FakeHandler(BaseHTTPRequestHandler):
         if spec.get("sleep"):
             time.sleep(spec["sleep"])
         if spec.get("sse") is not None:
-            payload = _sse_bytes(spec["sse"])
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.end_headers()
             try:
-                self.wfile.write(payload)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(_sse_bytes(spec["sse"]))
                 self.wfile.flush()
             except OSError:
                 pass
             return
         body = json.dumps(spec.get("json") or {}, ensure_ascii=False).encode("utf-8")
-        self.send_response(int(spec.get("status") or 200))
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
         try:
+            self.send_response(int(spec.get("status") or 200))
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
             self.wfile.write(body)
         except OSError:
             pass
@@ -74,14 +74,15 @@ class _FakeHandler(BaseHTTPRequestHandler):
 
 
 class FakeOpenAI:
-    """一次性的假模型服务：设定 spec 后拿 base_url 指过去。"""
+    """一次性假模型 / 假 Exa 服务：设定 spec 后把 base_url 指过去。"""
 
     def __init__(self, spec=None):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeHandler)
         self.server.spec = spec or {}
         self.server.last_body = None
         self.server.last_headers = None
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       kwargs={"poll_interval": 0.02}, daemon=True)
         self.thread.start()
 
     @property
@@ -96,65 +97,12 @@ class FakeOpenAI:
         self.server.server_close()
 
 
-def free_port():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def delta(text):
-    return {"choices": [{"delta": {"content": text}}]}
-
-
-# ---------------------------------------------------------------- 测试地基
-class AiTestBase(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="nexus-t4-ai-"))
-        self.fake = FakeOpenAI()
-
-    def tearDown(self):
-        self.fake.close()
-        services = getattr(self, "services", None)
-        if services is not None:
-            try:
-                services.db.repo.close()
-            except Exception:  # noqa: BLE001
-                pass
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def make_services(self, api_key="", base_url=None):
-        config = SimpleNamespace(
-            root=Path(__file__).resolve().parents[1], data_dir=self.tmp, port=4393,
-            host="127.0.0.1", app="literature-vault", started_at=time.time())
-        store = Store(config.data_dir)
-        store.load()
-        services = create_services(config, store)
-        # 没给密钥时用「非本地」地址：本地地址（127.0.0.1/localhost）按 Node 语义免密钥，
-        # 那样就测不到「还没配置大模型」的分支了。
-        target = base_url or (self.fake.base_url if api_key else "https://api.example.invalid/v1")
-        services.llm.update({
-            "baseURL": target,
-            "model": "fake-model",
-            "apiKey": api_key or None,
-        })
-        self.services = services
-        self.store = store
-        return services
-
-    def add_paper(self, **fields):
-        paper = normalize_paper(dict({"title": "A Paper", "authors": ["Li"], "year": 2024}, **fields))
-        self.services.db.insert_paper(paper)
-        self.services.library.reindex()
-        return self.services.library.get(paper["id"])
-
-
 class FakeCtx:
     """api 层测试用的最小 ctx（只实现 api 模块用到的那几件事）。"""
 
-    def __init__(self, services, params=None, query=None, body=None):
+    def __init__(self, services, params=None, query=None, body=None, method="POST"):
         self.services = services
+        self.method = method
         self.params = params or {}
         self._query = dict(query or {})
         self._body = body
@@ -201,14 +149,50 @@ class FakeCtx:
     def frames(self):
         out = []
         for chunk in self.chunks:
-            text = chunk.decode("utf-8")
-            for block in text.split("\n\n"):
+            for block in chunk.decode("utf-8").split("\n\n"):
                 if block.startswith("data: "):
                     out.append(json.loads(block[6:]))
         return out
 
 
-# ---------------------------------------------------------------- 配置
+class AiTestBase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="nexus-t4-ai-"))
+        self.fake = FakeOpenAI()
+
+    def tearDown(self):
+        self.fake.close()
+        services = getattr(self, "services", None)
+        if services is not None:
+            try:
+                services.db.repo.close()
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def make_services(self, api_key="", base_url=None):
+        config = SimpleNamespace(
+            root=Path(__file__).resolve().parents[1], data_dir=self.tmp, port=4393,
+            host="127.0.0.1", app="literature-vault", started_at=time.time())
+        store = Store(config.data_dir)
+        store.load()
+        services = create_services(config, store)
+        # 没给密钥时用「非本地」地址：本地地址（127.0.0.1/localhost）按 Node 语义免密钥，
+        # 那样就测不到「还没配置大模型」的分支了。
+        target = base_url or (self.fake.base_url if api_key else "https://api.example.invalid/v1")
+        services.llm.update({"baseURL": target, "model": "fake-model",
+                             "apiKey": api_key or None})
+        self.services = services
+        return services
+
+    def add_paper(self, **fields):
+        paper = normalize_paper(dict({"title": "A Paper", "authors": ["Li"], "year": 2024}, **fields))
+        self.services.db.insert_paper(paper)
+        self.services.library.reindex()
+        return self.services.library.get(paper["id"])
+
+
+# ---------------------------------------------------------------- LLM 配置
 class LLMSettingsTests(AiTestBase):
     def test_public_settings_masks_key(self):
         llm = LLM(self.tmp)
@@ -220,7 +204,7 @@ class LLMSettingsTests(AiTestBase):
         self.assertIs(public["isLocal"], False)
         self.assertIs(public["autoSummaryZh"], True)
 
-    def test_update_semantics(self):
+    def test_update_semantics_and_persistence(self):
         llm = LLM(self.tmp)
         llm.update({"apiKey": "sk-1234567890abcd", "model": "deepseek-chat"})
         public = llm.public_settings()
@@ -230,15 +214,13 @@ class LLMSettingsTests(AiTestBase):
         llm.update({"model": "", "apiKey": "sk-1…abcd", "baseURL": ""})
         self.assertEqual(llm.settings["model"], "deepseek-chat")
         self.assertEqual(llm.settings["apiKey"], "sk-1234567890abcd")
-        # None=清空
+        # None=清空，落盘
         llm.update({"apiKey": None})
         self.assertEqual(llm.settings["apiKey"], "")
-        # 落盘
         on_disk = json.loads((self.tmp / "settings.json").read_text(encoding="utf-8"))
         self.assertEqual(on_disk["apiKey"], "")
 
-    def test_update_restores_defaults(self):
-        llm = LLM(self.tmp)
+        # 清空后兜底补回默认值，模型不至于彻底不可用
         llm.update({"model": None, "baseURL": None})
         self.assertEqual(llm.settings["model"], "deepseek-chat")
         self.assertEqual(llm.settings["baseURL"], "https://api.deepseek.com/v1")
@@ -248,12 +230,9 @@ class LLMSettingsTests(AiTestBase):
         self.assertIsInstance(llm.readiness(), Readiness)
         self.assertFalse(llm.readiness()["ready"])
         self.assertEqual(llm.readiness()["reason"], "还没有填写 API 密钥")
-        # 本地 Ollama 不需要密钥
         llm.update({"baseURL": "http://127.0.0.1:11434/v1", "model": "qwen2.5:7b"})
-        self.assertTrue(llm.readiness()["ready"])
-        self.assertTrue(bool(llm.ready()))
-        # 前端按 ready.ready 读，所以 ready() 必须是对象
-        self.assertTrue(llm.ready()["ready"])
+        self.assertTrue(llm.readiness()["ready"])      # 本地 Ollama 不需要密钥
+        self.assertTrue(llm.ready()["ready"])          # 前端按 ready.ready 读
 
     def test_build_user_message(self):
         llm = LLM(self.tmp)
@@ -261,28 +240,22 @@ class LLMSettingsTests(AiTestBase):
         self.assertIn("标题：T", text)
         self.assertIn("A, B", text)
         self.assertIn("===== 正文节选（可能被截断）=====", text)
-        empty = llm.build_user_message({"title": "T"}, "")
-        self.assertIn("（没有 PDF 正文，仅依据上面的题录与摘要总结）", empty)
+        self.assertIn("（没有 PDF 正文，仅依据上面的题录与摘要总结）",
+                      llm.build_user_message({"title": "T"}, ""))
 
 
 class StripEchoedMaterialTests(unittest.TestCase):
     def test_removes_material_sections(self):
-        text = "\n".join([
-            "标题：X", "===== 原文摘要 =====", "摘要内容", "===== 正文节选 =====",
-            "一大段 PDF 原文", "（中间略）", "===== 补充材料：SI.pdf =====", "SI 原文",
-        ])
+        text = "\n".join(["标题：X", "===== 原文摘要 =====", "摘要内容", "===== 正文节选 =====",
+                          "一大段 PDF 原文", "（中间略）", "===== 补充材料：SI.pdf =====", "SI 原文"])
         out = strip_echoed_material(text)
         self.assertIn("摘要内容", out)
         self.assertNotIn("一大段 PDF 原文", out)
         self.assertNotIn("SI 原文", out)
         self.assertNotIn("（中间略）", out)
-
-    def test_keeps_plain_text(self):
         self.assertEqual(strip_echoed_material("  只有总结  "), "只有总结")
         self.assertEqual(strip_echoed_material(None), "")
 
-
-# ---------------------------------------------------------------- 流式与错误映射
 class LLMCallTests(AiTestBase):
     def client(self, api_key="sk-test"):
         llm = LLM(self.tmp)
@@ -292,31 +265,24 @@ class LLMCallTests(AiTestBase):
     def test_stream_collects_deltas_and_usage(self):
         self.fake.set({"sse": [delta("你"), delta("好"),
                                {"choices": [], "usage": {"prompt_tokens": 3, "total_tokens": 5}}]})
-        llm = self.client()
         seen = []
-        result = llm.stream(seen.append, {"messages": [{"role": "user", "content": "hi"}]})
+        result = self.client().stream(seen.append, {"messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(seen, ["你", "好"])
         self.assertEqual(result["text"], "你好")
         self.assertEqual(result["usage"], {"prompt_tokens": 3, "total_tokens": 5})
         body = self.fake.server.last_body
-        self.assertEqual(body["model"], "fake-model")
-        self.assertIs(body["stream"], True)
-        self.assertEqual(body["messages"], [{"role": "user", "content": "hi"}])
+        self.assertEqual((body["model"], body["stream"], body["messages"]),
+                         ("fake-model", True, [{"role": "user", "content": "hi"}]))
         self.assertEqual(self.fake.server.last_headers.get("authorization"), "Bearer sk-test")
-
-    def test_stream_accepts_messages_as_first_arg(self):
+        # 兼容 stream(messages) 的旧调用形式
         self.fake.set({"sse": [delta("ok")]})
-        llm = self.client()
-        result = llm.stream([{"role": "user", "content": "hi"}])
-        self.assertEqual(result["text"], "ok")
+        self.assertEqual(self.client().stream([{"role": "user", "content": "hi"}])["text"], "ok")
 
     def test_chat_non_stream(self):
         self.fake.set({"json": {"choices": [{"message": {"content": "非流式"}}],
                                 "usage": {"total_tokens": 2}}})
-        llm = self.client()
-        result = llm.chat([{"role": "user", "content": "hi"}])
-        self.assertEqual(result["text"], "非流式")
-        self.assertEqual(result["usage"]["total_tokens"], 2)
+        result = self.client().chat([{"role": "user", "content": "hi"}])
+        self.assertEqual((result["text"], result["usage"]["total_tokens"]), ("非流式", 2))
         self.assertIs(self.fake.server.last_body["stream"], False)
 
     def test_error_mapping(self):
@@ -334,46 +300,40 @@ class LLMCallTests(AiTestBase):
                 llm.stream(None, {"messages": []})
             self.assertEqual(str(ctx.exception), expected)
 
-    def test_timeout_message(self):
+    def test_timeout_and_connection_errors(self):
         self.fake.set({"sleep": 2, "json": {}})
-        llm = self.client()
         with self.assertRaises(Exception) as ctx:
-            llm.stream(None, {"messages": [], "timeoutMs": 1})
+            self.client().stream(None, {"messages": [], "timeoutMs": 1})
         self.assertIn("请求超时", str(ctx.exception))
-
-    def test_connection_error_message(self):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+        probe.close()
         llm = self.client()
-        llm.update({"baseURL": "http://127.0.0.1:%d/v1" % free_port()})
+        llm.update({"baseURL": "http://127.0.0.1:%d/v1" % dead_port})
         with self.assertRaises(Exception) as ctx:
             llm.stream(None, {"messages": []})
         self.assertIn("连不上模型接口", str(ctx.exception))
 
     def test_test_endpoint_helper(self):
         self.fake.set({"sse": [delta("连接正常")]})
-        llm = self.client()
-        result = llm.test()
+        result = self.client().test()
         self.assertTrue(result["ok"])
         self.assertIn("连接正常", result["message"])
         self.assertEqual(result["model"], "fake-model")
-        # 没配置 → 不联网，直接给原因
         bare = LLM(self.tmp)
         bare.update({"apiKey": None, "baseURL": "https://api.example.invalid/v1"})
-        self.assertFalse(bare.test()["ok"])
+        self.assertFalse(bare.test()["ok"])            # 没配置 → 不联网，直接给原因
         self.assertIn("API 密钥", bare.test()["message"])
 
 
-# ---------------------------------------------------------------- domain
+# ---------------------------------------------------------------- domain/ai
 class DomainAiTests(AiTestBase):
-    def test_summary_zh_requires_llm(self):
+    def test_summary_zh_requires_llm_but_chinese_needs_no_model(self):
         services = self.make_services()
-        paper = self.add_paper(summary="An English abstract.")
-        result = ai_domain.summary_zh(services, paper, {})
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["status"], 400)
-        self.assertIn("还没有配置大模型", result["error"])
-
-    def test_summary_zh_chinese_source_needs_no_model(self):
-        services = self.make_services()   # 没配置：仍应直接返回原文
+        blocked = ai_domain.summary_zh(services, self.add_paper(summary="An English abstract."), {})
+        self.assertEqual((blocked["ok"], blocked["status"]), (False, 400))
+        self.assertIn("还没有配置大模型", blocked["error"])
         paper = self.add_paper(summary="这是一段中文摘要。")
         result = ai_domain.summary_zh(services, paper, {"mode": "translate"})
         self.assertTrue(result["ok"])
@@ -384,34 +344,25 @@ class DomainAiTests(AiTestBase):
         self.assertEqual(saved["summaryZhModel"], "（原文已是中文）")
 
     def test_summary_zh_translate_and_strip(self):
-        self.fake.set({"sse": [delta("中文翻译"), delta("如下"),
-                               {"choices": [], "usage": {"total_tokens": 9}}]})
-        services = self.make_services(api_key="sk-test")
-        paper = self.add_paper(summary="An English abstract.")
-        result = ai_domain.summary_zh(services, paper, {"mode": "translate"})
-        self.assertTrue(result["ok"])
-        self.assertTrue(result["translated"])
-        self.assertEqual(result["mode"], "translate")
-        self.assertEqual(result["chars"], len("中文翻译如下"))
-        saved = services.library.get(paper["id"])
-        self.assertEqual(saved["summaryZh"], "中文翻译如下")
-        self.assertEqual(saved["summaryZhModel"], "fake-model")
-        self.assertIn("原文摘要", self.fake.server.last_body["messages"][1]["content"])
-
-    def test_summary_zh_without_title_is_400(self):
-        services = self.make_services(api_key="sk-test")
-        result = ai_domain.summary_zh(services, {"id": "x", "title": ""}, {"mode": "generate"})
-        self.assertEqual(result["status"], 400)
-        self.assertIn("还没有标题", result["error"])
-
-    def test_summary_zh_model_failure_is_502(self):
         self.fake.set({"status": 500, "json": {"error": {"message": "boom"}}})
         services = self.make_services(api_key="sk-test")
+        bad = ai_domain.summary_zh(services, self.add_paper(summary="An English abstract."),
+                                   {"mode": "translate"})
+        self.assertEqual(bad["status"], 502)          # 模型失败 → 502
+        self.assertIn("翻译失败", bad["error"])
+        no_title = ai_domain.summary_zh(services, {"id": "x", "title": ""}, {"mode": "generate"})
+        self.assertEqual(no_title["status"], 400)     # 无题录素材 → 400
+        self.assertIn("还没有标题", no_title["error"])
+        self.fake.set({"sse": [delta("中文翻译"), delta("如下")]})
         paper = self.add_paper(summary="An English abstract.")
         result = ai_domain.summary_zh(services, paper, {"mode": "translate"})
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["status"], 502)
-        self.assertIn("翻译失败", result["error"])
+        self.assertTrue(result["translated"])
+        self.assertEqual((result["mode"], result["chars"]), ("translate", len("中文翻译如下")))
+        saved = services.library.get(paper["id"])
+        self.assertEqual((saved["summaryZh"], saved["summaryZhModel"]), ("中文翻译如下", "fake-model"))
+        self.assertIn("原文摘要", self.fake.server.last_body["messages"][1]["content"])
+
+
 
     def test_summarize_stream_frames_and_save(self):
         self.fake.set({"sse": [delta("总"), delta("结"), {"choices": [], "usage": {"total_tokens": 4}}]})
@@ -419,19 +370,16 @@ class DomainAiTests(AiTestBase):
         paper = self.add_paper(summary="abs")
         services.fulltext.save(paper["id"], "正文内容" * 100)
         ctx = FakeCtx(services)
-        opener = ai_api.StreamOpener(ctx)
-        result = ai_domain.summarize_stream(services, paper, {}, opener)
-        self.assertTrue(result["ok"])
+        self.assertTrue(ai_domain.summarize_stream(
+            services, paper, {}, ai_api.StreamOpener(ctx))["ok"])
         frames = ctx.frames()
         self.assertEqual(frames[0]["type"], "start")
         self.assertTrue(frames[0]["usedFulltext"])
         self.assertGreater(frames[0]["chars"], 0)
-        deltas = [f["text"] for f in frames if f["type"] == "delta"]
-        self.assertEqual(deltas, ["总", "结"])
+        self.assertEqual([f["text"] for f in frames if f["type"] == "delta"], ["总", "结"])
         done = [f for f in frames if f["type"] == "done"][0]
-        self.assertEqual(done["text"], "总结")
-        self.assertTrue(done["saved"])
-        self.assertEqual(done["usage"], {"total_tokens": 4})
+        self.assertEqual((done["text"], done["saved"], done["usage"]),
+                         ("总结", True, {"total_tokens": 4}))
         self.assertEqual(services.library.get(paper["id"])["aiSummary"], "总结")
 
     def test_summarize_stream_error_frame(self):
@@ -439,135 +387,212 @@ class DomainAiTests(AiTestBase):
         services = self.make_services(api_key="sk-test")
         paper = self.add_paper()
         ctx = FakeCtx(services)
-        result = ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(ctx))
-        self.assertTrue(result["ok"])
+        ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(ctx))
         frames = ctx.frames()
-        self.assertEqual(frames[0]["type"], "start")
-        self.assertEqual(frames[-1]["type"], "error")
+        self.assertEqual((frames[0]["type"], frames[-1]["type"]), ("start", "error"))
         self.assertIn("boom", frames[-1]["message"])
         self.assertIsNone(services.library.get(paper["id"])["aiSummary"] or None)
 
     def test_summarize_stream_no_key_does_not_open_stream(self):
         services = self.make_services()
-        paper = self.add_paper()
         ctx = FakeCtx(services)
-        result = ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(ctx))
-        self.assertFalse(result["ok"])
+        result = ai_domain.summarize_stream(services, self.add_paper(), {},
+                                            ai_api.StreamOpener(ctx))
         self.assertEqual(result["status"], 400)
         self.assertFalse(ctx.started)
 
     def test_summarize_sync(self):
-        self.fake.set({"sse": [delta("同步总结")]})
-        services = self.make_services(api_key="sk-test")
-        paper = self.add_paper()
-        services.fulltext.save(paper["id"], "正文")
-        result = ai_domain.summarize_sync(services, paper, {})
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["text"], "同步总结")
-        self.assertTrue(result["usedFulltext"])
-        self.assertEqual(result["usage"], None)
-        self.assertEqual(services.library.get(paper["id"])["aiSummary"], "同步总结")
-        # save=false 不落库
-        other = self.add_paper(title="No Save")
-        saved = ai_domain.summarize_sync(services, other, {"save": False})
-        self.assertTrue(saved["ok"])
-        self.assertFalse(services.library.get(other["id"])["aiSummary"])
-
-    def test_summarize_sync_failure_is_502(self):
         self.fake.set({"status": 500, "json": {"error": {"message": "boom"}}})
         services = self.make_services(api_key="sk-test")
-        paper = self.add_paper()
+        self.assertEqual(ai_domain.summarize_sync(services, self.add_paper(), {})["status"], 502)
+        self.fake.set({"sse": [delta("同步总结")]})
+        paper = self.add_paper(title="Sync")
+        services.fulltext.save(paper["id"], "正文")
         result = ai_domain.summarize_sync(services, paper, {})
-        self.assertEqual(result["status"], 502)
+        self.assertEqual((result["text"], result["usedFulltext"], result["usage"]),
+                         ("同步总结", True, None))
+        self.assertEqual(services.library.get(paper["id"])["aiSummary"], "同步总结")
+        other = self.add_paper(title="No Save")       # save=false 不落库
+        self.assertTrue(ai_domain.summarize_sync(services, other, {"save": False})["ok"])
+        self.assertFalse(services.library.get(other["id"])["aiSummary"])
 
-    def test_summary_zh_batch_requires_llm(self):
+
+    def test_summary_zh_batch(self):
         services = self.make_services()
         self.add_paper(summary="abs")
-        result = ai_domain.summary_zh_batch(services)
-        self.assertEqual(result["status"], 400)
-
-    def test_summary_zh_batch_runs_pending(self):
+        self.assertEqual(ai_domain.summary_zh_batch(services)["status"], 400)   # 未配置
         self.fake.set({"sse": [delta("中文总结")]})
         services = self.make_services(api_key="sk-test")
         self.add_paper(summary="abs")
         self.add_paper(title="Has zh", summary="abs", summaryZh="已有")
         result = ai_domain.summary_zh_batch(services)
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["total"], 1)
-        self.assertEqual(result["succeeded"], 1)
-        self.assertEqual(result["failed"], 0)
+        self.assertEqual((result["total"], result["succeeded"], result["failed"]), (2, 2, 0))
+        self.assertNotIn("Has zh", [r["title"] for r in result["results"]])   # 已有中文的跳过
 
-
-# ---------------------------------------------------------------- api 层
 class ApiAiTests(AiTestBase):
-    def test_test_endpoint(self):
+    def test_summarize_exit_codes(self):
         services = self.make_services()
-        ctx = FakeCtx(services)
-        ai_api.test(ctx)
-        self.assertEqual(ctx.status, 400)
-        self.assertFalse(ctx.payload["ok"])
-
-    def test_summarize_missing_paper_is_404(self):
-        services = self.make_services()
-        ctx = FakeCtx(services, body={"paperId": "nope"})
-        ai_api.summarize(ctx)
-        self.assertEqual(ctx.status, 404)
-        self.assertEqual(ctx.payload["error"], "找不到这条文献")
-        self.assertFalse(ctx.started)
-
-    def test_summarize_sync_no_key_is_400(self):
-        services = self.make_services()
-        paper = self.add_paper()
-        ctx = FakeCtx(services, body={"paperId": paper["id"]})
-        ai_api.summarize_sync(ctx)
-        self.assertEqual(ctx.status, 400)
-        self.assertIn("还没有配置大模型", ctx.payload["error"])
+        probe = FakeCtx(services)
+        ai_api.test(probe)
+        self.assertEqual((probe.status, probe.payload["ok"]), (400, False))
+        missing = FakeCtx(services, body={"paperId": "nope"})
+        ai_api.summarize(missing)
+        self.assertEqual((missing.status, missing.payload["error"], missing.started),
+                         (404, "找不到这条文献", False))
+        no_key = FakeCtx(services, body={"paperId": self.add_paper()["id"]})
+        ai_api.summarize_sync(no_key)
+        self.assertEqual(no_key.status, 400)
+        self.assertIn("还没有配置大模型", no_key.payload["error"])
 
     def test_summarize_streams_sse_frames(self):
         self.fake.set({"sse": [delta("A"), delta("B")]})
         services = self.make_services(api_key="sk-test")
-        paper = self.add_paper()
-        ctx = FakeCtx(services, body={"paperId": paper["id"]})
+        ctx = FakeCtx(services, body={"paperId": self.add_paper()["id"]})
         ai_api.summarize(ctx)
-        self.assertTrue(ctx.started)
-        self.assertTrue(ctx.ended)
+        self.assertTrue(ctx.started and ctx.ended)
         self.assertEqual(ctx.headers["Content-Type"], "text/event-stream; charset=utf-8")
         raw = b"".join(ctx.chunks).decode("utf-8")
-        self.assertEqual(raw.count("data: "), 4)          # start + 2 delta + done
+        self.assertEqual(raw.count("data: "), 4)      # start + 2 delta + done
         self.assertTrue(raw.endswith("\n\n"))
         for block in raw.split("\n\n"):
             if block:
                 self.assertTrue(block.startswith("data: "))
                 json.loads(block[6:])
 
-    def test_summary_zh_missing_paper_is_404(self):
+    def test_summary_zh_exit_codes(self):
         services = self.make_services()
-        ctx = FakeCtx(services, params={"id": "nope"}, body={})
-        ai_api.summary_zh(ctx)
-        self.assertEqual(ctx.status, 404)
+        missing = FakeCtx(services, params={"id": "nope"}, body={})
+        ai_api.summary_zh(missing)
+        self.assertEqual(missing.status, 404)
+        # 坏 JSON 被吞成 {}（Node 的 .catch(() => ({}))），没配置 → 400 而不是 500
+        bad = FakeCtx(services, params={"id": self.add_paper(summary="An English abstract.")["id"]},
+                      body=ValueError("坏 JSON"))
+        ai_api.summary_zh(bad)
+        self.assertEqual(bad.status, 400)
+        self.assertIn("还没有配置大模型", bad.payload["error"])
+        # 原文已是中文：不调模型，直接回 200 + translated:false
+        zh = FakeCtx(services, params={"id": self.add_paper(summary="中文摘要")["id"]},
+                     body={"mode": "translate"})
+        ai_api.summary_zh(zh)
+        self.assertEqual((zh.status, zh.payload["ok"], zh.payload["translated"]), (200, True, False))
+        batch = FakeCtx(services)
+        ai_api.summary_zh_batch(batch)
+        self.assertEqual(batch.status, 400)
 
-    def test_summary_zh_tolerates_bad_json_body(self):
-        services = self.make_services()          # 没配置 → 400（不是 500）
-        paper = self.add_paper(summary="An English abstract.")
-        ctx = FakeCtx(services, params={"id": paper["id"]}, body=ValueError("坏 JSON"))
-        ai_api.summary_zh(ctx)
-        self.assertEqual(ctx.status, 400)
-        self.assertIn("还没有配置大模型", ctx.payload["error"])
 
-    def test_summary_zh_chinese(self):
-        services = self.make_services()
-        paper = self.add_paper(summary="中文摘要")
-        ctx = FakeCtx(services, params={"id": paper["id"]}, body={"mode": "translate"})
-        ai_api.summary_zh(ctx)
-        self.assertEqual(ctx.status, 200)
-        self.assertTrue(ctx.payload["ok"])
-        self.assertFalse(ctx.payload["translated"])
 
-    def test_summary_zh_batch_no_key_is_400(self):
-        services = self.make_services()
-        ctx = FakeCtx(services)
-        ai_api.summary_zh_batch(ctx)
-        self.assertEqual(ctx.status, 400)
+# ---------------------------------------------------------------- WebSearch（Exa）
+class WebSearchTests(AiTestBase):
+    def setUp(self):
+        super().setUp()
+        from paperlib.adapters import websearch as websearch_module
+        self.module = websearch_module
+        self.origin_base = websearch_module.API_BASE
+        websearch_module.API_BASE = self.fake.base_url[: -len("/v1")]
+        self.ws = websearch_module.WebSearch(self.tmp)
+        self.ws.update({"exaApiKey": "exa-secret-key"})
+
+    def tearDown(self):
+        self.module.API_BASE = self.origin_base
+        super().tearDown()
+
+    @staticmethod
+    def results_body():
+        return {"results": [
+            {"title": "Paper A", "url": "https://www.example.org/a", "score": 0.8123,
+             "publishedDate": "2025-03-04T00:00:00.000Z", "author": "Li",
+             "highlights": ["片段一", "", "片段二", "片段三"]},
+            {"title": "", "url": "https://b.example.org/b", "highlights": []},
+            {"title": "没有 url 的条目", "url": ""},
+        ]}
+
+    def test_public_settings_and_price(self):
+        public = self.ws.public_settings()
+        self.assertTrue(public["hasKey"])
+        self.assertEqual(public["keyHint"], "exa-…-key")
+        self.assertNotIn("exaApiKey", public)
+        self.assertEqual((public["useInChat"], public["allowDeep"], public["numResults"]),
+                         (True, False, 4))
+        self.assertEqual(public["price"]["perSearchEstimate"], 0.011)
+        self.assertEqual(public["usage"]["searches"], 0)
+        self.assertEqual(len(public["usage"]["month"]), 7)
+        self.assertTrue(self.ws.readiness()["ready"])
+
+    def test_update_clamps_and_masks(self):
+        self.assertFalse(self.module.WebSearch(self.tmp / "empty2").ready()["ready"])
+        self.ws.update({"numResults": 99, "monthlyCapUsd": 1000})
+        self.assertEqual((self.ws.settings["numResults"], self.ws.settings["monthlyCapUsd"]), (10, 100))
+        self.ws.update({"numResults": 0, "monthlyCapUsd": 0})
+        self.assertEqual((self.ws.settings["numResults"], self.ws.settings["monthlyCapUsd"]), (4, 3))
+        self.ws.update({"exaApiKey": "exa…-key"})      # 打码值不覆盖
+        self.assertEqual(self.ws.settings["exaApiKey"], "exa-secret-key")
+        self.ws.update({"exaApiKey": None})            # None 清空
+        self.assertEqual(self.ws.settings["exaApiKey"], "")
+
+
+    def test_search_maps_items_and_records_usage(self):
+        empty = self.module.WebSearch(self.tmp / "nokey")
+        self.assertIn("还没有配置 Exa API Key", empty.search("晶体", {})["error"])
+        self.assertEqual(self.ws.search("   ", {})["error"], "查询词是空的")
+        self.fake.set({"json": self.results_body()})
+        result = self.ws.search("超分子", {"numResults": 4})
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["cached"])
+        items = result["items"]
+        self.assertEqual(len(items), 2)                    # 没有 url 的条目被丢掉
+        self.assertEqual(items[0]["domain"], "example.org")  # www. 去掉
+        self.assertEqual((items[0]["score"], items[0]["published"]), (0.81, "2025-03-04"))
+        self.assertEqual(items[0]["highlights"], ["片段一", "片段二", "片段三"])
+        self.assertEqual(items[1]["title"], "https://b.example.org/b")   # 空标题回退成 url
+        body = self.fake.server.last_body
+        self.assertEqual((body["query"], body["numResults"]), ("超分子", 4))
+        self.assertIn("highlights", body["contents"])
+        self.assertNotIn("text", body["contents"])
+        self.assertEqual(self.fake.server.last_headers.get("x-api-key"), "exa-secret-key")
+        usage = self.ws.public_settings()["usage"]
+        self.assertEqual((usage["searches"], usage["pages"], usage["estCostUsd"]), (1, 2, 0.009))
+
+    def test_cache_and_budget_guard_skip_calls(self):
+        self.fake.set({"json": self.results_body()})
+        self.assertTrue(self.ws.search("超分子", {"numResults": 2})["ok"])
+        self.fake.server.last_body = None
+        self.assertTrue(self.ws.search("超分子", {"numResults": 2})["cached"])
+        self.assertIsNone(self.fake.server.last_body)      # 命中缓存，没有再发请求
+        self.assertEqual(self.ws.public_settings()["usage"]["searches"], 1)
+        self.ws.update({"monthlyCapUsd": 0.1})
+        self.ws.record_usage(200)                          # 估算花费已超上限
+        self.fake.server.last_body = None
+        result = self.ws.search("超分子", {})
+        self.assertFalse(result["ok"])
+        self.assertIn("本月 Exa 估算花费已达上限", result["error"])
+        self.assertIsNone(self.fake.server.last_body)
+
+    def test_answer_default_off_then_enabled(self):
+        off = self.ws.answer("超分子进展")
+        self.assertFalse(off["ok"])
+        self.assertIn("默认关闭", off["error"])
+        self.ws.update({"allowDeep": True})
+        self.fake.set({"json": {"answer": "  有进展  ", "citations": [
+            {"title": "c1", "url": "https://www.x.org/p", "publishedDate": "2024-01-02"},
+            {"url": ""}]}})
+        deep = self.ws.answer("超分子进展")
+        self.assertEqual(deep["answer"], "有进展")
+        citation = deep["citations"][0]
+        self.assertEqual((citation["title"], citation["domain"], citation["published"]),
+                         ("c1", "x.org", "2024-01-02"))
+        self.assertTrue(self.ws.answer("超分子进展")["cached"])
+
+    def test_http_error_mapping_and_test_helper(self):
+        for status, hint in ((401, "API Key 不对或没有权限"), (429, "额度用尽或触发限流")):
+            self.fake.set({"status": status, "json": {"error": "nope"}})
+            result = self.ws.search("超分子", {})
+            self.assertIn("Exa 返回 HTTP %d" % status, result["error"])
+            self.assertIn(hint, result["error"])
+        self.fake.set({"json": self.results_body()})
+        ok = self.ws.test()
+        self.assertTrue(ok["ok"])
+        self.assertIn("返回 2 条示例结果", ok["message"])
+        self.assertEqual(len(ok["sample"]), 2)
 
 
 if __name__ == "__main__":
