@@ -4,9 +4,7 @@
 /*.db
 /*.db-wal
 /*.db-shm
-/runtime/portable/
-/runtime/build/
-/runtime/*.exe
+/runtime/
 __pycache__/
 *.pyc
 .pytest_cache/
