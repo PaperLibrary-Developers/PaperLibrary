@@ -128,13 +128,13 @@ data: {"type":"done", ...}
 
 | 方法 | 路径 | 入参 | 出参 | 错误 |
 |---|---|---|---|---|
-| GET | `/api/health` | — | `{ok, app, papers, dataDir, pid, port, uptimeSeconds, updatedAt, version}` | — |
+| GET | `/api/health` | — | `{ok, app, papers, dataDir, pid, port, uptimeSeconds, updatedAt, bootMs, rssMB, version}` | — |
 | GET | `/api/stats` | — | `{ok, stats:{total, withPdf, starred, pdfMissing, avgRating, noteChars, byYear[], byType[], byStatus[], tags, updatedAt}}` | — |
 | GET | `/api/prefs` | — | `{ok, prefs}` | — |
 | PUT/POST | `/api/prefs` | `{...}` 局部覆盖 | `{ok, prefs}` | — |
 | GET | `/api/shutdown/status` | — | `{ok, app, papers, dataDir, pid, port, uptimeSeconds}` | — |
 | POST | `/api/shutdown` | — | `{ok, message}` | 403（非回环地址） |
-| POST | `/api/release/build` | — | 200 `{ok, name, path, relPath, size, mtime, papers, files, seconds}` | 400（隐私扫描未通过，`privacy:true`+`details`）/ 409（已有打包在跑）/ 500 |
+| POST | `/api/release/build` | — | 200 `{ok, name, path, relPath, size, mtime, papers, files, seconds}`（`papers` 恒 0：发布包按设计不含 data/ 用户数据；`size` 取 release-manifest 口径） | 400（打包失败，仅回中文消息，详情写 data/logs/）/ 409（已有打包在跑）/ 500 |
 
 ### 3.2 标签（3）
 

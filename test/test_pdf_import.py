@@ -407,6 +407,8 @@ class FulltextSearchTest(unittest.TestCase):
 
     def test_stats_counts_indexed_and_tokens(self):
         self.hits("超分子")
+        # 先显式探测一次：available 在「未探测」时按 Node 语义是 None，本用例不应依赖别的用例触发过探测
+        self.services.fulltext.available()
         stats = self.services.fulltext.stats()
         self.assertEqual(stats["indexed"], 4)
         self.assertGreater(stats["tokens"], 0)
