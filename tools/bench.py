@@ -32,7 +32,8 @@ def tree_size(path: Path, skip=None):
     skip = skip or SKIP
     total = 0
     for root, dirs, files in os.walk(path):
-        dirs[:] = [d for d in dirs if d not in skip]
+        # 排除运行数据目录：data、data-*（测试/冒烟）、runtime、dist、.git…
+        dirs[:] = [d for d in dirs if d not in skip and not d.startswith("data-")]
         for name in files:
             try:
                 total += os.path.getsize(os.path.join(root, name))

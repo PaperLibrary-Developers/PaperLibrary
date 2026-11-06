@@ -1,7 +1,7 @@
 """T5 检索适配层自测（对照 Sci-lib server/adapters/{metadata,external,sources}.js 行为）。
 
 命令：python -m unittest test.test_search_adapters -v
-全程不联网：接口根用 common.set_endpoints() 指到本进程起的本地 http.server（回放样例 JSON）；
+全程不联网：接口根用 common.set_endpoints() 指到本地 http.server（回放样例 JSON）；
 「断网」用例指到一个刚关闭的端口，断言端点回 502（不是 500）。
 """
 import json
@@ -130,15 +130,15 @@ def _closed_port():
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
-    sock.close()          # 端口立刻释放 → 之后连接它必定被拒绝（模拟断网）
+    sock.close()   # 端口立刻释放 → 之后连接它必定被拒绝（模拟断网）
     return port
 
 
 def _point_to(port):
     base = "http://127.0.0.1:%d" % int(port)
-    common.set_endpoints({"openalex": base + "/openalex", "crossref": base + "/crossref",
-                          "europepmc": base + "/europepmc", "arxiv": base + "/arxiv",
-                          "semanticscholar": base + "/s2"})
+    common.set_endpoints({name: base + "/" + prefix for name, prefix in (
+        ("openalex", "openalex"), ("crossref", "crossref"), ("europepmc", "europepmc"),
+        ("arxiv", "arxiv"), ("semanticscholar", "s2"))})
 
 
 class FakeSources:
@@ -192,10 +192,9 @@ class StubCase(unittest.TestCase):
         self.httpd.server_close()
 
 
-# 查询降级 / arXiv 解析
 class BooleanDownShiftTest(unittest.TestCase):
     def test_boolean_and_field_detection(self):
-        for query in ("cucurbituril AND capsule", "a || b", "甲 与 乙", '"host guest"'):
+        for query in ("cucurbituril AND capsule", "a || b", "甲 与 乙", '"host guest"', "a !b"):
             self.assertTrue(boolexpr.has_boolean(query), query)
         self.assertFalse(boolexpr.has_boolean("cucurbituril capsule"))
         self.assertTrue(boolexpr.has_field_syntax("title:cucurbituril"))
@@ -237,7 +236,6 @@ class ArxivFeedTest(unittest.TestCase):
         self.assertEqual(len(arxiv.parse_arxiv_feed(ARXIV_FEED, {"yearFrom": "2020"})), 1)
 
 
-# 各来源字段统一
 class SourceMappingTest(StubCase):
     routes = [
         ("/openalex/works/doi:", {"body": OPENALEX_DOI}),
@@ -283,7 +281,6 @@ class SourceMappingTest(StubCase):
                          "arXiv 预印本（preprint）")
 
 
-# 折叠 / 排序 / 过滤
 class FoldRankFilterTest(unittest.TestCase):
     def test_merge_by_doi_and_title(self):
         lists = [
@@ -305,7 +302,7 @@ class FoldRankFilterTest(unittest.TestCase):
 
     def test_rank_prefers_similarity_then_citations(self):
         items = [{"title": "cyclodextrin aggregates", "citations": 500},
-                 {"title": "cucurbituril host-guest chemistry", "citations": 2}]
+                 {"title": "cucurbituril host-guest chemistry", "citations": 2}]  # 高被引≠高相关
         ranked = external.rank_by_similarity(items, "cucurbituril host guest")
         self.assertEqual(ranked[0]["title"], "cucurbituril host-guest chemistry")
         self.assertGreater(ranked[0]["relevance"], ranked[1]["relevance"])
@@ -324,7 +321,6 @@ class FoldRankFilterTest(unittest.TestCase):
         self.assertEqual(len(external.apply_local_filters(items, {"author": "ann"})), 1)
 
 
-# 编排：并发 / 缓存 / 容错
 class ExternalSearchTest(StubCase):
     routes = [
         ("/openalex/works", {"body": OPENALEX_SEARCH}),
@@ -366,7 +362,6 @@ class ExternalSearchTest(StubCase):
                          ["openalex", "crossref", "europepmc", "arxiv", "semanticscholar"])
 
 
-# 题录抓取
 class MetadataTest(StubCase):
     routes = [
         ("/crossref/works/10.1000/none", {"status": 404, "body": {"message": "not found"}}),
@@ -431,7 +426,6 @@ class MetadataTest(StubCase):
         self.assertEqual(metadata.rebuild_abstract({"b": [1], "a": [0]}), "a b")
 
 
-# api 层：状态码
 class FakeCtx:
     def __init__(self, query=None, body=None, method="GET"):
         self.method = method
