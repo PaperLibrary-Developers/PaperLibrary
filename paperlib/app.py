@@ -82,7 +82,11 @@ def build(config):
     store = Store(config.data_dir)
     store.load()
     # 旧库迁移（Sci-lib data/library.json、PaperLibrary data/papers.db）——B8 实现，缺失时跳过
-    if os.environ.get("PAPERLIB_SKIP_MIGRATE") != "1":
+    # 只在「默认 data/ 目录」或显式 --migrate 时执行，避免测试临时目录被真实旧库灌入 600MB
+    auto_migrate = config.migrate
+    if auto_migrate is None:
+        auto_migrate = config.data_dir.resolve() == (config.root / "data").resolve()
+    if auto_migrate and os.environ.get("PAPERLIB_SKIP_MIGRATE") != "1":
         try:
             try:
                 from paperlib.migrate import migrate_from_legacy

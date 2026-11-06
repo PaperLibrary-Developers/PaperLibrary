@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from paperlib.config import Config  # noqa: E402
-from paperlib.data.migrate import discover_sources, migrate_from_legacy  # noqa: E402
+from paperlib.migrate import discover_sources, migrate_from_legacy  # noqa: E402
 from paperlib.data.store import Store  # noqa: E402
 from paperlib.util import dump_json, ensure_dir  # noqa: E402
 

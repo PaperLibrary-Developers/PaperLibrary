@@ -1,15 +1,16 @@
-# 运行数据与运行时（不入 git）
-data/
-data-*/
-*.db
-*.db-wal
-*.db-shm
-runtime/portable/
-runtime/*.exe
+# 运行数据与运行时（不入 git；只锚定仓库根，避免误吞 paperlib/data/）
+/data/
+/data-*/
+/*.db
+/*.db-wal
+/*.db-shm
+/runtime/portable/
+/runtime/build/
+/runtime/*.exe
 __pycache__/
 *.pyc
 .pytest_cache/
 *.log
-tmp/
-updates/
-dist/
+/tmp/
+/updates/
+/dist/

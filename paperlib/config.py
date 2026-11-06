@@ -29,6 +29,8 @@ class Config:
     # 启动打点（app.py 在 listen 就绪后写入）
     boot_ms: int | None = None
     started_at: float = 0.0
+    # None=自动（仅默认 data/ 目录才迁移旧库）；True/False 由 --migrate/--no-migrate 显式控制
+    migrate: bool | None = None
     extra: dict = field(default_factory=dict)
 
     @property
@@ -76,6 +78,10 @@ def parse_args(argv=None, root=None) -> Config:
             out["flags"].add("help")
         elif arg == "--no-open":
             out["flags"].add("no-open")
+        elif arg == "--no-migrate":
+            out["migrate"] = False
+        elif arg == "--migrate":
+            out["migrate"] = True
         elif arg == "--stop":
             out["flags"].add("stop")
         elif arg in ("--port", "-p") and i + 1 < len(argv):
@@ -111,6 +117,7 @@ def parse_args(argv=None, root=None) -> Config:
         no_open=no_open,
         stop=("stop" in out["flags"]),
         help=("help" in out["flags"]),
+        migrate=out.get("migrate"),
     )
 
 

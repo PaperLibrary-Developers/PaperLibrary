@@ -1,4 +1,4 @@
-"""旧库迁移测试（paperlib/data/migrate.py）。
+"""旧库迁移测试（paperlib/migrate.py）。
 
 覆盖：Sci-lib/PaperLibrary 字段映射、DOI/标题去重合并（用户字段以 Sci-lib 为准）、
 幂等（二次运行零写入）、dry_run 不写盘、文件名安全、图片/PDF 复制、图表合并、
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from paperlib.config import Config
-from paperlib.data.migrate import discover_sources, migrate_from_legacy
+from paperlib.migrate import discover_sources, migrate_from_legacy
 from paperlib.data.store import Store
 
 SCILIB_REAL = Path(r"C:\Users\wzxle\Desktop\WB比赛\Sci-lib\data")
