@@ -251,7 +251,10 @@ def analyze_local(paper, figures=None, full_text=""):
     venue_year = "，".join(str(x) for x in (paper.get("year"),
                                             paper.get("venue") or paper.get("journal")) if x)
 
-    first = _sentences(abstract)[0] if abstract else ""
+    abstract_sentences = _sentences(abstract)
+    # 摘要可能整段都不到 minimum 长度（用户随手写「待补充」），此时回退到原文前 120 字；
+    # 否则 [0] 会 IndexError，把「无 Key 本地降级必须 200」的契约打成 500。
+    first = abstract_sentences[0] if abstract_sentences else (_clean(abstract)[:120] if abstract else "")
     one_line = "%s%s —— %s" % (title, ("（%s）" % venue_year) if venue_year else "",
                                first[:120] if first else "本地未抽取到摘要，仅依据题录")
 
