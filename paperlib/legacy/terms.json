@@ -1,0 +1,1195 @@
+[
+ {
+  "zh": "不对称催化",
+  "en": "asymmetric catalysis",
+  "aliases": [
+   "asymmetric"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "中间体",
+  "en": "intermediates",
+  "aliases": [
+   "intermediate"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "产率",
+  "en": "yields",
+  "aliases": [
+   "yield"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "亲核取代",
+  "en": "nucleophilic substitution",
+  "aliases": [
+   "SN2",
+   "SN1"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "亲电取代",
+  "en": "electrophilic substitution",
+  "aliases": [
+   "SEAr",
+   "SE2"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "偶联",
+  "en": "cross-coupling",
+  "aliases": [
+   "coupling"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "催化剂",
+  "en": "catalysts",
+  "aliases": [
+   "catalytic",
+   "catalyst"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "催化剂失活",
+  "en": "catalyst deactivation",
+  "aliases": [
+   "deactivation"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "催化循环",
+  "en": "catalytic cycle",
+  "aliases": [
+   "catalytic"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "加成反应",
+  "en": "addition reaction",
+  "aliases": [
+   "addition"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "反应机理",
+  "en": "mechanistic",
+  "aliases": [
+   "mechanism"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "反应路径",
+  "en": "reaction pathway",
+  "aliases": [
+   "pathway"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "取代反应",
+  "en": "substitution reaction",
+  "aliases": [
+   "substitution"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "周转频率",
+  "en": "turnover frequency",
+  "aliases": [
+   "tof"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "官能团",
+  "en": "functional groups",
+  "aliases": [
+   "functional group"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "对映选择性",
+  "en": "enantioselectivity",
+  "aliases": [
+   "enantioselective"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "底物",
+  "en": "substrates",
+  "aliases": [
+   "substrate"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "底物适用范围",
+  "en": "substrate scope",
+  "aliases": [
+   "substrate"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "机理",
+  "en": "mechanistic",
+  "aliases": [
+   "mechanism"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "氧化",
+  "en": "oxidation",
+  "aliases": [
+   "oxidative"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "氧化加成",
+  "en": "oxidative addition",
+  "aliases": [],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "消除反应",
+  "en": "elimination reaction",
+  "aliases": [
+   "elimination",
+   "E2"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "烯烃",
+  "en": "alkenes",
+  "aliases": [
+   "alkene",
+   "olefin"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "羰基",
+  "en": "carbonyls",
+  "aliases": [
+   "carbonyl"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "羰基还原",
+  "en": "carbonyl reduction",
+  "aliases": [
+   "carbonyl"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "自由基",
+  "en": "radicals",
+  "aliases": [
+   "radical"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "自由基取代",
+  "en": "radical substitution",
+  "aliases": [],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "转化率",
+  "en": "conversion",
+  "aliases": [
+   "conv"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "转金属化",
+  "en": "transmetalation",
+  "aliases": [
+   "transmetallation"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "还原",
+  "en": "reduction",
+  "aliases": [
+   "reductive"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "还原消除",
+  "en": "reductive elimination",
+  "aliases": [],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "选择性",
+  "en": "selectivity",
+  "aliases": [
+   "selective"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "配体",
+  "en": "ligands",
+  "aliases": [
+   "ligand"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "配体交换",
+  "en": "ligand exchange",
+  "aliases": [],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "酮",
+  "en": "ketones",
+  "aliases": [
+   "ketone"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "醇",
+  "en": "alcohols",
+  "aliases": [
+   "alcohol"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "醛",
+  "en": "aldehydes",
+  "aliases": [
+   "aldehyde"
+  ],
+  "field": "反应与结构"
+ },
+ {
+  "zh": "共价有机框架",
+  "en": "covalent organic framework",
+  "aliases": [
+   "cof"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "单分子磁体",
+  "en": "single molecule magnet",
+  "aliases": [
+   "single-molecule magnet"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "圆二色",
+  "en": "circular dichroism",
+  "aliases": [
+   "cd spectra"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "对映体过量",
+  "en": "enantiomeric excess",
+  "aliases": [
+   "ee"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "手性",
+  "en": "chirality",
+  "aliases": [
+   "chiral"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "手性拆分",
+  "en": "chiral resolution",
+  "aliases": [
+   "resolution"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "手性诱导",
+  "en": "chirality induced",
+  "aliases": [
+   "chirality-induced",
+   "chiral-induced",
+   "ciss"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "效应",
+  "en": "effects",
+  "aliases": [
+   "effect"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "磁各向异性",
+  "en": "magnetic anisotropy",
+  "aliases": [],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "自旋",
+  "en": "spin",
+  "aliases": [],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "自旋极化",
+  "en": "spin polarization",
+  "aliases": [
+   "spin polarized",
+   "spin-polarized"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "自旋过滤",
+  "en": "spin filtering",
+  "aliases": [
+   "spin filter"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "自旋选择性",
+  "en": "spin selectivity",
+  "aliases": [
+   "spin-selective"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "金属有机框架",
+  "en": "metal organic framework",
+  "aliases": [
+   "metal-organic framework",
+   "mof"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "非对映选择性",
+  "en": "diastereoselectivity",
+  "aliases": [
+   "dr"
+  ],
+  "field": "手性与自旋"
+ },
+ {
+  "zh": "多孔材料",
+  "en": "porous material",
+  "aliases": [
+   "porosity"
+  ],
+  "field": "材料"
+ },
+ {
+  "zh": "水凝胶",
+  "en": "hydrogel",
+  "aliases": [],
+  "field": "材料"
+ },
+ {
+  "zh": "自组装",
+  "en": "self-assembly",
+  "aliases": [
+   "self-assembled"
+  ],
+  "field": "材料"
+ },
+ {
+  "zh": "配位聚合物",
+  "en": "coordination polymer",
+  "aliases": [],
+  "field": "材料"
+ },
+ {
+  "zh": "基因表达",
+  "en": "gene expression",
+  "aliases": [],
+  "field": "生物"
+ },
+ {
+  "zh": "抗体",
+  "en": "antibody",
+  "aliases": [
+   "antibodies"
+  ],
+  "field": "生物"
+ },
+ {
+  "zh": "生物相容性",
+  "en": "biocompatibility",
+  "aliases": [
+   "biocompatible"
+  ],
+  "field": "生物"
+ },
+ {
+  "zh": "细胞毒性",
+  "en": "cytotoxicity",
+  "aliases": [
+   "cytotoxic"
+  ],
+  "field": "生物"
+ },
+ {
+  "zh": "荧光探针",
+  "en": "fluorescent probe",
+  "aliases": [
+   "probe"
+  ],
+  "field": "生物"
+ },
+ {
+  "zh": "药物递送",
+  "en": "drug delivery",
+  "aliases": [],
+  "field": "生物"
+ },
+ {
+  "zh": "蛋白质",
+  "en": "protein",
+  "aliases": [
+   "proteins"
+  ],
+  "field": "生物"
+ },
+ {
+  "zh": "酶",
+  "en": "enzyme",
+  "aliases": [
+   "enzymatic",
+   "enzymes"
+  ],
+  "field": "生物"
+ },
+ {
+  "zh": "二氧化碳还原",
+  "en": "carbon dioxide reduction",
+  "aliases": [
+   "co2 reduction",
+   "co2rr"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "交流阻抗",
+  "en": "impedance",
+  "aliases": [
+   "eis"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "伏安",
+  "en": "voltammogram",
+  "aliases": [
+   "voltammetry"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "功率密度",
+  "en": "power density",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "塔菲尔",
+  "en": "tafel slope",
+  "aliases": [
+   "tafel"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "塔菲尔斜率",
+  "en": "tafel slope",
+  "aliases": [
+   "tafel"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "循环伏安",
+  "en": "cyclic voltammetry",
+  "aliases": [
+   "voltammogram",
+   "voltammetry",
+   "cv"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "循环稳定性",
+  "en": "cycling stability",
+  "aliases": [
+   "cycle stability"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "极化曲线",
+  "en": "polarization curve",
+  "aliases": [
+   "polarization",
+   "lsv"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "析氢反应",
+  "en": "hydrogen evolution",
+  "aliases": [
+   "her"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "析氧反应",
+  "en": "oxygen evolution",
+  "aliases": [
+   "oer"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "比容量",
+  "en": "specific capacity",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "氧化峰",
+  "en": "oxidation peak",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "氧还原",
+  "en": "oxygen reduction",
+  "aliases": [
+   "orr"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "氮还原",
+  "en": "nitrogen reduction",
+  "aliases": [
+   "nrr"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "法拉第效率",
+  "en": "faradaic efficiency",
+  "aliases": [
+   "faradaic",
+   "fe"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "电催化",
+  "en": "electrocatalysis",
+  "aliases": [
+   "electrocatalytic"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "电化学",
+  "en": "electrochemistry",
+  "aliases": [
+   "electrochemical"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "电化学窗口",
+  "en": "electrochemical window",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "电极",
+  "en": "electrode",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "电流密度",
+  "en": "current density",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "电解",
+  "en": "electrolysis",
+  "aliases": [
+   "electrolyte"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "电解液",
+  "en": "electrolyte",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "线性扫描",
+  "en": "linear sweep",
+  "aliases": [
+   "lsv"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "能量密度",
+  "en": "energy density",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "计时电流",
+  "en": "chronoamperometry",
+  "aliases": [
+   "i-t"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "起始电位",
+  "en": "onset potential",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "过电位",
+  "en": "overpotential",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "还原峰",
+  "en": "reduction peak",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "还原电位",
+  "en": "reduction potential",
+  "aliases": [],
+  "field": "电化学"
+ },
+ {
+  "zh": "阻抗谱",
+  "en": "impedance spectroscopy",
+  "aliases": [
+   "impedance",
+   "eis"
+  ],
+  "field": "电化学"
+ },
+ {
+  "zh": "光电子能谱",
+  "en": "photoelectron spectroscopy",
+  "aliases": [
+   "xps"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "光谱",
+  "en": "spectroscopy",
+  "aliases": [
+   "spectrum",
+   "spectra"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "单原子",
+  "en": "single atom",
+  "aliases": [
+   "single-atom",
+   "sac"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "原位表征",
+  "en": "in situ characterization",
+  "aliases": [
+   "operando",
+   "in-situ"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "吸附",
+  "en": "adsorption",
+  "aliases": [
+   "adsorbed"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "图谱",
+  "en": "spectrum",
+  "aliases": [
+   "pattern",
+   "spectra"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "射线衍射",
+  "en": "x-ray diffraction",
+  "aliases": [
+   "diffraction",
+   "xrd"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "形貌",
+  "en": "morphological",
+  "aliases": [
+   "morphology"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "扫描电镜",
+  "en": "scanning electron microscopy",
+  "aliases": [
+   "sem"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "拉曼",
+  "en": "raman",
+  "aliases": [],
+  "field": "表征"
+ },
+ {
+  "zh": "晶体结构",
+  "en": "crystal structure",
+  "aliases": [
+   "crystallographic"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "核磁",
+  "en": "nuclear magnetic resonance",
+  "aliases": [
+   "nmr"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "比表面积",
+  "en": "surface area",
+  "aliases": [
+   "bet"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "电子显微镜",
+  "en": "micrograph",
+  "aliases": [
+   "microscopy",
+   "sem",
+   "tem"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "电子顺磁共振",
+  "en": "electron paramagnetic resonance",
+  "aliases": [
+   "epr",
+   "esr"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "紫外",
+  "en": "ultraviolet",
+  "aliases": [
+   "uv-vis"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "红外",
+  "en": "ir spectrum",
+  "aliases": [
+   "infrared",
+   "ftir"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "纳米材料",
+  "en": "nanomaterials",
+  "aliases": [
+   "nanostructure",
+   "nanomaterial"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "纳米片",
+  "en": "nanosheet",
+  "aliases": [],
+  "field": "表征"
+ },
+ {
+  "zh": "纳米颗粒",
+  "en": "nanoparticles",
+  "aliases": [
+   "nanoparticle"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "荧光",
+  "en": "photoluminescence",
+  "aliases": [
+   "fluorescence"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "透射电镜",
+  "en": "transmission electron microscopy",
+  "aliases": [
+   "tem"
+  ],
+  "field": "表征"
+ },
+ {
+  "zh": "信号",
+  "en": "signals",
+  "aliases": [
+   "signal"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "分子动力学",
+  "en": "molecular dynamics",
+  "aliases": [
+   "md"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "分布",
+  "en": "distribution",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "发射",
+  "en": "emission",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "吸收",
+  "en": "absorbance",
+  "aliases": [
+   "absorption"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "响应",
+  "en": "responsive",
+  "aliases": [
+   "response"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "图像",
+  "en": "micrograph",
+  "aliases": [
+   "images",
+   "image"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "实验",
+  "en": "experimental",
+  "aliases": [
+   "experiment"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "密度泛函理论",
+  "en": "density functional theory",
+  "aliases": [
+   "dft"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "对比",
+  "en": "comparison",
+  "aliases": [
+   "compared"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "峰",
+  "en": "peaks",
+  "aliases": [
+   "peak"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "峰位",
+  "en": "peak position",
+  "aliases": [
+   "peak"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "峰形",
+  "en": "peak shape",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "强度",
+  "en": "intensity",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "性能",
+  "en": "performance",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "扫描速率",
+  "en": "scan rate",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "效率",
+  "en": "efficiency",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "散射",
+  "en": "scattering",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "晶体",
+  "en": "crystalline",
+  "aliases": [
+   "crystal"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "曲线",
+  "en": "curves",
+  "aliases": [
+   "curve",
+   "plot"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "模拟",
+  "en": "simulation",
+  "aliases": [
+   "simulated"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "活性",
+  "en": "activity",
+  "aliases": [
+   "active"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "浓度",
+  "en": "concentration",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "理论",
+  "en": "theoretical",
+  "aliases": [
+   "theory"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "电位",
+  "en": "potential",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "电压",
+  "en": "voltage",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "电流",
+  "en": "current",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "界面",
+  "en": "interface",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "示意图",
+  "en": "illustration",
+  "aliases": [
+   "schematic",
+   "diagram"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "示意图解",
+  "en": "illustration",
+  "aliases": [
+   "schematic"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "稳定性",
+  "en": "stability",
+  "aliases": [
+   "stable"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "结构",
+  "en": "structural",
+  "aliases": [
+   "structure"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "能带",
+  "en": "band structure",
+  "aliases": [
+   "band"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "薄膜",
+  "en": "thin film",
+  "aliases": [
+   "film"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "衍射",
+  "en": "diffraction",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "表面",
+  "en": "surface",
+  "aliases": [],
+  "field": "通用"
+ },
+ {
+  "zh": "计算",
+  "en": "computational",
+  "aliases": [
+   "calculation",
+   "dft"
+  ],
+  "field": "通用"
+ },
+ {
+  "zh": "谱图",
+  "en": "spectroscopic",
+  "aliases": [
+   "spectrum",
+   "spectra"
+  ],
+  "field": "通用"
+ }
+]

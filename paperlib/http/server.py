@@ -13,6 +13,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from paperlib.util import read_body, read_json_body
+
 
 class Ctx:
     """一次请求的上下文：路径参数、查询串、请求体与响应写入口。"""
@@ -139,10 +141,12 @@ class Ctx:
             "Last-Modified": formatdate(st.st_mtime, usegmt=True),
             "ETag": etag,
         }
+        from urllib.parse import quote
+
         if download:
-            headers["Content-Disposition"] = 'attachment; filename="' + download + '"'
+            headers["Content-Disposition"] = 'attachment; filename="' + quote(str(download), safe="") + '"'
         elif inline:
-            headers["Content-Disposition"] = "inline; filename=" + '"' + inline + '"'
+            headers["Content-Disposition"] = 'inline; filename="' + quote(str(inline), safe="") + '"'
         headers["Cache-Control"] = cache or "no-cache"
 
         if self.headers.get("If-None-Match") == etag:

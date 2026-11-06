@@ -81,6 +81,18 @@ def build(config):
     """装配（可被测试直接调用）：返回 (services, router, static, http_server)。"""
     store = Store(config.data_dir)
     store.load()
+    # 旧库迁移（Sci-lib data/library.json、PaperLibrary data/papers.db）——B8 实现，缺失时跳过
+    if os.environ.get("PAPERLIB_SKIP_MIGRATE") != "1":
+        try:
+            from paperlib.data.migrate import migrate_from_legacy
+
+            migration = migrate_from_legacy(store, config)
+            if migration:
+                print("[migrate] " + json.dumps(migration, ensure_ascii=False))
+        except ImportError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            print("[migrate] 迁移失败（继续启动）：" + str(exc))
     seed_once_if_needed(config, store)
     services = create_services(config, store)
     static_handler = StaticHandler(config.root, config.public_dir, config.shared_dir, config.vendor_dir)

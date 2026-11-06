@@ -186,3 +186,22 @@ def sanitize_file_name(title, max_length: int = 70) -> str:
     if len(name) > max_length:
         name = name[:max_length].strip()
     return name or "document"
+
+
+def zh_collation_key(text):
+    """近似 ICU zh-Hans-CN 的排序键：汉字在拉丁字母之前，拉丁不区分大小写。
+
+    Node 用 localeCompare(x, 'zh-Hans-CN')；Python 没有 ICU，这里按字符类别生成可比较键
+    （0=汉字/日文/韩文，1=字母数字，2=空白，3=其他）。汉字内部按码位，不做拼音排序。
+    """
+    key = []
+    for ch in str(text or "").casefold():
+        if CJK_RE.match(ch):
+            key.append((0, ch))
+        elif ch.isalnum():
+            key.append((1, ch))
+        elif ch.isspace():
+            key.append((2, " "))
+        else:
+            key.append((3, ch))
+    return key

@@ -43,7 +43,7 @@ def health(ctx):
     ctx.json(200, {
         "ok": True,
         "app": services.runtime.app,
-        "version": services.runtime.version,
+        "version": services.db.state["version"],
         "dataDir": str(services.runtime.data_dir),
         "pid": os.getpid(),
         "port": services.runtime.port,

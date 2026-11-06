@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import re
 
-from paperlib.util import read_body, read_json_body
-
 
 def compile_pattern(pattern: str):
     keys = []

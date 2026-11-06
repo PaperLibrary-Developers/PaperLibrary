@@ -6,6 +6,6 @@ def require_paper(ctx):
     paper_id = (ctx.params or {}).get("id") or ""
     paper = ctx.services.library.get(paper_id)
     if not paper:
-        ctx.fail(404, "文献不存在")
+        ctx.fail(404, "找不到这条文献")
         return None
     return paper

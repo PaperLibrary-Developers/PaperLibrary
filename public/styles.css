@@ -1031,6 +1031,155 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 /* ---------- 快捷键提示 ---------- */
 .kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; color: var(--muted); background: var(--surface-2); }
 
+/* ============================================================
+   合并后新增的 3 个视图（图表画廊 / 横向对比 / 深度分析）
+   + 两个视图共用的「文献选择器」
+   —— 只加样式，不改已有选择器；颜色全部走上面的 CSS 变量，夜间主题自动跟随。
+   ============================================================ */
+
+/* ---------- 文献选择器（views/paper-pick.mjs） ---------- */
+.paper-pick { display: grid; gap: 8px; }
+.paper-pick-search .input { padding-left: 34px; padding-right: 12px; }
+.paper-pick-hint { font-size: 12.5px; color: var(--faint); }
+.paper-pick-list { display: grid; gap: 6px; }
+.paper-pick-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 11px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+  transition: background .15s, border-color .15s;
+}
+.paper-pick-row:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.paper-pick-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.paper-pick-row.picked { opacity: .62; cursor: default; }
+.paper-pick-title { font-size: 14px; }
+.paper-pick-meta { font-size: 12.5px; color: var(--muted); }
+.paper-pick-act {
+  margin-left: auto; flex: 0 0 auto; font-size: 12.5px; color: var(--accent-text);
+  border: 1px solid var(--border); border-radius: 99px; padding: 2px 9px; background: var(--surface-2);
+}
+
+/* ---------- 图表画廊（views/figures.mjs） ---------- */
+.fig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+.fig-card {
+  display: flex; flex-direction: column; overflow: hidden; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-1); transition: box-shadow .18s, transform .18s, border-color .18s;
+}
+.fig-card:hover { box-shadow: var(--shadow-2); transform: translateY(-1px); border-color: var(--border-strong); }
+.fig-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fig-thumb {
+  aspect-ratio: 4 / 3; background: var(--surface-3); display: grid; place-items: center;
+  overflow: hidden; border-bottom: 1px solid var(--border);
+}
+.fig-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.fig-missing { font-size: 13px; color: var(--faint); }
+.fig-missing-sub { font-size: 11.5px; color: var(--faint); opacity: .8; padding: 2px 8px; text-align: center; }
+.fig-body { padding: 9px 11px 11px; display: grid; gap: 6px; }
+.fig-cap {
+  font-size: 13px; line-height: 1.5; color: var(--text);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.fig-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
+.fig-paper { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fig-badge { border: 1px solid var(--border); border-radius: 99px; padding: 0 6px; background: var(--surface-2); }
+.fig-paper-chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--accent-text);
+  background: var(--accent-soft); border-radius: 99px; padding: 3px 6px 3px 11px;
+}
+.fig-paper-chip button { border: 0; background: transparent; color: inherit; padding: 0 3px; cursor: pointer; }
+/* 大图（灯箱） */
+.fig-modal { max-width: min(1080px, 94vw); }
+.fig-modal-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); }
+.fig-modal-img {
+  max-height: 62vh; overflow: auto; display: grid; place-items: center;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px;
+}
+.fig-large-img { max-width: 100%; max-height: 58vh; object-fit: contain; }
+.fig-details summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.fig-text { font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
+.fig-block { display: grid; gap: 4px; }
+.fig-block-k { font-size: 12.5px; color: var(--faint); }
+
+/* ---------- 横向对比（views/compare.mjs） ---------- */
+.cmp-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.cmp-label { font-size: 12.5px; color: var(--muted); flex: 0 0 auto; }
+.cmp-count { font-size: 12.5px; color: var(--faint); }
+.cmp-count.ok { color: var(--accent-text); }
+.cmp-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.cmp-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 340px;
+  background: var(--accent-soft); color: var(--accent-text); border-radius: 99px; padding: 3px 6px 3px 11px;
+  font-size: 12.5px;
+}
+.cmp-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-chip button { border: 0; background: transparent; color: inherit; padding: 0 3px; cursor: pointer; }
+.cmp-note {
+  display: block; font-size: 12.5px; line-height: 1.65; color: var(--muted);
+  background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+  padding: 8px 11px;
+}
+.cmp-note[hidden] { display: none; }
+.cmp-add summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.cmp-manual { display: flex; gap: 8px; align-items: center; }
+.cmp-manual .input { flex: 1 1 auto; }
+.cmp-scroll { overflow: auto; max-height: 72vh; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
+.cmp-table th, .cmp-table td {
+  border-bottom: 1px solid var(--border); border-right: 1px solid var(--border);
+  padding: 8px 10px; vertical-align: top; text-align: left;
+}
+.cmp-table thead th {
+  position: sticky; top: 0; z-index: 1; background: var(--surface-2);
+  font-size: 12.5px; font-weight: 600;
+}
+.cmp-th-field, .cmp-td-field {
+  position: sticky; left: 0; z-index: 2; background: var(--surface-2);
+  min-width: 120px; max-width: 190px; font-size: 12.5px; color: var(--muted);
+}
+.cmp-table thead .cmp-th-field { z-index: 3; }
+.cmp-td-value { white-space: pre-wrap; line-height: 1.6; }
+.cmp-col-title { color: var(--accent-text); border-bottom: 1px solid transparent; }
+.cmp-col-title:hover { border-bottom-color: var(--accent); }
+.cmp-oneline { font-size: 14.5px; line-height: 1.7; }
+.cmp-error { color: var(--danger); font-size: 13.5px; }
+
+/* ---------- 深度分析（views/deep.mjs） ---------- */
+.deep-scores { display: grid; gap: 9px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.deep-score { display: grid; gap: 5px; }
+.deep-score-top { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; }
+.deep-score-k { color: var(--muted); }
+.deep-score-v { color: var(--text); font-variant-numeric: tabular-nums; }
+.deep-score-bar { height: 7px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+.deep-score-bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+.deep-block-title { font-size: 12.5px; color: var(--faint); margin-bottom: 8px; letter-spacing: .02em; }
+.deep-fields { display: grid; gap: 10px; }
+.deep-field {
+  display: grid; gap: 3px; padding-bottom: 9px; border-bottom: 1px dashed var(--border);
+}
+.deep-field:last-child { border-bottom: 0; padding-bottom: 0; }
+.deep-field-k { font-size: 12.5px; color: var(--muted); }
+.deep-field-v { font-size: 13.5px; line-height: 1.7; }
+.deep-text { white-space: pre-wrap; }
+.deep-dim { color: var(--faint); }
+.deep-list { margin: 0; padding-left: 20px; display: grid; gap: 3px; }
+.deep-nest { display: grid; gap: 4px; }
+.deep-nest-row { display: grid; grid-template-columns: minmax(72px, 130px) minmax(0, 1fr); gap: 10px; }
+.deep-nest-k { font-size: 12.5px; color: var(--faint); }
+.deep-oneline { font-size: 14.5px; line-height: 1.75; }
+.deep-note {
+  font-size: 12.5px; line-height: 1.65; color: var(--muted);
+  background: var(--surface-2); border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm); padding: 8px 11px;
+}
+.deep-running { font-size: 14px; }
+.deep-error { color: var(--danger); font-size: 13.5px; }
+
+@media (max-width: 880px) {
+  .fig-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .cmp-table { min-width: 520px; }
+  .cmp-th-field, .cmp-td-field { min-width: 96px; max-width: 130px; }
+  .deep-nest-row { grid-template-columns: 1fr; gap: 2px; }
+}
+
 /* ---------- 自适应 ---------- */
 .mobile-only { display: none; }
 

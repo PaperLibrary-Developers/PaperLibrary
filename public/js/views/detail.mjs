@@ -201,7 +201,23 @@ import { filterByTag, go, lookupTitle, refreshMeta, render, savePrefs } from '..
             const panel = document.getElementById('pdf-panel')
             if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' })
           }
-        }, '📄 查看 PDF') : null
+        }, '📄 查看 PDF') : null,
+        // 合并后新增的三项能力入口：图表画廊（单篇筛选）/ 横向对比（带上这篇）/ 深度分析
+        h('button.btn.sm', {
+          type: 'button',
+          title: '看这篇的图表；也可以从图库进入跨文献的图表画廊',
+          onclick: () => go('figures', { paperId: paper.id })
+        }, '🖼 图表'),
+        h('button.btn.sm', {
+          type: 'button',
+          title: '把这篇带进横向对比，再挑其它文献一起比',
+          onclick: () => go('compare', { ids: [paper.id] })
+        }, '⇄ 对比'),
+        h('button.btn.sm', {
+          type: 'button',
+          title: '22 字段深度分析 + 五维评分（结果存本地）',
+          onclick: () => go('deep/' + encodeURIComponent(paper.id))
+        }, '🔬 深度分析')
       )
     )
 

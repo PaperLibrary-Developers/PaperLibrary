@@ -322,7 +322,7 @@ import * as htmlText from '/shared/html-text.mjs'
   const exported = {
     h, append, fromHtml, mount, on,
     escapeHtml, toPlainText, formatDate, relTime, fileSize, debounce, throttle, copyText, deburr,
-    safeFileName, normalizeTagInput, splitTagInput, replace,
+    safeFileName, normalizeTagInput, splitTagInput, replace, truncate,
     toast, confirmDialog,
     typeLabel, statusLabel, authorsText, starsHtml,
     TYPE_LABELS, STATUS_LABELS
@@ -331,7 +331,7 @@ import * as htmlText from '/shared/html-text.mjs'
   export {
     h, append, fromHtml, mount, on,
     escapeHtml, toPlainText, formatDate, relTime, fileSize, debounce, throttle, copyText, deburr,
-    safeFileName, normalizeTagInput, splitTagInput, replace,
+    safeFileName, normalizeTagInput, splitTagInput, replace, truncate,
     toast, confirmDialog,
     typeLabel, statusLabel, authorsText, starsHtml,
     TYPE_LABELS, STATUS_LABELS

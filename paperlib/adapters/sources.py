@@ -55,9 +55,26 @@ class Sources:
 
     def public_settings(self):
         key = self.openalex_key()
+        quota = self.quota.get("openalex")
         return {
-            "hasOpenAlexKey": bool(key),
-            "openalexKeyHint": (key[:4] + "…" + key[-4:]) if key else "",
+            "openalex": {
+                "hasKey": self.has_openalex_key(),
+                "keyHint": (key[:4] + "…" + key[-4:]) if key else "",
+                "fromEnv": bool(str(os.environ.get("OPENALEX_API_KEY") or "").strip()),
+                "quota": None if not quota else {
+                    "limit": quota.get("limit"),
+                    "remaining": quota.get("remaining"),
+                    "exhausted": bool(quota.get("exhausted")),
+                    "resetAt": quota.get("resetAt"),
+                    "retryAfterSeconds": quota.get("retryAfterSeconds"),
+                    "status": quota.get("status"),
+                    "at": quota.get("at"),
+                    "keyed": bool(quota.get("keyed")),
+                },
+                "signupUrl": "https://openalex.org",
+            },
             "contactEmail": self.contact_email(),
-            "quota": self.quota,
+            "note": ("已配置 key：额度按你的账号计算（OpenAlex 免费账号配额约为匿名的 10 倍）"
+                     if self.has_openalex_key() else
+                     "未配置 key：OpenAlex 额度按共享 IP 计算，别人用完你就会被限流（可注册免费账号提升 10 倍）"),
         }

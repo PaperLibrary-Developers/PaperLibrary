@@ -277,6 +277,37 @@
 
     exportUrl: (kind, ids) => '/api/export/' + kind + qs({ ids }),
 
+    /* ---------- 合并后新增的 10 个端点（契约：docs/合并新增端点契约-20261107.md） ---------- */
+
+    /** 图表画廊（跨文献）：q 图注检索 / paperId 单篇 / type 图类型 / page / pageSize(1-100) */
+    listFigures: params => request('GET', '/api/figures' + qs(params)),
+    /** 图表图片流（支持 Range/ETag，直接当 <img src> 用） */
+    figureImageUrl: id => '/api/figures/' + encodeURIComponent(id) + '/image',
+    /** 某篇文献的图表列表 */
+    paperFigures: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/figures'),
+    /** 从该文献的 PDF 重新提取图表（force=true 覆盖已有记录） */
+    extractFigures: (id, options) => request('POST',
+      '/api/papers/' + encodeURIComponent(id) + '/figures/extract',
+      { body: { force: !!(options && options.force) } }),
+
+    /** 横向对比模板（≥4 套；无 Key 时也能列出） */
+    compareTemplates: () => request('GET', '/api/compare/templates'),
+    /** 横向对比：paperIds 2-8 条 + 模板 id */
+    compareRun: (paperIds, template) => request('POST', '/api/compare',
+      { body: { paperIds: paperIds || [], template: template || '' } }),
+
+    /** 取已保存的深度分析（没有时为 null，不报错） */
+    getDeepAnalysis: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/deep-analysis'),
+    /** 运行深度分析（22 字段 + 五维评分；无 Key 时服务端本地降级，仍返回 200） */
+    runDeepAnalysis: (id, options) => request('POST',
+      '/api/papers/' + encodeURIComponent(id) + '/deep-analysis',
+      { body: { force: !!(options && options.force) } }),
+
+    /** 中英术语检索（PaperLibrary 术语表） */
+    searchTerms: (q, options) => request('GET', '/api/terms/search' + qs(Object.assign({ q }, options || {}))),
+    /** Obsidian 导出 zip 的下载地址（每篇一个 .md + media/ 图表） */
+    obsidianExportUrl: () => '/api/export/obsidian',
+
     /** 打一个发布更新包（服务端跑 tools/make-release.js，产物落到 updates/） */
     buildRelease: () => request('POST', '/api/release/build', { body: {} }),
     importJson: payload => request('POST', '/api/import/json', { body: payload }),

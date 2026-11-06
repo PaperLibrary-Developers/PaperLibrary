@@ -16,6 +16,10 @@ import { editHandler } from './views/edit.mjs'
 import { searchHandler } from './views/search.mjs'
 import { settingsHandler } from './views/settings.mjs'
 import { timeline as timelineHandler } from './views/timeline.mjs'
+// 合并后新增的 3 个视图（图表画廊 / 横向对比 / 深度分析）
+import { figuresHandler } from './views/figures.mjs'
+import { compareHandler } from './views/compare.mjs'
+import { deepHandler } from './views/deep.mjs'
 
 const { h, toast, debounce } = util
 
@@ -149,6 +153,10 @@ const { h, toast, debounce } = util
           go('search', last && Object.keys(last).length ? last : undefined)
         }),
         navItem('年份时间线', '#/timeline', '⏱', null, activePath === '/timeline'),
+        // 合并后新增：PaperLibrary 的三项能力（图表画廊 / 横向对比 / 深度分析）
+        navItem('图表画廊', '#/figures', '🖼', null, activePath === '/figures'),
+        navItem('横向对比', '#/compare', '⇄', null, activePath === '/compare'),
+        navItem('深度分析', '#/deep', '🔬', null, activePath === '/deep'),
         navItem('设置与备份', '#/settings', '⚙', null, activePath === '/settings')
       ),
       h('div.side-foot',
@@ -314,13 +322,15 @@ const { h, toast, debounce } = util
 
     // 顶栏这个搜索框只服务「库列表页的快速筛选」。
     // 搜索页自己有一个更大的搜索框，同页出现两个输入框纯属干扰，所以在搜索页把它藏起来。
+    // 这些页面自己带搜索框（搜索页、图表画廊），顶栏那个「快速筛选书库」的输入框就别再占位置了
+    const hideTopSearch = path => path === '/search' || path === '/figures'
     const searchWrap = h('div.search-wrap',
       h('span.ico', '⌕'),
       search,
       suggest,
       h('span.search-hint', 'Ctrl K')
     )
-    searchWrap.hidden = activePath === '/search'
+    searchWrap.hidden = hideTopSearch(activePath)
 
     const bar = h('header.topbar', { id: 'topbar' },
       h('button.btn.icon.mobile-only', {
@@ -346,7 +356,7 @@ const { h, toast, debounce } = util
       // 同一类页面之间切换时（例如「文献详情 → 搜索」都算 plain），这里也要跟着改，
       // 否则从详情页进搜索页时顶栏搜索框还杵在那儿。
       const nowPath = parseHash().path
-      searchWrap.hidden = nowPath === '/search'
+      searchWrap.hidden = hideTopSearch(nowPath)
       // 用户正在搜索框里打字时不要回写，否则光标会跳到末尾
       if (document.activeElement !== search) {
         const want = state.query.qRaw != null && state.query.qRaw !== '' ? state.query.qRaw : (state.query.q || '')
@@ -407,6 +417,11 @@ const { h, toast, debounce } = util
     add('/timeline', timelineHandler)
     add('/search', searchHandler)
     add('/settings', settingsHandler)
+    // 合并后新增的 3 个视图：图表画廊、横向对比、单篇深度分析（/deep/:id 也走同一个处理器）
+    add('/figures', figuresHandler)
+    add('/compare', compareHandler)
+    add('/deep', deepHandler)
+    add('/deep/:id', deepHandler)
   }
 
   async function boot () {

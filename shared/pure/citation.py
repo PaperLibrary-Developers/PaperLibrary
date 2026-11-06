@@ -118,7 +118,7 @@ def _apa(paper):
     issue = ("(" + str(paper.get("issue")) + ")") if paper.get("issue") else ""
     pages = (", " + str(paper.get("pages"))) if paper.get("pages") else ""
     if paper.get("doi"):
-        tail = "https://doi.org/" + str(paper.get("doi"))
+        tail = " https://doi.org/" + str(paper.get("doi"))  # Node 原实现带前导空格，逐字节对齐
     else:
         tail = str(paper.get("url") or "")
     mid = ". ".join(x for x in ((venue + vol + issue + pages) if venue else "", tail) if x)

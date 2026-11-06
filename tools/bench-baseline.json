@@ -1,0 +1,14 @@
+{
+  "generatedAt": "2026-11-06T17:54:58Z",
+  "repoKB": 9752,
+  "releaseKB": 94044,
+  "bootMs": 1595,
+  "bootSamples": [
+    1632,
+    1584,
+    1595
+  ],
+  "healthBootMs": 1278,
+  "rssMB": 34,
+  "papers": 0
+}

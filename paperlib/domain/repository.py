@@ -202,12 +202,16 @@ def normalize_paper(input_data, existing=None):
         "refs": normalize_refs(src.get("refs") if src.get("refs") is not None else base.get("refs")),
         "pdfFile": _clean(src.get("pdfFile") if src.get("pdfFile") is not None else base.get("pdfFile"), 300),
         "bibtexKey": _clean(src.get("bibtexKey") if src.get("bibtexKey") is not None else base.get("bibtexKey"), 100).strip(),
-        # union 字段（合并后新增；老数据缺省为空）
-        "folder": _clean(src.get("folder") if src.get("folder") is not None else base.get("folder"), 200).strip(),
-        "arxivId": _clean(src.get("arxivId") if src.get("arxivId") is not None else base.get("arxivId"), 100).strip(),
         "addedAt": base.get("addedAt") or src.get("addedAt") or now_iso(),
         "updatedAt": now_iso(),
     }
+    # union 字段（合并后新增）：只在非空时出现，保持与 Node 卡片形状一致
+    folder = _clean(src.get("folder") if src.get("folder") is not None else base.get("folder"), 200).strip()
+    if folder:
+        paper["folder"] = folder
+    arxiv_id = _clean(src.get("arxivId") if src.get("arxivId") is not None else base.get("arxivId"), 100).strip()
+    if arxiv_id:
+        paper["arxivId"] = arxiv_id
     if not paper["title"]:
         paper["title"] = "（未命名文献）"
     if not paper["bibtexKey"]:
