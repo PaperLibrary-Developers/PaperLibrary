@@ -42,10 +42,11 @@ def main(argv=None):
     parser.add_argument("--skip-portable", action="store_true")
     args = parser.parse_args(argv)
 
-    stamp = time.strftime("%Y%m%d-%H%M")
+    # 精确到秒 + pid：并发打包不会撞同名，避免把另一个正在写的包删掉
+    stamp = time.strftime("%Y%m%d-%H%M%S") + "-" + str(os.getpid())
     target = ROOT / args.out / ("PaperLibrary-" + stamp)
     if target.exists():
-        shutil.rmtree(target)
+        raise SystemExit("产物目录已存在（不应发生）：" + str(target))
     target.mkdir(parents=True)
     for name in INCLUDE:
         src = ROOT / name

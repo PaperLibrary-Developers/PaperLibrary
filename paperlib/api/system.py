@@ -84,7 +84,7 @@ def shutdown_now(ctx):
         pass
 
 
-_release_running = False
+_build_lock = __import__("threading").Lock()
 
 
 def release_build(ctx):
@@ -92,8 +92,7 @@ def release_build(ctx):
 
     契约：200 {ok,name,path,relPath,size,mtime,papers,files,seconds}；409 已在打包；400 环境不满足。
     """
-    global _release_running
-    if _release_running:
+    if not _build_lock.acquire(blocking=False):
         return ctx.fail(409, "已经有一个打包任务在跑，请稍后再试")
     import subprocess
     import sys
@@ -102,17 +101,27 @@ def release_build(ctx):
     root = ctx.services.runtime.root
     script = root / "tools" / "release.py"
     if not script.is_file():
+        _build_lock.release()
         return ctx.fail(400, "缺少打包脚本 tools/release.py")
     started = time.time()
-    _release_running = True
     try:
         proc = subprocess.run([sys.executable, str(script)], cwd=str(root),
                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=900)
     finally:
-        _release_running = False
+        _build_lock.release()
     if proc.returncode != 0:
-        return ctx.fail(400, "打包失败：" + ((proc.stderr or proc.stdout or "").strip()[-300:] or "未知原因"))
+        # 契约不变量：error 只回中文可读消息，不泄漏堆栈/本机路径；细节写日志
+        log_dir = ctx.services.runtime.data_dir / "logs"
+        log_path = ""
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = str(log_dir / ("release-" + time.strftime("%Y%m%d-%H%M%S") + ".log"))
+            with open(log_path, "w", encoding="utf-8") as fh:
+                fh.write((proc.stdout or "") + "\n" + (proc.stderr or ""))
+        except OSError:
+            pass
+        return ctx.fail(400, "打包失败，请查看日志" + ("：" + log_path if log_path else ""))
     dist = root / "dist"
     targets = sorted([p for p in dist.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime) if dist.is_dir() else []
     if not targets:
@@ -121,13 +130,24 @@ def release_build(ctx):
     stat = target.stat()
     files = 0
     size = 0
-    for base, _dirs, names in __import__("os").walk(target):
-        for name in names:
-            files += 1
-            try:
-                size += __import__("os").path.getsize(__import__("os").path.join(base, name))
-            except OSError:
-                pass
+    # 优先用 release-manifest.json 的口径（与 tools/release.py 一致，排除 __pycache__ 等）
+    manifest_path = target / "release-manifest.json"
+    try:
+        import json as _json
+
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        size = int(manifest.get("bytes") or 0)
+        files = int(manifest.get("files") or 0)
+    except (OSError, ValueError, TypeError):
+        size = 0
+    if not size:
+        for base, _dirs, names in __import__("os").walk(target):
+            for name in names:
+                files += 1
+                try:
+                    size += __import__("os").path.getsize(__import__("os").path.join(base, name))
+                except OSError:
+                    pass
     try:
         rel = target.relative_to(root)
     except ValueError:
@@ -139,7 +159,7 @@ def release_build(ctx):
         "relPath": str(rel).replace("\\", "/"),
         "size": size,
         "mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
-        "papers": ctx.services.db.count(),
+        "papers": 0,  # 发布包按设计不含 data/（用户数据），所以包内文献数为 0
         "files": files,
         "seconds": round(time.time() - started, 1),
     })
