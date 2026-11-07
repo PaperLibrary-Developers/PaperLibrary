@@ -142,8 +142,11 @@ const { h, toast, debounce } = util
         h('div.brand-mark', h('img', { src: '/paperlibrary-mark.png', alt: 'PaperLibrary', draggable: 'false' })),
         // 名称按 logo 的配色：Sci 深蓝、-lib 青色（颜色在 CSS 变量里，夜间主题会换成亮一点的同色系）
         h('div.brand-name',
-          h('span.brand-navy', 'Paper'),
-          h('span.brand-teal', 'Library')
+          h('div.brand-word',
+            h('span.brand-navy', 'Paper'),
+            h('span.brand-teal', 'Library')
+          ),
+          h('span.brand-ver', 'v1.0 Nexus')
         )
       ),
       h('nav.nav', totalEl, starredEl,

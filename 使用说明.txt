@@ -1,14 +1,25 @@
-PaperLibrary 文献库（合并版）
-================================
+PaperLibrary v1.0 Nexus（Nexus 文献库）
+========================================
 
-一、启动
-  双击「启动.cmd」。启动后浏览器会自动打开 http://127.0.0.1:4321/
-  首次启动可能需要几秒；若 4321 被占用，可在命令行运行：
-      runtime\portable\python.exe -m paperlib --port 4322
+一、启动（推荐双击「启动.exe」；没有就用「启动.cmd」）
+  双击后：窗口闪一下 → 浏览器自动打开 http://127.0.0.1:4321/
+  服务在后台运行（pythonw，无黑框），关闭启动窗口不会停止服务。
+  停止：双击「停止.cmd」，或在网页「设置 → 服务与数据」点「停止服务」。
 
-二、停止
-  双击「停止.cmd」，或在网页「设置 → 服务与数据」中点击「停止服务」。
-  直接关闭命令行窗口也可以（数据已写入 SQLite，不会丢）。
+  如果浏览器没有自动打开：
+    · 手动访问 http://127.0.0.1:4321/
+    · 看 data\logs\launcher.log 里的原因
+    · 或运行「启动-调试.cmd」，窗口里会直接显示错误
+
+二、Windows「无法验证发布者」提示怎么处理
+  从网络下载的 zip 解压后，Windows 会给 .cmd/.exe 打上「网络来源」标记，于是双击时
+  弹出「打开文件 - 安全警告」。这不是病毒，是本产品没有购买代码签名证书。两种处理：
+    1) 首次运行前：右键 zip 文件 → 属性 → 勾选「解除锁定」→ 确定，再解压（推荐）；
+       或对解压目录运行 PowerShell：
+         Get-ChildItem -Recurse | Unblock-File
+    2) 已弹出时：点「运行(R)」即可（只信任你自己的下载来源）。
+  说明：换成 .exe 启动器不会彻底消除这个提示（无签名的 exe 会触发 SmartScreen），
+  只是不再走「命令脚本」那条警告；代码签名证书才能从根本上解决。
 
 三、数据位置
   data\library.db          文献库（SQLite，唯一真源）
@@ -20,6 +31,7 @@ PaperLibrary 文献库（合并版）
   data\websearch.json      网络检索配置（Exa）
   data\sources.json        外部题录源配置（OpenAlex）
   data\backups\            自动备份
+  data\logs\               启动/运行日志
 
   迁移旧库：把旧的 data\library.json（Sci-lib）或 data\papers.db（PaperLibrary）
   放到 data\ 下，启动时会自动合并；建议先备份整个 data\ 目录。
@@ -32,6 +44,7 @@ PaperLibrary 文献库（合并版）
   data\ 目录只在本机，不会上传。分享或发布时不要包含 data\ 与 runtime\（如有 API Key）。
 
 六、常见问题
-  打不开页面：确认「启动.cmd」窗口没有关闭；换端口重试；检查防火墙。
+  打不开页面：先看 data\logs\launcher.log；确认 4321 没有被别的程序占用；
+             或用「启动-调试.cmd」换端口：runtime\portable\python.exe -m paperlib --port 4322
   公式不显示：vendor\katex 缺失时会降级为原文显示，不影响文献功能。
   内置阅读器空白：vendor\pdfjs 缺失时自动回退浏览器自带查看器。

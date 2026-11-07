@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -64,6 +65,23 @@ def main(argv=None):
             raise SystemExit("缺少 runtime/portable；先运行 python tools/make_portable.py")
         shutil.copytree(portable_src, target / "runtime" / "portable")
         # 便携运行时里的项目根路径：release/runtime/portable/../.. = release 根，与 _pth 一致
+
+    # 启动器 exe（无控制台；C# 由 PowerShell Add-Type 编译，失败则回退 .cmd）
+    launcher_ps = target / "tools" / "make_launcher.ps1"
+    if launcher_ps.is_file():
+        try:
+            proc = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-File", str(launcher_ps), "-OutDir", str(target)],
+                cwd=str(target), capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=180,
+            )
+            if proc.returncode == 0 and (target / "启动.exe").is_file():
+                print("[release] 启动器已生成：启动.exe / 停止.exe")
+            else:
+                print("[release] 启动器编译失败（将只用 .cmd）：" + ((proc.stderr or proc.stdout or "")[-200:]))
+        except Exception as exc:  # noqa: BLE001
+            print("[release] 启动器编译异常（将只用 .cmd）：" + str(exc))
 
     size = tree_size(target)
     breakdown = {

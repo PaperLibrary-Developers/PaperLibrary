@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -20,11 +21,45 @@ from paperlib.services import create_services
 from paperlib.util import ensure_dir, write_json_atomic
 
 
-def open_browser(url):
+def open_browser(url, log_dir=None):
+    """打开默认浏览器；os.startfile → webbrowser → cmd start 三级兜底（结果写日志）。"""
+    def _log(message):
+        if not log_dir:
+            return
+        try:
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
+            with open(Path(log_dir) / "launcher.log", "a", encoding="utf-8") as fh:
+                fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + message + "\n")
+        except OSError:
+            pass
+
+    if os.name == "nt":
+        try:
+            subprocess.Popen(["explorer.exe", url])
+            _log("已请求 explorer 打开：" + url)
+            return True
+        except OSError as exc:
+            _log("explorer 失败：" + str(exc))
+        try:
+            os.startfile(url)  # noqa: S606 - 本地固定地址
+            _log("已打开浏览器（os.startfile）：" + url)
+            return True
+        except OSError as exc:
+            _log("os.startfile 失败：" + str(exc))
     try:
-        webbrowser.open(url)
-    except Exception:
-        pass
+        if webbrowser.open(url, new=2):
+            _log("已打开浏览器（webbrowser）：" + url)
+            return True
+    except Exception as exc:  # noqa: BLE001
+        _log("webbrowser 失败：" + str(exc))
+    try:
+        subprocess.Popen(["cmd", "/c", "start", "", url])
+        _log("已打开浏览器（cmd start）：" + url)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _log("cmd start 失败：" + str(exc))
+    _log("浏览器打开失败，请手动访问：" + url)
+    return False
 
 
 def stop_running(config):
@@ -124,7 +159,7 @@ def main(argv=None, root=None):
         print("  这个端口上已经有一个文献库在运行了：%s" % url)
         print("  直接为你打开浏览器，不需要重复启动。")
         if not config.no_open:
-            open_browser(url)
+            open_browser(url, config.data_dir / "logs")
         return 0
     if state == "busy":
         print("  [x] 端口 %d 被其它程序占用了，服务无法启动。" % config.port, file=sys.stderr)
@@ -159,7 +194,7 @@ def main(argv=None, root=None):
     config.boot_ms = int((time.time() - config.started_at) * 1000)
     services.runtime.timing["bootMs"] = config.boot_ms
     print("")
-    print("  文献库已启动 →  %s" % url)
+    print("  PaperLibrary v1.0 Nexus 已启动 →  %s" % url)
     print("  数据文件：%s" % store.data_file())
     print("  原文目录：%s" % store.papers_dir)
     print("  补充材料：%s" % store.attachments_dir)
@@ -168,7 +203,7 @@ def main(argv=None, root=None):
     print("  也可以在网页「设置 → 服务与数据」里点「停止服务」。")
     print("")
     if not config.no_open:
-        open_browser(url)
+        open_browser(url, config.data_dir / "logs")
     try:
         while server.thread.is_alive():
             time.sleep(0.3)

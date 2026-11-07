@@ -124,6 +124,12 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 }
 .brand-name .brand-navy { color: var(--brand-navy, #1b2d56); }
 .brand-name .brand-teal { color: var(--brand-teal, #0e9aab); }
+.brand-name .brand-word { display: flex; align-items: baseline; }
+.brand-name .brand-ver {
+  display: block; margin-top: 3px;
+  font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  color: var(--muted); text-transform: none;
+}
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-item {
