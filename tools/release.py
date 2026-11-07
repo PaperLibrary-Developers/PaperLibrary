@@ -16,7 +16,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-INCLUDE = ["public", "shared", "paperlib", "vendor", "tools", "启动.cmd", "停止.cmd", "使用说明.txt", "README.md"]
+INCLUDE = ["public", "shared", "paperlib", "vendor", "tools",
+           "启动.exe", "停止.exe", "启动.cmd", "停止.cmd", "启动-调试.cmd",
+           "使用说明.txt", "README.md"]
 SKIP_DIRS = {"__pycache__", ".git", "node_modules"}
 LIMIT_KB = 120 * 1024
 
