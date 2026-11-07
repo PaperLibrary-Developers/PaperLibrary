@@ -35,13 +35,7 @@ def open_browser(url, log_dir=None):
 
     if os.name == "nt":
         try:
-            subprocess.Popen(["explorer.exe", url])
-            _log("已请求 explorer 打开：" + url)
-            return True
-        except OSError as exc:
-            _log("explorer 失败：" + str(exc))
-        try:
-            os.startfile(url)  # noqa: S606 - 本地固定地址
+            os.startfile(url)  # noqa: S606 - 本地固定地址（ShellExecute）
             _log("已打开浏览器（os.startfile）：" + url)
             return True
         except OSError as exc:

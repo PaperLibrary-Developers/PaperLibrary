@@ -40,14 +40,9 @@ def open_browser(url):
     「现有 Edge 实例以提升权限运行」这类冲突。
     """
     if sys.platform == "win32":
+        # 不要用 explorer.exe：某些环境下会新起 Explorer 实例并报 0xc0000142
         try:
-            subprocess.Popen(["explorer.exe", url])
-            log("已请求 explorer 打开：" + url)
-            return True
-        except OSError as exc:
-            log("explorer 失败：" + str(exc))
-        try:
-            os.startfile(url)  # noqa: S606 - 本地固定 URL
+            os.startfile(url)  # noqa: S606 - 本地固定 URL（走 ShellExecute）
             return True
         except OSError as exc:
             log("os.startfile 失败：" + str(exc))

@@ -1,9 +1,7 @@
-﻿# Build PaperLibrary launcher EXEs (启动.exe / 停止.exe) with Windows PowerShell + C# compiler.
 param(
   [string]$OutDir = "dist"
 )
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent $PSScriptRoot
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
 $src = @'
 using System;
@@ -46,20 +44,24 @@ class Launcher
 
     static void OpenUrl()
     {
-        // explorer.exe 以资源管理器（普通权限）打开，避免“以提升权限运行的 Edge 实例”冲突
-        try
-        {
-            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + Url + "\"") { UseShellExecute = true });
-            Log("browser open requested (explorer): " + Url);
-            return;
-        }
-        catch (Exception ex) { Log("explorer open failed: " + ex.Message); }
         try
         {
             Process.Start(new ProcessStartInfo(Url) { UseShellExecute = true });
-            Log("browser open requested: " + Url);
+            Log("browser open requested (shell): " + Url);
+            return;
         }
-        catch (Exception ex) { Log("browser open failed: " + ex.Message); }
+        catch (Exception ex) { Log("shell open failed: " + ex.Message); }
+        try
+        {
+            var info = new ProcessStartInfo("cmd.exe", "/c start \"\" \"" + Url + "\"")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            Process.Start(info);
+            Log("browser open requested (cmd start): " + Url);
+        }
+        catch (Exception ex) { Log("cmd start failed: " + ex.Message); }
     }
 
     static void RunPython(string fileName, string arguments)
@@ -84,7 +86,7 @@ class Launcher
     static int Main(string[] args)
     {
         string name = Path.GetFileNameWithoutExtension(Application.ExecutablePath) ?? "";
-        bool stop = name.Contains("stop") || name.Contains("Stop") || name.Contains("停止");
+        bool stop = name.Contains("stop") || name.Contains("Stop") || name.Contains("\u505c\u6b62");
         if (stop)
         {
             try { RunPython(Pythonw(), "-m paperlib --stop"); Log("stop requested"); }
@@ -96,7 +98,7 @@ class Launcher
         catch (Exception ex)
         {
             Log("start failed: " + ex.Message);
-            MessageBox.Show("启动失败：" + ex.Message + "\r\n详见 data\\logs\\launcher.log", "PaperLibrary v1.0 Nexus");
+            MessageBox.Show("Start failed: " + ex.Message + "\r\nSee data\\logs\\launcher.log", "PaperLibrary v1.0 Nexus");
             return 1;
         }
         for (int i = 0; i < 80; i++)
@@ -105,14 +107,14 @@ class Launcher
             Thread.Sleep(300);
         }
         Log("start timeout");
-        MessageBox.Show("启动超时（24 秒）。\r\n请看 data\\logs\\launcher.log，或运行 启动-调试.cmd。", "PaperLibrary v1.0 Nexus");
+        MessageBox.Show("Startup timed out (24s).\r\nSee data\\logs\\launcher.log or run the debug cmd.", "PaperLibrary v1.0 Nexus");
         return 1;
     }
 }
 '@
 
-$startExe = Join-Path $OutDir "启动.exe"
-$stopExe = Join-Path $OutDir "停止.exe"
+$startExe = Join-Path $OutDir ([string]([char]0x542F) + [string]([char]0x52A8) + ".exe")
+$stopExe = Join-Path $OutDir ([string]([char]0x505C) + [string]([char]0x6B62) + ".exe")
 Add-Type -TypeDefinition $src -ReferencedAssemblies @("System.dll", "System.Windows.Forms.dll") -OutputAssembly $startExe -OutputType WindowsApplication
 Copy-Item $startExe $stopExe -Force
 Write-Output ("launcher built: " + $startExe + " / " + $stopExe)
