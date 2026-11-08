@@ -497,8 +497,8 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
     function renderResults () {
       const showCount = hasAnyCondition(state)
       resultCount.replaceChildren(...(showCount && lastResult
-        ? [h('span', `${lastResult.total} 条结果`),
-          lastResult.pageCount > 1 ? h('span', `第 ${lastResult.page} / ${lastResult.pageCount} 页`) : null,
+        ? [h('span.count-num', `${lastResult.total} 条结果`),
+          lastResult.pageCount > 1 ? h('span.count-page', `第 ${lastResult.page} / ${lastResult.pageCount} 页`) : null,
           lastResult.boolean
             ? h('span', {
                 title: '查询里含 AND / OR / NOT（也可用 && || ! 、与/或/非），已按布尔逻辑筛选，「非」的词只在本地复核',
@@ -1046,11 +1046,6 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
     /** 网络结果卡片。duplicate = 同名文献里被折叠起来的那几条 */
     function externalCard (item, options) {
       const opts = options || {}
-      const meta = [
-        item.year ? String(item.year) : '',
-        item.venue ? String(item.venue).slice(0, 46) : '',
-        item.citations != null ? '被引 ' + item.citations : ''
-      ].filter(Boolean)
       const actions = []
       if (item.inLibrary) {
         actions.push(h('span.badge.owned', '已在库中'))
@@ -1108,28 +1103,31 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
         actions.push(h('a.btn.sm', { href: item.url, target: '_blank', rel: 'noopener' }, '去看原文 ↗'))
       }
 
+      /* 三段式：标题 → 元信息（年份 / 期刊 / 被引 / 相似度 / 来源）→ 动作。
+         元信息全部走 flex 的 gap 排版，不再手工拼 ' · ' 字符串，
+         窄屏换行时也不会出现「· 停在一行开头」这种问题。 */
+      const sources = item.sources || []
       return h('div.external-item' + (opts.duplicate ? '.dup' : ''),
         // 显示前再兜一次清洗：服务端已经清过，这里主要防**旧缓存**里的 `&lt;i&gt;`
         h('div.external-title', toPlainText(item.title)),
-        h('div.external-meta', meta.join(' · '),
+        h('div.external-meta',
+          item.year ? h('span.ext-year', String(item.year)) : null,
+          item.venue ? h('span.ext-venue', { title: String(item.venue) }, String(item.venue)) : null,
+          item.citations != null ? h('span.ext-cite', '被引 ' + item.citations) : null,
           // 显示与查询的相似度，让排序依据一目了然
           item.relevance != null
-            ? h('span.badge', {
-              style: { marginLeft: '6px' },
-              title: '与查询词的文本相似度（排序依据）'
-            }, '相似度 ' + item.relevance)
+            ? h('span.badge', { title: '与查询词的文本相似度（排序依据）' }, '相似度 ' + item.relevance)
             : null,
           // 折叠提示：同一篇被多个来源命中时显示「N 个来源」
-          item.sources && item.sources.length > 1
-            ? h('span.badge', {
-              style: { marginLeft: '6px' },
-              title: '这些来源都收录了这篇：' + item.sources.map(sourceLabel).join('、')
-            }, item.sources.length + ' 个来源')
+          sources.length > 1
+            ? h('span.badge', { title: '这些来源都收录了这篇：' + sources.map(sourceLabel).join('、') },
+              sources.length + ' 个来源')
             : null,
-          item.sources && item.sources.length
-            ? h('span', { style: { marginLeft: '6px', color: 'var(--faint)' } },
-              '（' + item.sources.map(sourceLabel).join(' + ') + '）')
-            : null),
+          sources.length
+            ? h('span.ext-src', { title: sources.map(sourceLabel).join(' + ') },
+              '（' + sources.map(sourceLabel).join(' + ') + '）')
+            : null
+        ),
         h('div.external-actions', actions)
       )
     }
@@ -1425,19 +1423,21 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
     const tabLocal = h('button.search-tab', { type: 'button' }, '🏠 本地库')
     const tabWeb = h('button.search-tab', { type: 'button' }, '🌐 网络检索')
     const tabBar = h('div', { id: 'search-tabs', style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, tabLocal, tabWeb)
-    const localToolbar = h('div', { style: { margin: '14px 0 10px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+    /* 结果工具条：左边「← 返回全部文献」，右边条数 + 排序 + 视图切换。
+       跟下面的结果列表用同一条细线分界，扫读时层级是「工具条 → 列表」，不再和卡片混在一起。 */
+    const localToolbar = h('div.search-toolbar',
       tagRow,
-      h('span', { style: { flex: '1' } }),
+      h('span.grow'),
+      resultCount,
       sortSelect,
-      searchViewToggle,
-      resultCount
+      searchViewToggle
     )
     const localZone = h('div', { id: 'local-zone' },
       advancedPanel,
       localToolbar,
-      // 结果在左、筛选栏在右（窄窗口靠 CSS 折叠，见 #facet-panel 的媒体查询）
-      h('div', { style: { display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' } },
-        h('div', { style: { flex: '1 1 380px', minWidth: '260px' } }, results, pager),
+      // 结果在左、筛选栏在右（窄窗口靠 CSS 折成一列，见 .search-columns 的媒体查询）
+      h('div.search-columns',
+        h('div.search-main', results, pager),
         facetPanel
       )
     )
@@ -1449,24 +1449,28 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
        外层仍保留 id="external-zone"（下面这些都在它里面，外部脚本按这个 id 找结果区）。 */
     const webGroup = h('div', { id: 'web-group' },
       h('div', { id: 'external-zone' },
-        h('div.external-head',
-          h('div', { style: { display: 'grid', gap: '2px' } },
-            h('div', { style: { fontWeight: '650', fontSize: '15px' } }, '网络上的相关文献'),
+        /* 头部两段式：第一行标题 + 说明（动作「重新搜索」贴右），
+           第二行工具条放来源角标 + 排序 / 筛选 / 状态。
+           原来这些都挤在同一行，窄屏时换行成两三截、右边缘和结果列对不上。 */
+        h('div.ext-head',
+          h('div.ext-head-text',
+            h('div.ext-head-title', '网络上的相关文献'),
             h('div.hint', '来自多个公开学术来源，不在你的库里；同一篇被多个来源命中时会自动折叠成一条。')
           ),
-          h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' } },
-            extFilterToggle,
-            webSortSelect,
-            externalStatus,
-            h('button.btn.sm', { type: 'button', onclick: () => { resetExternal(); runExternal(true) } }, '重新搜索')
-          )
+          h('button.btn.sm', { type: 'button', onclick: () => { resetExternal(); runExternal(true) } }, '重新搜索')
         ),
-        // 每个来源的状态角标 + 可展开的详情（取代原来那一大段红字）
-        h('div', { style: { display: 'grid', gap: '4px', margin: '-4px 0 8px' } }, externalBadges, externalDetail),
+        h('div.search-toolbar.ext-toolbar',
+          externalBadges,
+          h('span.grow'),
+          externalStatus,
+          webSortSelect,
+          extFilterToggle
+        ),
+        externalDetail,
         extFilterPanel,
-        // 结果在左、网络 facet 在右（窄窗口靠媒体查询整行）
-        h('div', { id: 'web-columns', style: { display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap', marginTop: '12px' } },
-          h('div', { style: { flex: '1 1 380px', minWidth: '260px' } }, externalBody, externalMore, webZone),
+        // 结果在左、网络 facet 在右（窄窗口靠 CSS 折成一列）
+        h('div#web-columns.search-columns', { style: { marginTop: '10px' } },
+          h('div.search-main', externalBody, externalMore, webZone),
           webFacetPanel
         )
       )

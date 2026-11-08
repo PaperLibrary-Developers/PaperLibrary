@@ -46,6 +46,131 @@ const { h, toast, debounce } = util
     toast(next === 'night' ? '已切换到夜间模式' : '已切换到纸感浅色模式')
   }
 
+  /* ---------------- 侧栏抽屉（展开 / 收起 + 遮罩 + 焦点管理） ----------------
+     两种形态共用一套判断：
+       · 宽屏（>1024）：停靠式。收起 = 侧栏滑出左边界、主区把 250px 让回去（推挤）。
+       · 窄屏（≤1024）：浮层抽屉。默认收起，打开时压一层半透明遮罩，点遮罩/导航项就收起。
+     看不见的那一侧设 inert：键盘 Tab 与读屏都不会撞进抽屉后面的内容里。 */
+
+  /** 断点与 CSS 的 @media (max-width: 1024px) 保持一致 */
+  const sideMQ = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(max-width: 1024px)')
+    : { matches: false }
+
+  const SIDE_KEY = 'lv:side-collapsed'
+  function readSidePref () {
+    try { return localStorage.getItem(SIDE_KEY) === '1' } catch (err) { return false }
+  }
+  function writeSidePref (collapsed) {
+    try { localStorage.setItem(SIDE_KEY, collapsed ? '1' : '0') } catch (err) {}
+  }
+  /** 宽屏下用户上次是不是收起了侧栏（重开页面沿用，不在加载后闪一下再滑走） */
+  let sideCollapsed = readSidePref()
+  /** 打开抽屉前的焦点：关闭后还回去，键盘用户不会"丢失位置" */
+  let sideReturnFocus = null
+  /** 因「点导航项」收起时，焦点等新页面渲染完再还（顶栏会被整块重建） */
+  let sideFocusPending = false
+
+  const inOverlayMode = () => !!sideMQ.matches
+  const drawerOpen = () => document.body.classList.contains('nav-open')
+
+  function sideParts () {
+    return {
+      sidebar: document.getElementById('sidebar'),
+      scrim: document.getElementById('side-scrim'),
+      main: document.querySelector('.main'),
+      toggle: document.getElementById('side-toggle')
+    }
+  }
+
+  /** 把当前状态同步到 DOM（可在任何时候重复调用，不会累积副作用） */
+  function syncSidebar () {
+    const overlay = inOverlayMode()
+    const open = overlay ? drawerOpen() : !sideCollapsed
+    const { sidebar, scrim, main, toggle } = sideParts()
+    document.body.classList.toggle('side-collapsed', !overlay && sideCollapsed)
+    if (scrim) scrim.classList.toggle('is-on', overlay && open)
+    if (sidebar) {
+      const away = overlay ? !open : sideCollapsed
+      sidebar.toggleAttribute('inert', away)
+      if (away) sidebar.setAttribute('aria-hidden', 'true')
+      else sidebar.removeAttribute('aria-hidden')
+    }
+    // 抽屉打开时主区 inert ≈ 焦点陷阱：Tab 不会跑到遮罩背后的内容上
+    if (main) main.toggleAttribute('inert', overlay && open)
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false')
+      const label = open ? '收起导航栏' : '展开导航栏'
+      toggle.setAttribute('aria-label', label)
+      toggle.title = label + '（Ctrl+B）'
+      toggle.classList.toggle('on', open)
+    }
+  }
+
+  function openDrawer () {
+    if (!inOverlayMode() || drawerOpen()) return
+    // 记住「是谁打开的」：一般是顶栏那个开关；body 说明当前没有落点，就用开关当锚点
+    const active = document.activeElement
+    sideReturnFocus = active && active !== document.body ? active : document.getElementById('side-toggle')
+    document.body.classList.add('nav-open')
+    syncSidebar()
+    const { sidebar } = sideParts()
+    const first = sidebar && sidebar.querySelector('.side-close, .nav-item')
+    if (first) { try { first.focus({ preventScroll: true }) } catch (err) {} }
+  }
+
+  function closeDrawer (options) {
+    if (!drawerOpen()) return
+    const opts = options || {}
+    document.body.classList.remove('nav-open')
+    syncSidebar()
+    if (!opts.keepFocus) {
+      // 点导航项会连带切页、顶栏整块重建：现在这个节点下一帧就作废了，
+      // 交给 syncChrome() 在新 DOM 上把焦点还给新的开关
+      if (opts.deferFocus) {
+        sideFocusPending = true
+        return
+      }
+      let target = opts.returnTo || sideReturnFocus
+      if (!target || !document.contains(target)) target = document.getElementById('side-toggle')
+      if (target && typeof target.focus === 'function') {
+        try { target.focus({ preventScroll: true }) } catch (err) {}
+      }
+    }
+    sideReturnFocus = null
+  }
+
+  /** 把焦点还给顶栏开关（切页后顶栏是新的，必须按 id 现取） */
+  function restoreSideFocus () {
+    const target = document.getElementById('side-toggle')
+    if (target && typeof target.focus === 'function') {
+      try { target.focus({ preventScroll: true }) } catch (err) {}
+    }
+  }
+
+  function toggleSidebar () {
+    if (inOverlayMode()) {
+      if (drawerOpen()) closeDrawer()
+      else openDrawer()
+      return
+    }
+    sideCollapsed = !sideCollapsed
+    writeSidePref(sideCollapsed)
+    syncSidebar()
+    // 收起后焦点留在开关上，Tab 顺序接得住
+    const { toggle } = sideParts()
+    if (toggle) { try { toggle.focus({ preventScroll: true }) } catch (err) {} }
+  }
+
+  // 跨断点时清掉浮层态：否则在宽屏上残留 nav-open 会把主区压成 inert
+  if (typeof sideMQ.addEventListener === 'function') {
+    sideMQ.addEventListener('change', () => {
+      document.body.classList.remove('nav-open')
+      sideReturnFocus = null
+      syncSidebar()
+    })
+  }
+
   /* ---------------- 数据 ---------------- */
 
   /** 侧栏里几个会变的数字：导航项右侧的计数 + 底部那行汇总 */
@@ -103,6 +228,12 @@ const { h, toast, debounce } = util
       if (typeof oldTopbar.replaceWith === 'function') oldTopbar.replaceWith(next)
       else if (oldTopbar.parentNode) oldTopbar.parentNode.replaceChild(next, oldTopbar)
     }
+    // 顶栏可能刚重建过（开关按钮是新的），把抽屉状态重新贴上去
+    syncSidebar()
+    if (sideFocusPending) {
+      sideFocusPending = false
+      restoreSideFocus()
+    }
   }
 
   /* ---------------- 侧栏 + 顶栏 ---------------- */
@@ -116,10 +247,14 @@ const { h, toast, debounce } = util
       type: 'button',
       // data-nav 存「路径」而不是 hash，方便切换页面时只改 class、不重建 DOM
       'data-nav': hash.replace(/^#/, '') || '/',
+      // 读屏靠这个知道"当前在第几页"
+      'aria-current': active ? 'page' : null,
       onclick: () => {
         if (onNavigate) onNavigate()
         else go(hash)
-        document.body.classList.remove('nav-open')
+        // 浮层抽屉里点导航项 = 选完就走：收起抽屉，焦点等新页面渲染完再还给开关
+        // （宽屏停靠时没有任何动作）
+        closeDrawer({ deferFocus: true })
       }
     },
       h('span.nav-ico', icon),
@@ -136,7 +271,12 @@ const { h, toast, debounce } = util
     sidebarCountEls.foot = footStats
     const footMissing = h('span', state.stats && state.stats.pdfMissing ? `⚠ ${state.stats.pdfMissing} 个 PDF 丢失` : '')
     sidebarCountEls.missing = footMissing
-    return h('aside.sidebar', { id: 'sidebar' },
+    return h('aside.sidebar', { id: 'sidebar', 'aria-label': '侧栏' },
+      // 浮层抽屉里给一个显式关闭按钮（宽屏隐藏）：触屏用户不必去够顶栏那个开关
+      h('button.side-close', {
+        type: 'button', 'aria-label': '关闭导航栏', title: '关闭导航栏（Esc）',
+        onclick: () => closeDrawer()
+      }, '✕'),
       h('div.brand',
         // logo 是图片（白底），所以放在一个白色小圆角块里，深浅主题下都立得住
         h('div.brand-mark', h('img', { src: '/paperlibrary-mark.png', alt: 'PaperLibrary', draggable: 'false' })),
@@ -149,7 +289,7 @@ const { h, toast, debounce } = util
           h('span.brand-ver', 'v1.0 Nexus')
         )
       ),
-      h('nav.nav', totalEl, starredEl,
+      h('nav.nav', { 'aria-label': '主导航' }, totalEl, starredEl,
         navItem('搜索', '#/search', '⌕', null, activePath === '/search', null, () => {
           // 回到上次的搜索条件与结果（用户抱怨过：切去看一篇文献再回来，搜索就被清空了）
           const last = state.lastSearchParams
@@ -336,8 +476,11 @@ const { h, toast, debounce } = util
     searchWrap.hidden = hideTopSearch(activePath)
 
     const bar = h('header.topbar', { id: 'topbar' },
-      h('button.btn.icon.mobile-only', {
-        type: 'button', title: '菜单', onclick: () => document.body.classList.toggle('nav-open')
+      // 侧栏抽屉开关：任何尺寸都显示（窄屏开浮层抽屉，宽屏收起/展开停靠侧栏）。
+      // aria-expanded / aria-label / title 统一由 syncSidebar() 维护。
+      h('button.btn.icon.side-toggle', {
+        type: 'button', id: 'side-toggle', 'aria-controls': 'sidebar',
+        onclick: () => toggleSidebar()
       }, '☰'),
       searchWrap,
       h('div.toolbar',
@@ -385,9 +528,21 @@ const { h, toast, debounce } = util
         if (input) { input.focus(); input.select() } else { state.prefs.focusSearch = true; setHash('') }
         return
       }
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'b') {
+        if (typing) return
+        ev.preventDefault()
+        toggleSidebar()
+        return
+      }
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') {
         const form = document.querySelector('form[data-paper-form]')
         if (form) { ev.preventDefault(); form.requestSubmit() }
+        return
+      }
+      // Esc 收起浮层抽屉（焦点回到开关）；输入框里按 Esc 仍旧是"清空输入"的语义
+      if (ev.key === 'Escape' && !typing && inOverlayMode() && drawerOpen()) {
+        ev.preventDefault()
+        closeDrawer()
         return
       }
       if (typing) return
@@ -451,6 +606,11 @@ const { h, toast, debounce } = util
     app.replaceChildren(
       h('div.shell',
         renderSidebar('/'),
+        // 遮罩放在侧栏与主区之间：z-index 44 压住顶栏、45 的侧栏压在它上面
+        h('div.side-scrim', {
+          id: 'side-scrim', 'aria-hidden': 'true',
+          onclick: () => closeDrawer()
+        }),
         h('main.main',
           renderTopbar('/'),
           h('div', { id: 'outlet' })
@@ -458,6 +618,8 @@ const { h, toast, debounce } = util
       )
     )
     app.hidden = false
+    // 首屏就把抽屉状态贴上去：宽屏沿用上次的收起/展开，窄屏默认收起
+    syncSidebar()
     const bootEl = document.getElementById('boot')
     if (bootEl) bootEl.remove()
     patch({ booted: true })
