@@ -70,8 +70,15 @@ function compareHandler (ctx) {
   /* ---------------- 三个容器 ---------------- */
   const setupBox = h('div')
   const resultBox = h('div')
+  /* 返回键：与文献详情页、新增文献页、深度分析页同一枚（btn.sm.ghost「← 返回」），
+     放在标题上方一行；有历史就回上一页（例如刚看完的那篇文献），没有历史才退回全部文献。 */
+  const backBtn = h('button.btn.sm.ghost', {
+    type: 'button',
+    onclick: () => (history.length > 1 ? history.back() : go('#/'))
+  }, '← 返回')
   outlet.replaceChildren(h('div.content',
-    h('div.page-head', h('div',
+    h('div.page-head', h('div', { style: { display: 'grid', gap: '6px' } },
+      h('div', backBtn),
       h('div.page-title', '横向对比'),
       h('div.page-sub', '选 2–8 篇同类文献，按模板抽出同样的字段排成一张表；没有大模型时退化成「本地对比」。')
     )),
