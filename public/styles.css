@@ -670,6 +670,10 @@ a.external-title:hover { color: var(--accent-text); }
 .btn.ghost:hover { background: var(--surface-3); color: var(--text); }
 .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
 .btn.danger:hover { background: var(--danger-soft); }
+/* 待导入文献卡片上的「删除」：系统 danger 样式之上再铺一层浅红底，
+   和旁边实心的「导入这篇」分出主次，同时一眼就能看出是红色按钮 */
+.import-card .btn.danger { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 32%, var(--border)); }
+.import-card .btn.danger:hover { background: color-mix(in srgb, var(--danger) 16%, var(--surface)); border-color: var(--danger); }
 .btn.sm { padding: 5px 9px; font-size: 13px; }
 .btn.icon { padding: 7px 9px; }
 .btn[disabled] { opacity: .5; pointer-events: none; }

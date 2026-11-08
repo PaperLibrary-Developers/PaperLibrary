@@ -131,28 +131,30 @@ function figuresHandler (ctx) {
       }, '从原文重提图表')
       : null
 
+    /* 概要紧在「有结果」时才说：空库/无匹配时不再显示「没有图表」这类占位文案
+       （空状态本身已经有一块说明，两处叠在一起只剩噪音）。 */
     const summaryBits = []
     if (info) {
-      summaryBits.push(info.total ? '共 ' + info.total + ' 张图表' : '没有图表')
-      if (info.pageCount > 1) summaryBits.push('第 ' + info.page + ' / ' + info.pageCount + ' 页')
+      if (info.total) summaryBits.push('共 ' + info.total + ' 张图表')
+      if (info.total && info.pageCount > 1) summaryBits.push('第 ' + info.page + ' / ' + info.pageCount + ' 页')
     } else if (loading) {
       summaryBits.push('正在读取…')
     }
     if (st.q) summaryBits.push('关键词「' + st.q + '」')
 
+    const clearBtn = hasFilter()
+      ? h('button.btn.sm.ghost', {
+        type: 'button',
+        onclick: () => apply({ q: '', paperId: '', type: '', page: 1 })
+      }, '清空筛选')
+      : null
     replace(bar,
-      h('div.list-bar.fig-summary-row',
-        h('span.list-summary', { text: summaryBits.join(' · ') }),
-        h('div.list-controls',
-          extractBtn,
-          hasFilter()
-            ? h('button.btn.sm.ghost', {
-              type: 'button',
-              onclick: () => apply({ q: '', paperId: '', type: '', page: 1 })
-            }, '清空筛选')
-            : null
-        )
-      ),
+      // 概要与操作：没有可说的内容、也没有按钮时整行都不占位
+      summaryBits.length || extractBtn || clearBtn
+        ? h('div.list-bar.fig-summary-row',
+          h('span.list-summary', { text: summaryBits.join(' · ') }),
+          h('div.list-controls', extractBtn, clearBtn))
+        : null,
       /* 搜索行：类型下拉在左、搜索框在右，整组居中且限宽 720px（搜索框不再拉满整行） */
       h('div.fig-search-row',
         h('div.fig-search-group',
@@ -160,9 +162,7 @@ function figuresHandler (ctx) {
           h('div.search-wrap.fig-search', h('span.ico', '⌕'), search)
         )
       ),
-      paperChip ? h('div.fig-chip-row', paperChip) : null,
-      h('div.hint',
-        '图表由 PDF 自动提取（渲染页面 + 图注匹配）。点缩略图看大图；在文献详情页也能进入单篇图表。')
+      paperChip ? h('div.fig-chip-row', paperChip) : null
     )
   }
 

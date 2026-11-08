@@ -171,7 +171,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
       if (busy) browseBtn.setAttribute('disabled', '')
       else browseBtn.removeAttribute('disabled')
       importPanel.classList.toggle('is-busy', busy)
-      // 卡片上的【导入这篇】【去掉】是按 busy 决定禁用的，所以忙完必须**重画卡片**，
+      // 卡片上的【导入这篇】【删除】是按 busy 决定禁用的，所以忙完必须**重画卡片**，
       // 只重画底部按钮是不够的（曾经因此让卡片按钮永远停在禁用状态、点了没反应）。
       renderCards()
     }
@@ -344,8 +344,11 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
               h('div.import-card-name', { title: entry.name }, entry.name),
               h('div.import-card-sub', '解析失败：' + entry.error)),
             h('div', { style: { marginLeft: 'auto' } },
-              h('button.btn.sm.ghost', { type: 'button', onclick: () => removeCard(entry) }, '去掉'))),
-          h('div.hint', '这张卡片不会被导入。可以去掉它，或修好文件后重新拖进来。'))
+              h('button.btn.sm.danger', {
+                type: 'button', title: '从待导入列表里删除这一项',
+                onclick: () => removeCard(entry)
+              }, '删除'))),
+          h('div.hint', '这张卡片不会被导入。可以删除它，或修好文件后重新拖进来。'))
       }
 
       const badge = entry.kind === 'doi'
@@ -380,12 +383,12 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
             disabled: busy,
             onclick: () => singleImport(entry)
           }, '导入这篇'),
-          h('button.btn.sm.ghost', {
+          h('button.btn.sm.danger', {
             type: 'button',
             disabled: busy,
-            title: '从待导入列表里去掉',
+            title: '从待导入列表里删除这一项',
             onclick: () => removeCard(entry)
-          }, '去掉')
+          }, '删除')
         ]
       })
       // 卡片里的输入直接写回 entry.form（renderMetaCard 已绑定到同一个对象）
