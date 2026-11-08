@@ -56,7 +56,7 @@ def one_boot():
     env = dict(os.environ, PAPERLIB_SKIP_MIGRATE="1", PYTHONUTF8="1")
     started = time.time()
     proc = subprocess.Popen(
-        [sys.executable, "-m", "paperlib", "--port", str(port), "--no-open", "--data-dir", data_dir],
+        [sys.executable, "-m", "paperlib", "--port", str(port), "--no-open", "--idle-exit", "0", "--data-dir", data_dir],
         cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     health = None

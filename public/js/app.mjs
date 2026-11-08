@@ -599,8 +599,36 @@ const { h, toast, debounce } = util
     add('/deep/:id', deepHandler)
   }
 
+  /* 在线心跳：每个页面挂一条 SSE（/api/presence）。
+     服务端据此知道「还有页面开着」——全部关掉 30 秒后自动停机，不用再手动点「停止服务」。
+     EventSource 自带断线重连，所以刷新、切走再回来、短断网都不会被误判成「页面关了」；
+     从 bfcache 前进/后退回来时（pagehide 已经关掉了连接）要重新挂上。 */
+  function watchPresence () {
+    if (typeof EventSource !== 'function') return
+    let source = null
+    const open = () => {
+      if (source) return
+      try {
+        source = new EventSource('/api/presence')
+        // 服务端已退出时这里会连续报错；交给 EventSource 自己退避重试，不打扰用户
+        source.onerror = () => {}
+      } catch {
+        source = null
+      }
+    }
+    const close = () => {
+      if (!source) return
+      try { source.close() } catch {}
+      source = null
+    }
+    window.addEventListener('pagehide', close)
+    window.addEventListener('pageshow', open)
+    open()
+  }
+
   async function boot () {
     applyTheme(state.prefs.theme)
+    watchPresence()
     // 把外壳的两件事注入服务层：切页时同步侧栏高亮/顶栏、真的离开列表面板时清批量勾选
     // （这两件事都依赖 DOM/views，不属于 app-api，所以用钩子注入而不是反向 import）
     setShellHooks({ syncChrome, onPanelLeave: resetListBatch })

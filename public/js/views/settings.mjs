@@ -486,6 +486,22 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       h('div.svc-v', String(value)),
       h('div.svc-k', label))
 
+    /* 空闲自动停机的真实配置（--idle-exit）：不能写死「30 秒」，
+       用户把参数改成 0 或 120 时这句话得跟着变，否则就是骗人。 */
+    let presence = null
+    try {
+      const res = await fetch('/api/presence/status', { cache: 'no-store' })
+      const payload = await res.json()
+      presence = payload && payload.presence ? payload.presence : null
+    } catch {
+      presence = null
+    }
+    const idleNote = !presence
+      ? null
+      : presence.enabled
+        ? '关掉所有网页后 ' + presence.idleLimitSeconds + ' 秒，服务会自动保存并停止、释放端口；不用再手动停。'
+        : '自动停止已关闭（启动参数 --idle-exit 0）：关掉网页后服务会一直运行，需要时用 stop.cmd 停止。'
+
     const infoPanel = panel('服务与数据',
       h('div.svc',
         h('div.svc-path',
@@ -509,7 +525,9 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
             statCell('最近保存', formatDate(health.updatedAt))
           )
         )
-      )
+      ),
+      // 关掉网页就会自动停，不必再翻文件夹找 stop.cmd（秒数取服务端 --idle-exit 的真实值）
+      idleNote ? h('div.svc-note', idleNote) : null
       /* 注：原来的四行说明已删除；panel(title, body, right) 只收三个参数，
          下面这枚「停止服务」按钮过去是以第 4 个参数传入的、从未被渲染，
          这里保持「不渲染」不变，只把参数收敛成 panel 真正支持的两个。 */

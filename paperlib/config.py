@@ -1,8 +1,8 @@
 """运行配置：命令行/环境变量 → Config。
 
 命令行参数优先于环境变量（系统里的 PORT/HOST 常常是给别的程序用的），与 Node 版一致：
-  --port / -p, --host, --data-dir, --no-open, --stop, --help
-环境变量：LV_PORT / PORT、LV_HOST / HOST、LV_DATA_DIR / DATA_DIR、OPEN=0
+  --port / -p, --host, --data-dir, --no-open, --stop, --help, --idle-exit
+环境变量：LV_PORT / PORT、LV_HOST / HOST、LV_DATA_DIR / DATA_DIR、OPEN=0、LV_IDLE_EXIT
 """
 from __future__ import annotations
 
@@ -24,6 +24,10 @@ class Config:
     no_open: bool = False
     stop: bool = False
     help: bool = False
+    # 关掉网页后多久自动停机（秒）：0 = 不自动停。见 http/presence.py
+    idle_exit: int = 30
+    # 启动宽限期（秒）：进程起来后这段时间内不判定空闲，留给浏览器打开
+    idle_grace: int = 8
     app: str = APP_ID
     version: str = "2.0.0"
     # 启动打点（app.py 在 listen 就绪后写入）
@@ -57,6 +61,15 @@ class Config:
             "host": self.host,
             "dataDir": str(self.data_dir),
         }
+
+
+def _pick_seconds(raw, default: int) -> int:
+    """秒数参数：非法值回默认值；负数按 0（= 关闭）处理。"""
+    try:
+        n = int(float(raw))
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else 0
 
 
 def _pick_port(raw) -> int:
@@ -99,6 +112,16 @@ def parse_args(argv=None, root=None) -> Config:
             out["data_dir"] = argv[i]
         elif arg.startswith("--data-dir="):
             out["data_dir"] = arg[11:]
+        elif arg == "--idle-exit" and i + 1 < len(argv):
+            i += 1
+            out["idle_exit"] = argv[i]
+        elif arg.startswith("--idle-exit="):
+            out["idle_exit"] = arg[12:]
+        elif arg == "--idle-grace" and i + 1 < len(argv):
+            i += 1
+            out["idle_grace"] = argv[i]
+        elif arg.startswith("--idle-grace="):
+            out["idle_grace"] = arg[13:]
         i += 1
 
     env = os.environ
@@ -109,6 +132,9 @@ def parse_args(argv=None, root=None) -> Config:
     if not data_dir.is_absolute():
         data_dir = (root / data_dir).resolve()
     no_open = ("no-open" in out["flags"]) or env.get("OPEN") == "0"
+    idle_raw = out.get("idle_exit")
+    if idle_raw is None:
+        idle_raw = env.get("LV_IDLE_EXIT")
     return Config(
         root=root,
         data_dir=data_dir,
@@ -118,6 +144,8 @@ def parse_args(argv=None, root=None) -> Config:
         stop=("stop" in out["flags"]),
         help=("help" in out["flags"]),
         migrate=out.get("migrate"),
+        idle_exit=_pick_seconds(idle_raw, 30),
+        idle_grace=_pick_seconds(out.get("idle_grace"), 8),
     )
 
 
@@ -130,9 +158,11 @@ HELP_TEXT = """PaperLibrary 文献库服务（Python 版）
       --host <地址>       监听地址（默认 127.0.0.1，仅本机可访问）
       --data-dir <目录>   数据目录（默认 ./data）
       --no-open           启动后不自动打开浏览器
+      --idle-exit <秒>    关掉网页多久后自动停机（默认 30，0 = 不自动停）
+      --idle-grace <秒>   启动后多久内不判定空闲（默认 8，留给浏览器打开）
       --stop              停止正在运行的服务（数据会先存盘）
   -h, --help              显示这份帮助
 
 环境变量（命令行参数优先）：
-  LV_PORT / PORT、LV_HOST / HOST、LV_DATA_DIR / DATA_DIR、OPEN=0
+  LV_PORT / PORT、LV_HOST / HOST、LV_DATA_DIR / DATA_DIR、OPEN=0、LV_IDLE_EXIT
 """

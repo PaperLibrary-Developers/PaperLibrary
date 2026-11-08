@@ -4,8 +4,10 @@ PaperLibrary v1.2 Nexus（Nexus 文献库）
 一、启动（双击 PaperLibrary.cmd；发布包里也可双击 PaperLibrary.exe）
   双击后：窗口闪一下 → 浏览器自动打开 http://127.0.0.1:4321/
   服务在后台运行（pythonw，无黑框），关闭启动窗口不会停止服务。
-  停止：双击 stop.cmd（发布包里是 PaperLibrary-stop.exe 或 stop.cmd），
-        或在网页「设置 → 服务与数据」点「停止服务」。
+  自动停止：关掉网页（所有标签页）后 30 秒没有页面连着，服务会自己保存数据并退出、释放端口，
+            一般不需要手动停。（想改时间：启动参数 --idle-exit 秒数，0 = 不自动停）
+  立即停止（一般用不上）：双击 stop.cmd（发布包里是 PaperLibrary-stop.exe 或 stop.cmd）。
+            只在三种情况下需要它：不想等 30 秒、服务卡住点了没反应、或用 --idle-exit 0 启动时。
 
   如果浏览器没有自动打开：
     · 手动访问 http://127.0.0.1:4321/

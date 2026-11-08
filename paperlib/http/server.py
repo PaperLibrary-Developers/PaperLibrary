@@ -245,6 +245,12 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self):
         started = time.time()
         ctx = Ctx(self, self.command, self.path, self.router)
+        # 任何一次请求都算「有人在用」：把自动停机的空闲计时归零
+        # （网页的常规请求 + SSE 心跳都走这里；纯静态文件也算，宁可多续一次也别误停）
+        presence = getattr(getattr(self.router, "services", None), "runtime", None)
+        presence = getattr(presence, "presence", None)
+        if presence is not None:
+            presence.touch()
         try:
             split = urlsplit(self.path)
             pathname = unquote(split.path)

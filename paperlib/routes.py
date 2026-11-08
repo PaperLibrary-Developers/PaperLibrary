@@ -20,6 +20,7 @@ from paperlib.api import (
     files,
     import_,
     papers,
+    presence,
     search,
     settings,
     system,
@@ -34,6 +35,9 @@ ROUTES = [
     {"name": "shutdown-status", "methods": ("GET",), "pattern": "/api/shutdown/status", "handler": system.shutdown_status},
     {"name": "shutdown", "methods": ("POST",), "pattern": "/api/shutdown", "handler": system.shutdown_now},
     {"name": "release-build", "methods": ("POST",), "pattern": "/api/release/build", "handler": system.release_build},
+    # 在线监听：页面挂一条 SSE，关掉页面 30 秒后服务自动停（--idle-exit，0 = 关闭该行为）
+    {"name": "presence", "methods": ("GET",), "pattern": "/api/presence", "handler": presence.stream},
+    {"name": "presence-status", "methods": ("GET",), "pattern": "/api/presence/status", "handler": presence.status},
 
     # ---------------- 设置（方法不匹配时自己回 405） ----------------
     {"name": "prefs", "methods": ("*",), "pattern": "/api/prefs", "handler": settings.prefs},

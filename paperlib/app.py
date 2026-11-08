@@ -12,13 +12,28 @@ import webbrowser
 from pathlib import Path
 
 from paperlib.config import HELP_TEXT, parse_args
+# 停止逻辑在 paperlib/ctl.py（轻量模块）：`python -m paperlib --stop` 由 __main__ 直接调用，
+# 不需要把整个应用（含 PyMuPDF 依赖）import 起来；这里 re-export 兼容旧调用方。
+from paperlib.ctl import stop_running
 from paperlib.data.store import Store
+from paperlib.http.presence import PresenceTracker
 from paperlib.http.router import Router
 from paperlib.http.server import HttpServer, probe_port
 from paperlib.http.static import StaticHandler
 from paperlib.routes import ROUTES
 from paperlib.services import create_services
 from paperlib.util import ensure_dir, write_json_atomic
+
+
+def append_launcher_log(data_dir, message):
+    """往 data/logs/launcher.log 追加一行（服务是 pythonw 起的，没有控制台可看，只能落盘）。"""
+    try:
+        log_dir = Path(data_dir) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "launcher.log", "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + message + "\n")
+    except OSError:
+        pass
 
 
 def open_browser(url, log_dir=None):
@@ -54,24 +69,6 @@ def open_browser(url, log_dir=None):
         _log("cmd start 失败：" + str(exc))
     _log("浏览器打开失败，请手动访问：" + url)
     return False
-
-
-def stop_running(config):
-    import urllib.request
-
-    url = "http://127.0.0.1:%d/api/shutdown" % config.port
-    try:
-        req = urllib.request.Request(url, method="POST", data=b"")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            payload = json.loads(resp.read().decode("utf-8") or "{}")
-        if payload.get("ok"):
-            print("  已通知 %d 端口上的文献库停止运行（数据已保存）。" % config.port)
-            return 0
-        print("  停止失败：服务返回 %s" % payload, file=sys.stderr)
-        return 1
-    except Exception as exc:  # noqa: BLE001
-        print("  %d 端口上没有正在运行的文献库，无需停止。（%s）" % (config.port, exc))
-        return 0
 
 
 def seed_once_if_needed(config, store):
@@ -161,6 +158,12 @@ def main(argv=None, root=None):
 
     server = HttpServer(router, static_handler, config.host, config.port, verbose=True)
     services.runtime.on_shutdown = server.shutdown
+    # 在线监听：页面挂一条 SSE，全部关掉 idle_exit 秒后自动停机（0 = 关掉这个行为）
+    services.runtime.presence = PresenceTracker(
+        idle_seconds=config.idle_exit,
+        grace_seconds=config.idle_grace,
+        on_idle=lambda: shutdown("idle"),
+    )
     ensure_dir(config.data_dir)
     write_json_atomic(config.runtime_file, {
         "app": config.app, "pid": os.getpid(), "port": config.port, "host": config.host,
@@ -168,6 +171,10 @@ def main(argv=None, root=None):
     })
 
     def shutdown(reason="signal"):
+        if reason == "idle":
+            message = "页面已关闭 %d 秒，自动停止服务（端口 %d 已释放）" % (config.idle_exit, config.port)
+            print("\n" + message)
+            append_launcher_log(config.data_dir, message)
         try:
             store.save_now()
         finally:
@@ -185,6 +192,8 @@ def main(argv=None, root=None):
         pass
 
     server.start_background()
+    # 监控线程放在服务就绪之后：启动这几秒不算「空闲」
+    presence_on = services.runtime.presence.start()
     config.boot_ms = int((time.time() - config.started_at) * 1000)
     services.runtime.timing["bootMs"] = config.boot_ms
     print("")
@@ -194,6 +203,10 @@ def main(argv=None, root=None):
     print("  补充材料：%s" % store.attachments_dir)
     print("  共 %d 条文献。" % store.count())
     print("  进程号（PID）：%d，按 Ctrl+C 停止。" % os.getpid())
+    if presence_on:
+        print("  关掉网页 %d 秒后自动停止（--idle-exit 0 可关闭该行为）。" % config.idle_exit)
+    else:
+        print("  空闲自动停机：已关闭（--idle-exit 0）。")
     print("  也可以在网页「设置 → 服务与数据」里点「停止服务」。")
     print("")
     if not config.no_open:

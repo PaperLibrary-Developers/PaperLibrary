@@ -143,7 +143,7 @@ def main(argv=None):
         data_dir = args.data_dir or tempfile.mkdtemp(prefix="pl-contract-")
         env = dict(os.environ, PAPERLIB_SKIP_MIGRATE="1", PYTHONUTF8="1")
         proc = subprocess.Popen(
-            [sys.executable, "-m", "paperlib", "--port", str(args.port), "--no-open", "--data-dir", data_dir],
+            [sys.executable, "-m", "paperlib", "--port", str(args.port), "--no-open", "--idle-exit", "0", "--data-dir", data_dir],
             cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         if not wait_health(base):

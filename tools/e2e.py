@@ -98,7 +98,7 @@ def start_node(data_dir, port):
 def start_python(data_dir, port):
     env = dict(os.environ, PAPERLIB_SKIP_MIGRATE="1", PYTHONUTF8="1", QUIET="1")
     return subprocess.Popen(
-        [sys.executable, "-m", "paperlib", "--port", str(port), "--no-open", "--data-dir", str(data_dir)],
+        [sys.executable, "-m", "paperlib", "--port", str(port), "--no-open", "--idle-exit", "0", "--data-dir", str(data_dir)],
         cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
 

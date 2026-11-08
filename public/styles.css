@@ -1403,6 +1403,8 @@ a.external-title:hover { color: var(--accent-text); }
    原来 7 个字段平铺在 auto-fit 网格里：长路径被挤成一列、折成两行，
    第 7 项「最近保存」又孤零零落到第二行，既不对齐也不成组。 */
 .svc { display: grid; gap: 18px; }
+/* 服务面板底部那句「关掉网页会自动停」：小一档、浅色，不抢上面统计数字的注意力 */
+.svc-note { margin-top: 14px; font-size: 12px; line-height: 1.7; color: var(--faint); }
 .svc .svc-k { font-size: 11.5px; letter-spacing: .06em; line-height: 1.45; color: var(--faint); }
 
 /* 数据目录：单独一块，等宽字体 + 浅底，长路径整行铺开（旧版被塞进 1/6 列） */
