@@ -71,6 +71,13 @@ function deepHandler (ctx) {
   const { outlet, params, routeParams, isStale } = ctx
   const paperId = String((routeParams && routeParams.id) || params.get('paperId') || params.get('id') || '').trim()
 
+  /* 返回键：与文献详情页、新增文献页同一枚（btn.sm.ghost「← 返回」），放在标题上方一行。
+     有历史就回上一页（例如刚看完的那篇文献 / 搜索页），没有历史才退回全部文献。 */
+  const backBtn = h('button.btn.sm.ghost', {
+    type: 'button',
+    onclick: () => (history.length > 1 ? history.back() : go('#/'))
+  }, '← 返回')
+
   /* ---------------- 没带文献：先选一篇 ---------------- */
   if (!paperId) {
     const picker = paperPicker({
@@ -80,7 +87,8 @@ function deepHandler (ctx) {
       onPick: item => go('deep/' + encodeURIComponent(item.id))
     })
     outlet.replaceChildren(h('div.content',
-      h('div.page-head', h('div',
+      h('div.page-head', h('div', { style: { display: 'grid', gap: '6px' } },
+        h('div', backBtn),
         h('div.page-title', '深度分析'),
         h('div.page-sub', '单篇文献的 22 个字段 + 五维评分；结果存本地，下次直接看缓存。')
       )),
@@ -108,7 +116,9 @@ function deepHandler (ctx) {
 
   outlet.replaceChildren(h('div.content',
     h('div.page-head',
-      h('div', headTitle, headSub),
+      h('div', { style: { display: 'grid', gap: '6px' } },
+        h('div', backBtn),
+        h('div', headTitle, headSub)),
       h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, detailBtn, redoBtn)
     ),
     body
