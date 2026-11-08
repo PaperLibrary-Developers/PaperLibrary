@@ -9,6 +9,9 @@ PaperLibrary v1.2 Nexus（Nexus 文献库）
   立即停止（一般用不上）：双击 stop.cmd（发布包里是 PaperLibrary-stop.exe 或 stop.cmd）。
             只在三种情况下需要它：不想等 30 秒、服务卡住点了没反应、或用 --idle-exit 0 启动时。
 
+  不会用的时候：点左侧栏最下方的「📖 使用文档」，里面有完整的新手手册
+                （环境准备 → 逐步操作 → 参数解释 → 排错 → 示例）。
+
   如果浏览器没有自动打开：
     · 手动访问 http://127.0.0.1:4321/
     · 看 data\logs\launcher.log 里的原因

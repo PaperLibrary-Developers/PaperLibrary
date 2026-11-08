@@ -20,6 +20,8 @@ import { timeline as timelineHandler } from './views/timeline.mjs'
 import { figuresHandler } from './views/figures.mjs'
 import { compareHandler } from './views/compare.mjs'
 import { deepHandler } from './views/deep.mjs'
+// 使用文档（新手手册）：纯静态页，放在侧栏最下方
+import { guideHandler } from './views/guide.mjs'
 
 const { h, toast, debounce } = util
 
@@ -122,7 +124,7 @@ const { h, toast, debounce } = util
     document.body.classList.add('nav-open')
     syncSidebar()
     const { sidebar } = sideParts()
-    const first = sidebar && sidebar.querySelector('.side-close, .nav-item')
+    const first = sidebar && sidebar.querySelector('.side-close, .nav-item, .side-doc')
     if (first) { try { first.focus({ preventScroll: true }) } catch (err) {} }
   }
 
@@ -222,6 +224,9 @@ const { h, toast, debounce } = util
       const target = item.getAttribute('data-nav')
       const active = activePath === target || (target !== '/' && activePath.startsWith(target + '/'))
       item.classList.toggle('active', active)
+      // aria-current 也一起同步：侧栏只切 class 不重建，光靠渲染时写的那次会一直是旧的
+      if (active) item.setAttribute('aria-current', 'page')
+      else item.removeAttribute('aria-current')
     }
     // 顶栏重建：注意只替换 header 本身，出口容器（#outlet）在 main 下面，不受影响
     const oldTopbar = document.getElementById('topbar')
@@ -319,15 +324,31 @@ const { h, toast, debounce } = util
         navItem('深度分析', '#/deep', '🔬', null, activePath === '/deep'),
         navItem('设置与备份', '#/settings', '⚙', null, activePath === '/settings')
       ),
-      h('div.side-foot',
-        footStats,
-        footMissing,
-        h('span', { style: { marginTop: '6px', lineHeight: '1.7' } },
-          '搜标签：在搜索框输入 # 会有联想，',
-          h('br'),
-          '或直接写 ', h('span.kbd', '#Transformer')
+      // 底部区块：文档入口 + 统计/提示。用 margin-top:auto 整体贴底，
+      // 这样入口正好落在「共 N 条 · N 个标签」上方那一块，而不是挤在功能导航里
+      h('div.side-bottom',
+        h('button.side-doc' + (activePath === '/guide' ? '.active' : ''), {
+          type: 'button',
+          'data-nav': '/guide',
+          'aria-current': activePath === '/guide' ? 'page' : null,
+          onclick: () => {
+            go('#/guide')
+            closeDrawer({ deferFocus: true })
+          }
+        },
+          h('span.nav-ico', '📖'),
+          h('span', '使用文档')
         ),
-        h('span', h('span.kbd', 'Ctrl'), ' + ', h('span.kbd', 'K'), ' 快速搜索')
+        h('div.side-foot',
+          footStats,
+          footMissing,
+          h('span', { style: { marginTop: '6px', lineHeight: '1.7' } },
+            '搜标签：在搜索框输入 # 会有联想，',
+            h('br'),
+            '或直接写 ', h('span.kbd', '#Transformer')
+          ),
+          h('span', h('span.kbd', 'Ctrl'), ' + ', h('span.kbd', 'K'), ' 快速搜索')
+        )
       )
     )
   }
@@ -597,6 +618,8 @@ const { h, toast, debounce } = util
     add('/compare', compareHandler)
     add('/deep', deepHandler)
     add('/deep/:id', deepHandler)
+    // 使用文档：静态页，不依赖任何接口，所以放在最后注册（不会被 :id 之类吃掉）
+    add('/guide', guideHandler)
   }
 
   /* 在线心跳：每个页面挂一条 SSE（/api/presence）。

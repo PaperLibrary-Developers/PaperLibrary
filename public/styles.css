@@ -208,7 +208,17 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .tag-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .tag-chip .n { opacity: .6; font-size: 11px; font-variant-numeric: tabular-nums; }
 
-.side-foot { margin-top: auto; padding: 0 10px; font-size: 11.5px; color: var(--faint); display: grid; gap: 3px; }
+/* 底部区块：文档入口 + 统计提示，整块用 margin-top:auto 贴到侧栏底部 */
+.side-bottom { margin-top: auto; display: grid; gap: 9px; }
+/* 使用文档入口：位置在底部、样式沿用导航项（含激活态），但不占功能导航那条主线 */
+.side-doc {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 10px; border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--muted); font-size: 13.5px;
+}
+.side-doc:hover { background: var(--surface-3); color: var(--text); }
+.side-doc.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.side-foot { padding: 0 10px; font-size: 11.5px; color: var(--faint); display: grid; gap: 3px; }
 .side-foot span { font-variant-numeric: tabular-nums; }
 
 .main {
@@ -924,6 +934,95 @@ a.external-title:hover { color: var(--accent-text); }
 .md a { color: var(--accent-text); border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
 .md hr { margin: 1.4em 0; }
 .md .ref { color: var(--accent-text); background: var(--accent-soft); border-radius: 4px; padding: 0 4px; font-size: 13px; }
+
+/* ---------- 使用文档（新手手册 #/guide） ----------
+   正文复用 .md 的排版（衬线标题、表格、代码块），这里只补文档页特有的骨架：
+   页头、粘性目录、章节编号、提示块、截图位。 */
+.doc-page { max-width: 1140px; }
+.doc-head { margin-bottom: 24px; }
+.doc-kicker { font-size: 11px; letter-spacing: .18em; color: var(--faint); }
+.doc-title { font-family: var(--font-serif); font-size: 31px; line-height: 1.25; margin: 6px 0 8px; letter-spacing: -.01em; }
+.doc-lede { margin: 0; color: var(--muted); font-size: 14.5px; line-height: 1.85; }
+.doc-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.doc-chip {
+  font-size: 11.5px; color: var(--muted); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
+}
+.doc-jump { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.doc-jump-label { font-size: 12px; color: var(--faint); }
+.doc-jump-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--accent-text);
+  border-radius: 8px; padding: 5px 11px; font-size: 13px;
+}
+.doc-jump-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+.doc-grid { display: grid; grid-template-columns: 186px minmax(0, 820px); gap: 34px; align-items: start; }
+.doc-toc {
+  position: sticky; top: 16px; display: flex; flex-direction: column; gap: 1px;
+  border-left: 1px solid var(--border); padding-left: 12px;
+}
+.doc-toc-head { font-size: 11px; letter-spacing: .14em; color: var(--faint); margin-bottom: 6px; }
+.doc-toc-item {
+  display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left;
+  border: 0; background: none; padding: 5px 0; font-size: 13px; color: var(--muted); line-height: 1.5;
+}
+.doc-toc-item:hover { color: var(--accent-text); }
+.doc-toc-num { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+.doc-sec { scroll-margin-top: 14px; }
+.doc-sec + .doc-sec { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); }
+.doc-h2 { display: flex; gap: 10px; align-items: baseline; font-family: var(--font-serif); font-size: 22px; margin: 0 0 10px; }
+.doc-num {
+  font-family: var(--font-mono); font-size: 11.5px; font-weight: 700; letter-spacing: .04em;
+  color: var(--accent-text); background: var(--accent-soft); border-radius: 6px; padding: 3px 7px;
+}
+.doc-lead { margin: 0 0 14px; color: var(--muted); }
+.doc-sub { margin-top: 20px; }
+.doc-sub h3 { font-size: 15.5px; margin: 0 0 8px; }
+.doc-td-key { font-weight: 600; white-space: nowrap; }
+/* 表格外壳：宽表格在自己身上滚，别把整页顶宽（1fr 轨道的自动最小宽度会跟着表走） */
+.doc-table-wrap { overflow-x: auto; margin: 0 0 1em; }
+.doc-table-wrap .doc-table { margin-bottom: 0; }
+
+.doc-code { position: relative; }
+.doc-code pre { margin-bottom: 12px; }
+.doc-code-cap { font-size: 11.5px; color: var(--faint); margin-bottom: 4px; }
+.doc-copy {
+  position: absolute; top: 8px; right: 8px; padding: 3px 8px; font-size: 11.5px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted);
+  opacity: 0; transition: opacity .15s;
+}
+.doc-code:hover .doc-copy, .doc-copy:focus-visible { opacity: 1; }
+.doc-copy:hover { color: var(--accent-text); border-color: var(--accent); }
+
+.doc-call {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  background: var(--surface-2); border-radius: var(--radius-sm); padding: 10px 13px; margin: 14px 0;
+}
+.doc-call-title { font-size: 13px; font-weight: 650; margin-bottom: 3px; }
+.doc-call-body { font-size: 13.5px; line-height: 1.75; color: var(--muted); }
+.doc-call-body > *:last-child { margin-bottom: 0; }
+.doc-call--warn { border-left-color: var(--star); }
+.doc-call--danger { border-left-color: var(--danger); background: var(--danger-soft); }
+
+/* 触屏没有 hover，复制按钮常显 */
+@media (hover: none) {
+  .doc-copy { opacity: 1; }
+}
+
+/* 窄屏：目录从左侧竖排改成顶部横排 chips */
+@media (max-width: 980px) {
+  /* minmax(0, 1fr)：纯 1fr 的自动最小宽度是内容宽度，宽表格会把整页撑出横向滚动 */
+  .doc-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .doc-toc {
+    position: static; border-left: 0; border-top: 1px solid var(--border);
+    padding: 10px 0 0; flex-direction: row; flex-wrap: wrap; gap: 4px 14px;
+  }
+  .doc-toc-head { display: none; }
+  /* 横排时不要整行占满，否则七条会各占一行、白占半屏 —— 收成 chips 更好扫 */
+  .doc-toc-item { width: auto; font-size: 12.5px; gap: 6px; }
+  .doc-title { font-size: 25px; }
+}
 
 /* 引用块 */
 .cite-box { display: grid; gap: 8px; }
