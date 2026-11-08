@@ -22,6 +22,55 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
    */
   let batch = { selectMode: false, selected: new Set() }
 
+  /**
+   * 「空库」的起步板：三条真实可用的入库路径，点整张卡片就能去对应页面。
+   *
+   * 为什么不只是一个「新增文献」按钮：新库打开时整页空白，用户既不知道能做什么，
+   * 也不知道有几条路可走（拖 PDF / 扫描已有目录 / 粘 DOI）。这里把三条路摆出来，
+   * 每条都写明「要动哪里」，空页面就不再是一个死胡同。
+   */
+  function emptyStart () {
+    const way = (icon, no, title, desc, goText, onclick) => h('button.start-way', {
+      type: 'button',
+      onclick
+    },
+      h('div.start-way-ico', icon),
+      h('div.start-way-h', h('span.n', no + ' '), title),
+      h('div.start-way-d', desc),
+      h('div.start-go', goText + ' →')
+    )
+
+    const cap = (icon, title, desc) => h('div.start-cap',
+      h('span.start-cap-ico', icon),
+      h('span.start-cap-t', title),
+      h('span.start-cap-d', desc)
+    )
+
+    return h('div.start',
+      h('div.start-mark', h('img', { src: '/paperlibrary-mark.png', alt: '', draggable: 'false' })),
+      h('h2.start-title', '欢迎使用 PaperLibrary'),
+      h('p.start-sub', '当前文献库还没有文献。挑一种方式开始，半分钟就能建好第一条：'),
+      h('div.start-ways',
+        way('📥', '方式一', '直接拖入 PDF',
+          '把下载好的 PDF 拖进新建页的虚线框，题录与正文自动解析，一次可以拖多篇。',
+          '去新建页', () => go('#/new')),
+        way('🗂', '方式二', '放进文件夹后扫描',
+          '手上已有一堆 PDF：放进 data/article/papers/，到设置页点「扫描」，自动识别成文献。',
+          '打开扫描', () => go('#/settings')),
+        way('🔗', '方式三', '粘贴 DOI 抓题录',
+          '还没下载原文也行：粘一个 DOI 回车，标题、作者、期刊、摘要自动补齐。',
+          '去粘贴 DOI', () => go('#/new'))
+      ),
+      // 能力一览：库建起来之后能做什么。它收尾整块面板，一行人扫完就知道这软件的价值。
+      h('div.start-caps',
+        cap('🔍', '题录 + 全文检索', '中英混搜、#标签、字段与布尔'),
+        cap('🤖', 'AI 总结与对话', '配了模型即可用'),
+        cap('🖼', '图表画廊', '按图注跨文献找图'),
+        cap('📊', '横向对比', '2–8 篇按模板出表')
+      )
+    )
+  }
+
   /** 离开列表页时清掉（app.js 里的页面切换会调），免得勾选跟着跑到别的页面 */
   function resetListBatch () {
     batch = { selectMode: false, selected: new Set() }
@@ -111,6 +160,14 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
 
       // 注意用 util.replace 而不是 replaceChildren：浏览器会把 null 当成字符串插进去，
       // 页面上就多出一个写着 "null" 的文本节点（反馈 #7 的截图就是这个）
+      // 空库时这一条筛选没有意义（0 条还筛什么），直接收起，把注意力留给起步板。
+      // 注意 #list-bar 的内联样式里带着 display:grid，hidden 属性压不住它，只能改 style。
+      if (info && info.total === 0 && !hasAnyFilter(q) && !q.q) {
+        util.replace(bar)
+        bar.style.display = 'none'
+        return
+      }
+      bar.style.display = ''
       util.replace(bar,
         h('div.list-bar',
           h('span.list-summary', { text: summary.join(' · ') }),
@@ -144,18 +201,23 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
       if (!items.length) {
         const q = state.query
         const hasFilter = hasAnyFilter(q)
+        if (!hasFilter) {
+          // 真正的空库：给起步板（三条入库路径），而不是一句「文献库还是空的」
+          results.replaceChildren(emptyStart())
+          return
+        }
         results.replaceChildren(h('div.empty',
-          h('div.big', hasFilter ? '没有匹配的文献' : '文献库还是空的'),
-          h('p', { text: hasFilter ? '试试换个关键词，或清空筛选条件。' : '从添加第一篇文献开始吧。' }),
+          h('div.big', '没有匹配的文献'),
+          h('p', { text: '试试换个关键词，或清空筛选条件。' }),
           h('div', { style: { display: 'flex', gap: '8px' } },
             h('button.btn.primary', { type: 'button', onclick: () => { go('#/new' ); } }, '＋ 新增文献'),
-            hasFilter ? h('button.btn', {
+            h('button.btn', {
               type: 'button',
               onclick: () => {
                 state.query = { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: state.query.sort, page: 1 }
                 setHash('', queryToParams())
               }
-            }, '清空筛选') : null
+            }, '清空筛选')
           )
         ))
         return
