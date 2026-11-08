@@ -449,6 +449,9 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
 
     /* ---------- 服务信息 ---------- */
 
+    /* 停止服务按钮：panel(title, body, right) 只接受三个参数，它过去以第 4 个参数传入，
+       一直没有被渲染（「服务与数据」面板里看不到它）。这里保留实现、暂不挂载，
+       与改动前保持一致；要启用只需把它放进上面的 body。 */
     const stopButton = h('button.btn.danger', {
       type: 'button',
       onclick: async () => {
@@ -475,26 +478,41 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       }
     }, '停止服务')
 
+    /* 服务与数据：原来 7 个字段平铺在一个 auto-fit 网格里——单条长路径被挤成一列、
+       折成两行，第 7 项「最近保存」孤零零落到第二行，读起来既不对齐也没有分组。
+       改成「一块路径 + 两组统计」：路径整行铺开，统计按语义分成「文献」「服务」两组，
+       每组恰好 3 格等宽，任何宽度下都不会再出现落单的一格。 */
+    const statCell = (label, value) => h('div.svc-cell',
+      h('div.svc-v', String(value)),
+      h('div.svc-k', label))
+
     const infoPanel = panel('服务与数据',
-      h('div.meta-grid',
-        h('div.meta-cell', h('div.k', '数据目录'), h('div.v', { style: { fontFamily: 'var(--font-mono)', fontSize: '12.5px' } }, health.dataDir || '—')),
-        h('div.meta-cell', h('div.k', '文献总数'), h('div.v', String(stats.total != null ? stats.total : '—'))),
-        h('div.meta-cell', h('div.k', '已关联 PDF'), h('div.v', String(stats.withPdf != null ? stats.withPdf : '—'))),
-        h('div.meta-cell', h('div.k', '丢失的 PDF'), h('div.v', String(stats.pdfMissing != null ? stats.pdfMissing : '—'))),
-        h('div.meta-cell', h('div.k', '运行时长'), h('div.v', health.uptimeSeconds != null ? Math.max(1, Math.round(health.uptimeSeconds / 60)) + ' 分钟' : '—')),
-        h('div.meta-cell', h('div.k', '进程号 PID'), h('div.v', health.pid ? String(health.pid) : '—')),
-        h('div.meta-cell', h('div.k', '最近保存'), h('div.v', formatDate(health.updatedAt)))
-      ),
-      h('div', { style: { marginTop: '13px', display: 'grid', gap: '6px', color: 'var(--muted)', fontSize: '13.5px' } },
-        h('div', '· 所有数据都在你自己的电脑上：data/library.json 是文献题录，data/papers/ 是 PDF 副本，data/attachments/ 是补充材料。'),
-        h('div', '· 每次保存都会自动留一份备份到 data/backups/，最多保留 10 份。'),
-        h('div', '· 想换电脑？整个文件夹拷走即可；也可以点上面的「导出全部」带走一个 JSON。'),
-        h('div', '· 关掉网页不会丢数据；要停止服务，用下面的按钮或运行窗口里的 Ctrl + C。')
-      ),
-      h('div', { style: { marginTop: '15px', display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' } },
-        stopButton,
-        h('span.hint', '停止后双击「启动.cmd」即可重新开始')
+      h('div.svc',
+        h('div.svc-path',
+          h('div.svc-k', '数据目录'),
+          // 路径单独一块：等宽字体 + 浅底，长路径优先整行排完，真放不下才在分隔符处折行
+          h('div.svc-path-v', { title: health.dataDir || '' }, health.dataDir || '—')
+        ),
+        h('div.svc-group',
+          h('div.svc-group-head', '文献'),
+          h('div.svc-stats',
+            statCell('文献总数', stats.total != null ? stats.total : '—'),
+            statCell('已关联 PDF', stats.withPdf != null ? stats.withPdf : '—'),
+            statCell('丢失的 PDF', stats.pdfMissing != null ? stats.pdfMissing : '—')
+          )
+        ),
+        h('div.svc-group',
+          h('div.svc-group-head', '服务'),
+          h('div.svc-stats',
+            statCell('运行时长', health.uptimeSeconds != null ? Math.max(1, Math.round(health.uptimeSeconds / 60)) + ' 分钟' : '—'),
+            statCell('进程号 PID', health.pid ? String(health.pid) : '—'),
+            statCell('最近保存', formatDate(health.updatedAt))
+          )
+        )
       )
+      /* 注：原来的四行说明已删除；panel(title, body, right) 只收三个参数，
+         下面这枚「停止服务」按钮过去是以第 4 个参数传入的、从未被渲染，
+         这里保持「不渲染」不变，只把参数收敛成 panel 真正支持的两个。 */
     )
 
     /* ---------- 学术检索来源（OpenAlex Key 与配额） ---------- */

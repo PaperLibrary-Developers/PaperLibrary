@@ -1370,6 +1370,53 @@ a.external-title:hover { color: var(--accent-text); }
 .deep-running { font-size: 14px; }
 .deep-error { color: var(--danger); font-size: 13.5px; }
 
+/* ---------- 设置页 · 服务与数据 ----------
+   结构：一块「数据目录」+ 两组统计（文献 / 服务），每组 3 格等宽。
+   原来 7 个字段平铺在 auto-fit 网格里：长路径被挤成一列、折成两行，
+   第 7 项「最近保存」又孤零零落到第二行，既不对齐也不成组。 */
+.svc { display: grid; gap: 18px; }
+.svc .svc-k { font-size: 11.5px; letter-spacing: .06em; line-height: 1.45; color: var(--faint); }
+
+/* 数据目录：单独一块，等宽字体 + 浅底，长路径整行铺开（旧版被塞进 1/6 列） */
+.svc-path { display: grid; gap: 6px; }
+.svc-path-v {
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px;
+  padding: 9px 11px; user-select: all;
+  overflow-wrap: anywhere;
+}
+
+/* 组标题后面拖一条细线：两段统计一眼能分开，又不额外占上下空间 */
+.svc-group { display: grid; gap: 10px; }
+.svc-group-head {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .08em; color: var(--muted);
+}
+.svc-group-head::after { content: ''; flex: 1 1 auto; height: 1px; background: var(--border); }
+
+.svc-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 20px; }
+.svc-cell { display: grid; gap: 3px; min-width: 0; }
+/* 数值大、标签小：先看到数，再看它是什么；等宽数字让上下两行的个位对齐 */
+.svc-v {
+  font-size: 18px; font-weight: 600; line-height: 1.3;
+  color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+
+/* 窄屏：3 列放不下（「2026-11-07 11:29」这类长值会折行）就改成
+   「标签左、数值右」的单列清单，而不是折成 2+1 那种半截排列 */
+@media (max-width: 640px) {
+  .svc { gap: 16px; }
+  .svc-stats { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .svc-cell {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+    padding: 7px 0;
+  }
+  .svc-cell + .svc-cell { border-top: 1px solid var(--border); }
+  .svc-cell .svc-v { order: 2; font-size: 15.5px; }
+  .svc-cell .svc-k { order: 1; }
+}
+
 @media (max-width: 880px) {
   .fig-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .cmp-table { min-width: 520px; }
