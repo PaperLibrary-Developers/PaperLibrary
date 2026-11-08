@@ -23,7 +23,8 @@ start "" "%PYW%" -m paperlib --port 4321 --no-open
 if errorlevel 1 (
   echo.
   echo Startup timed out. See data\logs\launcher.log
-  echo Or run "start-debug.cmd" to see the error in a console.
+  echo Or run this in a console to see the error:
+  echo   runtime\portable\python.exe -m paperlib --port 4321 --no-open
   pause
 )
 exit /b 0

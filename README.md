@@ -5,6 +5,12 @@ PaperLibrary（Python 分析引擎）与 Sci-lib（Web 壳）合并后的单产�
 
 ## 运行（开发）
 
+依赖只有 PyMuPDF 与 Pillow，其余全是标准库（发布包已内置便携运行时，无需安装）：
+
+    python -m pip install -r requirements.txt
+
+Windows 上也可以直接双击 `PaperLibrary.cmd` 启动、`stop.cmd` 停止（有 `runtime/portable` 时优先用它）。
+
     python -m paperlib --port 4321            # 启动，自动打开浏览器
     python -m paperlib --port 4321 --no-open  # 不自动开浏览器
     python -m paperlib --stop                 # 停止正在运行的服务
@@ -19,7 +25,7 @@ PaperLibrary（Python 分析引擎）与 Sci-lib（Web 壳）合并后的单产�
     vendor/      pdfjs（内置阅读器）+ katex（可选公式）
     tools/       契约测试、e2e、bench、便携打包、启动器
     test/        unittest 用例
-    docs/        工程计划 v2、前置核查、内部接口、工程报告
+    docs/        工程计划 v2、前置核查、内部接口、工程报告（不入库，见下节）
 
 ## 测试
 
@@ -32,6 +38,15 @@ PaperLibrary（Python 分析引擎）与 Sci-lib（Web 壳）合并后的单产�
 
 - data/ 不入 git；settings.json / websearch.json / sources.json 里有 API Key（明文、只在本机）。
 - 发布包不包含任何用户数据。
+
+## 关于 docs/（只在本机）
+
+`docs/` 按用户要求 **不纳入版本库**（`.gitignore` 里有 `/docs/`），因此克隆本仓库后看不到
+工程计划、前置核查报告、工程报告 v1、功能回归表、离线验收清单等文档——这不是缺文件。
+这些文档只保留在作者本机的 `docs/` 目录里；需要对外发布时应单独拷贝，不要指望从 git 里取。
+
+对外可交付的契约以 `shared/contracts/api.md`（端点契约）、`shared/contracts/data-model.md`
+（数据模型）、`shared/contracts/api-snapshot.json`（快照）为准，这三个是入库的。
 
 ## 合并来源
 

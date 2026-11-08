@@ -1,0 +1,12 @@
+# PaperLibrary v1.0 Nexus —— 开发环境依赖
+#
+# 只用发布包（runtime/portable/ 已内置，离线可用）时不需要装任何东西；
+# 只有在自己机器上用系统 Python 跑源码/跑测试时才需要：
+#
+#     python -m pip install -r requirements.txt
+#
+# 其余全部是标准库。缺 PyMuPDF 时 PDF 文本提取会降级（接口回 400 并提示安装），
+# 不影响入库、检索、阅读、引用等主流程。
+
+PyMuPDF>=1.24,<2
+Pillow>=10,<13

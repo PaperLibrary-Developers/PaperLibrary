@@ -1,6 +1,7 @@
 """组装发布包 dist/PaperLibrary-<date>/ 并实测体积（目标 ≤120MB）。
 
-包含：public/ shared/ paperlib/ vendor/ tools/ 启动.cmd 停止.cmd 使用说明.txt runtime/portable/
+包含：public/ shared/ paperlib/ vendor/ tools/ PaperLibrary.cmd stop.cmd 使用说明.txt runtime/portable/
+      （启动器 exe 由 make_launcher.ps1 现场编译：PaperLibrary.exe / PaperLibrary-stop.exe）
 排除：data/ docs/ test/ .git/ __pycache__/ dist/ runtime/build runtime/*.exe
 用法：python tools/release.py [--out dist] [--skip-portable]
 """
@@ -17,8 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INCLUDE = ["public", "shared", "paperlib", "vendor", "tools",
-           "启动.exe", "停止.exe", "启动.cmd", "停止.cmd", "启动-调试.cmd",
-           "使用说明.txt", "README.md"]
+           "PaperLibrary.cmd", "stop.cmd",
+           "使用说明.txt", "README.md", "requirements.txt"]
 SKIP_DIRS = {"__pycache__", ".git", "node_modules"}
 LIMIT_KB = 120 * 1024
 
@@ -78,8 +79,8 @@ def main(argv=None):
                 cwd=str(target), capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=180,
             )
-            if proc.returncode == 0 and (target / "启动.exe").is_file():
-                print("[release] 启动器已生成：启动.exe / 停止.exe")
+            if proc.returncode == 0 and (target / "PaperLibrary.exe").is_file():
+                print("[release] 启动器已生成：PaperLibrary.exe / PaperLibrary-stop.exe")
             else:
                 print("[release] 启动器编译失败（将只用 .cmd）：" + ((proc.stderr or proc.stdout or "")[-200:]))
         except Exception as exc:  # noqa: BLE001
@@ -101,7 +102,7 @@ def main(argv=None):
         "files": sum(len(files) for _, _, files in os.walk(target)),
         "sha256": {},
     }
-    for key in ("paperlib/routes.py", "paperlib/app.py", "public/index.html", "启动.cmd"):
+    for key in ("paperlib/routes.py", "paperlib/app.py", "public/index.html", "PaperLibrary.cmd"):
         path = target / key
         if path.is_file():
             manifest["sha256"][key] = hashlib.sha256(path.read_bytes()).hexdigest()

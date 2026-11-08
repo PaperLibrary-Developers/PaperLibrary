@@ -1,15 +1,17 @@
 PaperLibrary v1.0 Nexus（Nexus 文献库）
 ========================================
 
-一、启动（推荐双击「启动.exe」；没有就用「启动.cmd」）
+一、启动（双击 PaperLibrary.cmd；发布包里也可双击 PaperLibrary.exe）
   双击后：窗口闪一下 → 浏览器自动打开 http://127.0.0.1:4321/
   服务在后台运行（pythonw，无黑框），关闭启动窗口不会停止服务。
-  停止：双击「停止.cmd」，或在网页「设置 → 服务与数据」点「停止服务」。
+  停止：双击 stop.cmd（发布包里是 PaperLibrary-stop.exe 或 stop.cmd），
+        或在网页「设置 → 服务与数据」点「停止服务」。
 
   如果浏览器没有自动打开：
     · 手动访问 http://127.0.0.1:4321/
     · 看 data\logs\launcher.log 里的原因
-    · 或运行「启动-调试.cmd」，窗口里会直接显示错误
+    · 或在命令行里直接运行（窗口里会显示错误）
+        runtime\portable\python.exe -m paperlib --port 4321 --no-open
 
 二、Windows「无法验证发布者」提示怎么处理
   从网络下载的 zip 解压后，Windows 会给 .cmd/.exe 打上「网络来源」标记，于是双击时
@@ -45,6 +47,7 @@ PaperLibrary v1.0 Nexus（Nexus 文献库）
 
 六、常见问题
   打不开页面：先看 data\logs\launcher.log；确认 4321 没有被别的程序占用；
-             或用「启动-调试.cmd」换端口：runtime\portable\python.exe -m paperlib --port 4322
+             需要换端口时在命令行运行：
+               runtime\portable\python.exe -m paperlib --port 4322 --no-open
   公式不显示：vendor\katex 缺失时会降级为原文显示，不影响文献功能。
   内置阅读器空白：vendor\pdfjs 缺失时自动回退浏览器自带查看器。

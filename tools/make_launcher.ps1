@@ -107,14 +107,15 @@ class Launcher
             Thread.Sleep(300);
         }
         Log("start timeout");
-        MessageBox.Show("Startup timed out (24s).\r\nSee data\\logs\\launcher.log or run the debug cmd.", "PaperLibrary v1.0 Nexus");
+        MessageBox.Show("Startup timed out (24s).\r\nSee data\\logs\\launcher.log, or run PaperLibrary.cmd in a console.", "PaperLibrary v1.0 Nexus");
         return 1;
     }
 }
 '@
 
-$startExe = Join-Path $OutDir ([string]([char]0x542F) + [string]([char]0x52A8) + ".exe")
-$stopExe = Join-Path $OutDir ([string]([char]0x505C) + [string]([char]0x6B62) + ".exe")
+# 产物名与仓库根脚本一致（全 ASCII，避免中文路径在 cmd/powershell 里的编码问题）
+$startExe = Join-Path $OutDir "PaperLibrary.exe"
+$stopExe = Join-Path $OutDir "PaperLibrary-stop.exe"
 Add-Type -TypeDefinition $src -ReferencedAssemblies @("System.dll", "System.Windows.Forms.dll") -OutputAssembly $startExe -OutputType WindowsApplication
 Copy-Item $startExe $stopExe -Force
 Write-Output ("launcher built: " + $startExe + " / " + $stopExe)
