@@ -144,7 +144,6 @@ function figuresHandler (ctx) {
       h('div.list-bar.fig-summary-row',
         h('span.list-summary', { text: summaryBits.join(' · ') }),
         h('div.list-controls',
-          typeSelect,
           extractBtn,
           hasFilter()
             ? h('button.btn.sm.ghost', {
@@ -154,11 +153,14 @@ function figuresHandler (ctx) {
             : null
         )
       ),
-      /* 搜索行：不放大占位的 span，让输入框自己铺满整行（单篇筛选胶囊在时才让位给它） */
-      h('div.list-bar.fig-search-row',
-        h('div.search-wrap.fig-search', h('span.ico', '⌕'), search),
-        paperChip
+      /* 搜索行：类型下拉在左、搜索框在右，整组居中且限宽 720px（搜索框不再拉满整行） */
+      h('div.fig-search-row',
+        h('div.fig-search-group',
+          typeSelect,
+          h('div.search-wrap.fig-search', h('span.ico', '⌕'), search)
+        )
       ),
+      paperChip ? h('div.fig-chip-row', paperChip) : null,
       h('div.hint',
         '图表由 PDF 自动提取（渲染页面 + 图注匹配）。点缩略图看大图；在文献详情页也能进入单篇图表。')
     )

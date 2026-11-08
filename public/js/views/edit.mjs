@@ -501,7 +501,8 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
 
     /* ======== ② 手动录入（折叠，自带表单） ======== */
 
-    const manualBody = h('div', { hidden: true })
+    // 内容区自己是一块白面板；折叠条只是一枚按钮，不再被整条 panel 背景包住
+    const manualBody = h('section.panel.manual-body', { hidden: true })
     const manualArrow = h('span', '▸')
     const manualLabel = h('span', { style: { marginLeft: '6px' } }, '展开 手动录入选项')
     const manualToggle = h('button.btn', { type: 'button' }, manualArrow, manualLabel)
@@ -619,55 +620,59 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
     }, '取消')
 
     // 手动录入是一个**真正独立的表单**（自带提交/取消），与上面的智能导入完全不共用
-    const manualForm = h('form.form', {
+    const manualForm = h('form.form.manual-form', {
       'data-manual-form': '',
       onsubmit: ev => { ev.preventDefault(); saveManual() }
     })
 
+    /* 12 栅格排布：标题/作者/标签/摘要整行，年份-类型-收藏-评分为 3+3+3+3，
+       期刊 6 + 卷/期/页码 各 2，DOI/链接 各 6，BibTeX 4 + 关键词 8。
+       原来用 auto-fit 的 .form-grid，行内项数不同（3 项 vs 4 项）会留下参差的空列。 */
     util.replace(manualForm, ...[
       h('div.hint', '信息不全的非标文献（未发表的学位论文、内部报告等）在这里手工创建；这里的表单与上面的智能导入互不影响。'),
       h('div.field', h('label', '标题 *'), mf.title),
       h('div.field', h('label', '作者'), mf.authors),
-      h('div.form-grid',
-        h('div.field', h('label', '年份'), mf.year),
-        h('div.field', h('label', '类型'), mType),
-        h('div.field', h('label', '收藏'),
-          h('label', { style: { display: 'flex', gap: '7px', alignItems: 'center', fontSize: '13.5px' } },
-            mStarred, '加入我的收藏')),
-        h('div.field', h('label', '我的评分'), mRatingSlot)
-      ),
-      h('div.form-grid',
-        h('div.field', h('label', '期刊 / 会议'), mf.venue),
-        h('div.field', h('label', '卷'), mf.volume),
-        h('div.field', h('label', '期'), mf.issue),
-        h('div.field', h('label', '页码'), mf.pages)
-      ),
-      h('div.form-grid',
-        h('div.field', h('label', 'DOI'), mf.doi),
-        h('div.field', h('label', '链接'), mf.url),
-        h('div.field', h('label', 'BibTeX 键'), mf.bibtexKey)
-      ),
+      h('div.field.col-3', h('label', '年份'), mf.year),
+      h('div.field.col-3', h('label', '类型'), mType),
+      h('div.field.col-3', h('label', '收藏'),
+        h('div.field-control',
+          h('label', { style: { display: 'flex', gap: '7px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } },
+            mStarred, '加入我的收藏'))),
+      h('div.field.col-3', h('label', '我的评分'), h('div.field-control', mRatingSlot)),
+      h('div.field.col-6', h('label', '期刊 / 会议'), mf.venue),
+      h('div.field.col-2', h('label', '卷'), mf.volume),
+      h('div.field.col-2', h('label', '期'), mf.issue),
+      h('div.field.col-2', h('label', '页码'), mf.pages),
+      h('div.field.col-6', h('label', 'DOI'), mf.doi),
+      h('div.field.col-6', h('label', '链接'), mf.url),
+      h('div.field.col-4', h('label', 'BibTeX 键'), mf.bibtexKey),
+      h('div.field.col-8', h('label', '原文关键词'), mf.keywords),
       h('div.field', h('label', '标签'), mTags, h('div.hint', '标签决定你在侧栏和标签看板里怎么找到它')),
-      h('div.field', h('label', '原文关键词'), mf.keywords),
       h('div.field', h('label', '摘要'), mf.summary),
-      h('div.form-actions', { style: { position: 'static', borderTop: '0', paddingBottom: '0' } },
+      h('div.manual-actions',
         manualCancelBtn,
         h('span.hint', '快捷键：Ctrl + S 保存'),
         h('div.right', manualSaveBtn))
     ])
-    manualForm.style.padding = '12px 2px 2px'
-    manualForm.style.gap = '13px'
     manualBody.replaceChildren(manualForm)
 
-    const manualZone = h('section.panel', { id: 'manual-entry-zone' },
-      h('div.panel-head', { style: { padding: '0', border: '0' } }, manualToggle),
+    const manualZone = h('div', { id: 'manual-entry-zone' },
+      // 只有按钮这一行，宽度跟按钮内容走；右侧不再拖一条白色长条
+      h('div.manual-toggle-row', manualToggle),
       manualBody
     )
 
     /* ---------------- 组装 ---------------- */
 
+    /* 头部：返回键沿用文献详情页那枚（btn.sm.ghost「← 返回」），
+       放在标题上方一行；有历史就回上一页（比如刚看的那篇文献），没有就退回全部文献。 */
     const pageHead = h('div.page-head',
-      h('div',
+      h('div', { style: { display: 'grid', gap: '6px' } },
+        h('div',
+          h('button.btn.sm.ghost', {
+            type: 'button',
+            onclick: () => (history.length > 1 ? history.back() : go('#/'))
+          }, '← 返回')),
         h('div.page-title', '新增文献'),
         h('div.page-sub', '拖 PDF 或粘贴 DOI 抓取题录；信息不全的文献用下面的手动录入。')))
 

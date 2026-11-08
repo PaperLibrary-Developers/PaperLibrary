@@ -924,6 +924,38 @@ a.external-title:hover { color: var(--accent-text); }
 }
 .form-actions .right { margin-left: auto; display: flex; gap: 9px; }
 
+/* ---------- 新增文献 · 手动录入折叠区 ----------
+   折叠条由「整条白色 panel」改成「只有按钮自己是白块」：
+   原来 section.panel 的白底一直铺到右边界，按钮右边拖一条长白条，很突兀。 */
+.manual-toggle-row { display: flex; }
+.manual-body { padding: 16px 18px 14px; }
+/* 12 栅格：整行字段占满，其余按语义跨列；比 auto-fit 更整齐，不会留下参差空列 */
+.manual-form { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px 16px; }
+.manual-form > * { grid-column: 1 / -1; }
+.manual-form .col-2 { grid-column: span 2; }
+.manual-form .col-3 { grid-column: span 3; }
+.manual-form .col-4 { grid-column: span 4; }
+.manual-form .col-6 { grid-column: span 6; }
+.manual-form .col-8 { grid-column: span 8; }
+/* 输入框与下拉框统一盒高；勾选框 / 星级按同一条高度撑开，
+   这样「年份 / 类型 / 收藏 / 我的评分」四格的控件底部落在同一条线上 */
+.manual-form .input,
+.manual-form .select { height: 42px; box-sizing: border-box; }
+.manual-form .field-control { display: flex; align-items: center; min-height: 42px; padding: 0 1px; }
+.manual-actions {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  padding-top: 14px; margin-top: 2px; border-top: 1px solid var(--border);
+}
+.manual-actions .right { margin-left: auto; display: flex; gap: 9px; }
+@media (max-width: 1000px) {
+  .manual-form .col-2, .manual-form .col-3, .manual-form .col-4,
+  .manual-form .col-6, .manual-form .col-8 { grid-column: span 6; }
+}
+@media (max-width: 620px) {
+  .manual-form .col-2, .manual-form .col-3, .manual-form .col-4,
+  .manual-form .col-6, .manual-form .col-8 { grid-column: 1 / -1; }
+}
+
 .chips-input {
   display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px; background: var(--surface);
@@ -1196,12 +1228,24 @@ a.external-title:hover { color: var(--accent-text); }
 }
 
 /* ---------- 图表画廊（views/figures.mjs） ---------- */
-/* 筛选条：第一行「概要 + 类型下拉」，第二行「搜索框」，两行左右边界都贴内容区。
-   第二行原来在输入框后面塞了一个 flex:1 的占位 span，它和输入框平分剩余宽度，
-   于是输入框只占一半、右半边空白，看着跟上一行的类型下拉错位——占位已从 JS 去掉，
-   这里只补两处细节：输入框不必为顶栏那个 Ctrl K 徽章预留右内边距。 */
+/* 筛选条：第一行「概要 + 操作」，第二行「类型下拉 + 搜索框」这一组居中。
+   搜索框不再拉满整行，和左边的类型下拉一起收在 720px 内居中，两者等高。 */
 .fig-search .input { padding-right: 11px; }
-.fig-search-row .search-wrap { min-width: 0; }
+.fig-search-row { display: flex; justify-content: center; }
+.fig-search-group {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; max-width: 720px; min-width: 0;
+}
+.fig-search-group .search-wrap { flex: 1 1 auto; min-width: 0; }
+/* 两个控件的盒子高度对齐（.input 与 .select 的默认内边距/行高不同，会差 2-3px） */
+.fig-search-group .input,
+.fig-search-group .select { height: 38px; box-sizing: border-box; }
+.fig-search-group .select { flex: 0 1 auto; max-width: 180px; }
+/* 窄屏把下拉收窄，别和搜索框五五分 */
+@media (max-width: 620px) {
+  .fig-search-group .select { max-width: 132px; }
+}
+.fig-chip-row { display: flex; justify-content: center; }
 
 .fig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; align-items: stretch; }
 .fig-card {
