@@ -23,6 +23,13 @@ import { deepHandler } from './views/deep.mjs'
 
 const { h, toast, debounce } = util
 
+  /* 前端版本号：品牌区显示的那一行就取这里，升版本只改这一处。
+     页面 <title> 里的版本号在 public/index.html，需要同步改（两处都有注释互指）。 */
+  const UI_VERSION = 'v1.2'
+  // 同一个版本号也挂到 <html data-ui-version>：排查「页面是不是旧代码」时，
+  // 控制台一句 document.documentElement.dataset.uiVersion 就够了
+  document.documentElement.dataset.uiVersion = UI_VERSION
+
   /* ---------------- 全局状态（P4.4：本体在 state/store.mjs） ---------------- */
   /* 这里保留一个指向同一对象的本地别名给渲染代码用；写入统一走 patch()，
      视图/组件通过 getState() 读、通过 patch() 写，不再碰全局对象上的 state。 */
@@ -277,16 +284,26 @@ const { h, toast, debounce } = util
         type: 'button', 'aria-label': '关闭导航栏', title: '关闭导航栏（Esc）',
         onclick: () => closeDrawer()
       }, '✕'),
-      h('div.brand',
-        // logo 是图片（白底），所以放在一个白色小圆角块里，深浅主题下都立得住
+      // 品牌区：标记 + （字标 + NEXUS 胶囊）+ 版本号。
+      // 版本号仍在字标下方这一行（跟改造前同一个位置），只是从「v1.0 Nexus」收成「v1.2」——
+      // 产品线名已经由胶囊表达，再写一遍是重复；整块高度仍由 logo 小块（36px）决定，导航位置不变。
+      h('div.brand', {
+        title: 'PaperLibrary ' + UI_VERSION + ' Nexus',
+        'aria-label': 'PaperLibrary ' + UI_VERSION + ' Nexus'
+      },
+        // logo 是图片（自带浅灰底），放在同底色的小圆角块里，图与块之间不露接缝
         h('div.brand-mark', h('img', { src: '/paperlibrary-mark.png', alt: 'PaperLibrary', draggable: 'false' })),
-        // 名称按 logo 的配色：Sci 深蓝、-lib 青色（颜色在 CSS 变量里，夜间主题会换成亮一点的同色系）
+        // 名称按 logo 的配色：Paper 深蓝、Library 青色（颜色在 CSS 变量里，夜间主题会换成亮一点的同色系）
         h('div.brand-name',
-          h('div.brand-word',
-            h('span.brand-navy', 'Paper'),
-            h('span.brand-teal', 'Library')
+          h('div.brand-row',
+            h('div.brand-word',
+              h('span.brand-navy', 'Paper'),
+              h('span.brand-teal', 'Library')
+            ),
+            // 产品线标记：跟字标同一行、字号小一档，不抢字标的视觉重心
+            h('span.brand-badge', 'NEXUS')
           ),
-          h('span.brand-ver', 'v1.0 Nexus')
+          h('span.brand-ver', UI_VERSION)
         )
       ),
       h('nav.nav', { 'aria-label': '主导航' }, totalEl, starredEl,

@@ -20,6 +20,11 @@
   /* 品牌配色（取自 logo：深蓝的书 + 青色的 S） */
   --brand-navy: #1b2d56;
   --brand-teal: #0e9aab;
+  /* NEXUS 胶囊：参考样式是「青蓝 → 宝蓝 → 靛紫」的对角多色渐变（不是单色蓝的明暗），
+     白字压在中段最深处，对比度仍然够（约 4.8:1）。三处色值取自参考图取样 */
+  --badge-bg: linear-gradient(135deg, #119dea 0%, #2369eb 52%, #4a4ae6 100%);
+  --badge-fg: #fff;
+  --badge-shadow: 0 1px 2px rgba(30, 45, 120, .28), 0 3px 10px rgba(40, 70, 210, .18);
   --danger: #b4453a;
   --danger-soft: #fbeeec;
   --tag-bg: #efece2;
@@ -49,6 +54,11 @@ html[data-theme="night"] {
   --accent-text: #a5dcc7;
   --brand-navy: #a9c6f2;
   --brand-teal: #4fd2e2;
+  /* 夜间也保留同一套多色渐变（它是品牌标记，不该跟着主题变成另一块颜色），
+     只把整体压暗一档、投影加重，免得在黑底上「发光」 */
+  --badge-bg: linear-gradient(135deg, #0f8ee0 0%, #2259e2 52%, #4745df 100%);
+  --badge-fg: #fff;
+  --badge-shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 3px 12px rgba(46, 70, 190, .22);
   --star: #e0ac4b;
   --danger: #e2837a;
   --danger-soft: #35231f;
@@ -128,29 +138,47 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 /* 顶栏的抽屉开关：任何尺寸都在，用 aria-expanded 表达当前状态 */
 .side-toggle { flex: none; }
 .side-toggle.on { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
-.brand { display: flex; align-items: center; gap: 10px; padding: 0 6px 4px; }
+/* ---------- 品牌区：标记 +（字标 + NEXUS 胶囊）+ 版本号，与下方导航项同高居中 ---------- */
+.brand { display: flex; align-items: center; gap: 8px; padding: 0 6px 4px; min-width: 0; }
 .brand-mark {
-  /* logo 图片是白底的：给它一个白色圆角块，深浅主题下都干净（夜间也不会是一块突兀的白） */
-  width: 44px; height: 34px; border-radius: 9px; background: #fff;
+  /* logo 图自带 #f4f5f7 浅灰底：小块用同一个底色，图与块之间看不出接缝（换成纯白会露出一块灰）
+     深色主题下它是一块浅色小卡片，靠边框和投影跟侧栏分开，不当成「突兀的白」 */
+  flex: none; width: 42px; height: 36px; border-radius: 10px; background: #f4f5f7;
   border: 1px solid var(--border); display: grid; place-items: center; overflow: hidden;
   box-shadow: var(--shadow-1);
 }
 .brand-mark img { width: 100%; height: 100%; object-fit: contain; display: block; padding: 2px 3px; }
-/* 品牌名：原来用的是衬线字体（看着像宋体），改成无衬线并加粗；Sci 深蓝、-lib 青色，跟 logo 一致 */
+/* 品牌名：无衬线加粗；Paper 深蓝、Library 青色，跟 logo 一致。
+   17.5px 是「字标 + 胶囊单行不折行」的上限（侧栏 250px 宽，减内边距后可用约 210px） */
 .brand-name {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0;
   font-family: var(--font-sans);
-  font-size: 21px;
+  font-size: 17.5px;
   font-weight: 800;
-  letter-spacing: -.015em;
-  line-height: 1.05;
+  letter-spacing: -.02em;
+  line-height: 1.1;
 }
+/* 第一行：字标 + 胶囊。单独包一层，版本号才能落到第二行而不挤压这一行 */
+.brand-name .brand-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .brand-name .brand-navy { color: var(--brand-navy, #1b2d56); }
 .brand-name .brand-teal { color: var(--brand-teal, #0e9aab); }
-.brand-name .brand-word { display: flex; align-items: baseline; }
+.brand-name .brand-word { display: flex; align-items: baseline; white-space: nowrap; }
+/* 版本号：字标下方的小字（跟改造前同一个位置，只把「v1.0 Nexus」收成「v1.2」）。
+   字号/字重/颜色都单独压住，避免被 .brand-name 的 17.5px/800 继承成第二个标题 */
 .brand-name .brand-ver {
-  display: block; margin-top: 3px;
-  font-size: 11px; font-weight: 600; letter-spacing: .04em;
-  color: var(--muted); text-transform: none;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .06em; line-height: 1.2;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+  padding-left: 1px; white-space: nowrap;
+}
+/* NEXUS 胶囊：宽字距大写，高度约字标的 1.4 倍，做产品线标记而不是第二个标题 */
+.brand-badge {
+  flex: none; padding: 2px 5px; border-radius: 6px;
+  background: var(--badge-bg); color: var(--badge-fg);
+  font-size: 9px; font-weight: 800; letter-spacing: .12em; line-height: 1.5;
+  text-transform: uppercase; white-space: nowrap;
+  box-shadow: var(--badge-shadow);
+  /* 字标带降部（p/y），按盒子居中会比视觉基线偏低 1px，这里补回来 */
+  transform: translateY(-1px);
 }
 
 .nav { display: flex; flex-direction: column; gap: 2px; }

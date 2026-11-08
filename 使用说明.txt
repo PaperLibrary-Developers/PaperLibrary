@@ -1,4 +1,4 @@
-PaperLibrary v1.0 Nexus（Nexus 文献库）
+PaperLibrary v1.2 Nexus（Nexus 文献库）
 ========================================
 
 一、启动（双击 PaperLibrary.cmd；发布包里也可双击 PaperLibrary.exe）

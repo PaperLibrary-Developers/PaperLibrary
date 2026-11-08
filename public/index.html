@@ -3,7 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PaperLibrary v1.0 Nexus · 我的文献资料库</title>
+<!-- 前端版本哨兵：DevTools 里看 <meta name="ui-version"> 或 document.documentElement.dataset.uiVersion
+     就能确认页面是不是当前代码（侧栏那一行版本号取的是 js/app.mjs 的 UI_VERSION） -->
+<meta name="ui-version" content="v1.2">
+<!-- 版本号：这里的标题与 public/js/app.mjs 的 UI_VERSION 要一起改（那里是侧栏显示的那一行） -->
+<title>PaperLibrary v1.2 Nexus · 我的文献资料库</title>
 <meta name="color-scheme" content="light dark">
 <link rel="icon" type="image/png" href="/paperlibrary-icon.png">
 <link rel="stylesheet" href="/styles.css">
@@ -12,7 +16,7 @@
 </head>
 <body>
   <div class="app-loading" id="boot">
-    <div class="boot-mark"><img src="/paperlibrary-mark.png" alt="PaperLibrary v1.0 Nexus" style="width:100%;height:100%;object-fit:contain"></div>
+    <div class="boot-mark"><img src="/paperlibrary-mark.png" alt="PaperLibrary v1.2 Nexus" style="width:100%;height:100%;object-fit:contain"></div>
     <p>正在打开你的文献库…</p>
   </div>
   <div id="app" hidden></div>
