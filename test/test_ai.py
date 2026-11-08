@@ -45,6 +45,7 @@ class _FakeHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
         self.server.last_body = json.loads(raw.decode("utf-8") or "{}")
+        self.server.last_path = self.path
         self.server.last_headers = {k.lower(): v for k, v in self.headers.items()}
         spec = self.server.spec or {}
         if spec.get("sleep"):
@@ -81,6 +82,7 @@ class FakeOpenAI:
         self.server.spec = spec or {}
         self.server.last_body = None
         self.server.last_headers = None
+        self.server.last_path = None
         self.thread = threading.Thread(target=self.server.serve_forever,
                                        kwargs={"poll_interval": 0.02}, daemon=True)
         self.thread.start()
@@ -224,6 +226,71 @@ class LLMSettingsTests(AiTestBase):
         llm.update({"model": None, "baseURL": None})
         self.assertEqual(llm.settings["model"], "deepseek-chat")
         self.assertEqual(llm.settings["baseURL"], "https://api.deepseek.com/v1")
+
+    def test_anthropic_preset_is_offered(self):
+        ids = [item["id"] for item in PRESETS]
+        self.assertIn("anthropic", ids)
+        self.assertIn("deepseek", ids)
+
+
+class AnthropicProtocolTests(AiTestBase):
+    """Claude 走的是 /v1/messages + x-api-key，不是 OpenAI 的 chat/completions。"""
+
+    def make_llm(self):
+        llm = LLM(self.tmp)
+        llm.update({
+            "provider": "anthropic",
+            "baseURL": self.fake.base_url,
+            "model": "claude-test",
+            "apiKey": "sk-ant-123",
+        })
+        return llm
+
+    def test_stream_moves_system_to_top_level_and_parses_native_events(self):
+        self.fake.set({"sse": [
+            {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "你好"}},
+            {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "，世界"}},
+        ]})
+        llm = self.make_llm()
+        seen = []
+        result = llm.stream(seen.append, {"messages": [
+            {"role": "system", "content": "规则 A"},
+            {"role": "system", "content": "材料 B"},
+            {"role": "assistant", "content": "上一轮回答"},
+            {"role": "user", "content": "这一轮问题"},
+        ]})
+        self.assertEqual(result["text"], "你好，世界")
+        self.assertEqual(seen, ["你好", "，世界"])
+
+        self.assertEqual(self.fake.server.last_path, "/v1/messages")
+        headers = self.fake.server.last_headers
+        self.assertEqual(headers.get("x-api-key"), "sk-ant-123")
+        self.assertTrue(headers.get("anthropic-version"))
+        self.assertNotIn("authorization", headers)
+
+        body = self.fake.server.last_body
+        self.assertIn("规则 A", body["system"])
+        self.assertIn("材料 B", body["system"])
+        # messages 里不能再有 system；开头若是 assistant 会被丢掉（Anthropic 要求 user 开头）
+        self.assertEqual([m["role"] for m in body["messages"]], ["user"])
+        self.assertEqual(body["messages"][0]["content"], "这一轮问题")
+        self.assertTrue(body["stream"])
+
+    def test_non_stream_reads_content_blocks(self):
+        self.fake.set({"json": {"content": [{"type": "text", "text": "连接正常"}],
+                                "usage": {"input_tokens": 3, "output_tokens": 2}}})
+        llm = self.make_llm()
+        result = llm.chat([{"role": "user", "content": "在吗"}])
+        self.assertEqual(result["text"], "连接正常")
+        self.assertEqual(result["usage"]["input_tokens"], 3)
+
+    def test_openai_provider_still_uses_chat_completions(self):
+        self.fake.set({"sse": [delta("好")]})
+        llm = LLM(self.tmp)
+        llm.update({"provider": "deepseek", "baseURL": self.fake.base_url,
+                    "model": "deepseek-chat", "apiKey": "sk-test"})
+        llm.stream(None, {"messages": [{"role": "user", "content": "在吗"}]})
+        self.assertEqual(self.fake.server.last_path, "/v1/chat/completions")
 
     def test_readiness(self):
         llm = LLM(self.tmp)

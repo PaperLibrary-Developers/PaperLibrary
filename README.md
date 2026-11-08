@@ -24,7 +24,7 @@ Windows 上也可以直接双击 `PaperLibrary.cmd` 启动（有 `runtime/portab
 
 ## 目录
 
-    public/      前端壳（ESM，PaperLibrary 品牌；9 视图含 3 个合并新视图）
+    public/      前端壳（ESM，PaperLibrary 品牌；视图在 public/js/views/）
     shared/      契约文档 + 前后端共用纯函数（Python 移植在 shared/pure/）
     paperlib/    Python 后端（http / api / domain / adapters / data）
     vendor/      pdfjs（内置阅读器）+ katex（可选公式）

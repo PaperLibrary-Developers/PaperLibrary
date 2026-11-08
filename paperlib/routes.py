@@ -13,6 +13,7 @@ from __future__ import annotations
 from paperlib.api import (
     ai,
     chat,
+    copilot,
     folders,
     compare,
     deep,
@@ -42,6 +43,10 @@ ROUTES = [
     {"name": "folders-update", "methods": ("PATCH",), "pattern": "/api/folders", "handler": folders.rename_folder},
     {"name": "folders-delete", "methods": ("DELETE",), "pattern": "/api/folders", "handler": folders.delete_folder},
     {"name": "folders-move", "methods": ("POST",), "pattern": "/api/folders/move", "handler": folders.move_papers},
+
+    # 全库智能问答助手：概览（非流式）+ 提问（SSE）
+    {"name": "copilot-overview", "methods": ("GET",), "pattern": "/api/copilot/overview", "handler": copilot.overview},
+    {"name": "copilot-ask", "methods": ("POST",), "pattern": "/api/copilot/ask", "handler": copilot.ask},
 
     # 在线监听：页面挂一条 SSE，关掉页面 30 秒后服务自动停（--idle-exit，0 = 关闭该行为）
     {"name": "presence", "methods": ("GET",), "pattern": "/api/presence", "handler": presence.stream},

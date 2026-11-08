@@ -128,6 +128,10 @@
       body: Object.assign({ paperId }, options || {})
     }),
 
+    // 全库智能问答助手（Copilot）
+    copilotOverview: () => request('GET', '/api/copilot/overview'),
+    copilotAsk: (body, hooks) => streamSse('/api/copilot/ask', body, hooks),
+
     // 网络检索（Exa）
     webSearchSettings: () => request('GET', '/api/websearch/settings'),
     webSaveSettings: patch => request('PUT', '/api/websearch/settings', { body: patch }),

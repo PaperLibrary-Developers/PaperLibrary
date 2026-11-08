@@ -22,6 +22,9 @@ import { compareHandler } from './views/compare.mjs'
 import { deepHandler } from './views/deep.mjs'
 // 使用文档（新手手册）：纯静态页，放在侧栏最下方
 import { guideHandler } from './views/guide.mjs'
+// 全库智能问答助手（Copilot）：常驻侧栏底部、使用文档上面（可折叠，不占主区）
+import { mountCopilot } from './copilot.mjs'
+import { copilotHandler } from './views/copilot.mjs'
 // 文件夹分类：侧栏树、导入选目录、管理器共用的组件
 import * as foldersUi from './folders.mjs'
 
@@ -395,6 +398,9 @@ const { h, toast, debounce } = util
       // 底部区块：文档入口 + 统计/提示。用 margin-top:auto 整体贴底，
       // 这样入口正好落在「共 N 条 · N 个标签」上方那一块，而不是挤在功能导航里
       h('div.side-bottom',
+        // PaperHub Copilot：常驻、可折叠的问答模块（使用文档上面）。
+        // 放侧栏而不是独立页面：新手提问时不用离开文献列表，主内容区也不被挤占。
+        mountCopilot(),
         h('button.side-doc' + (activePath === '/guide' ? '.active' : ''), {
           type: 'button',
           'data-nav': '/guide',
@@ -686,6 +692,8 @@ const { h, toast, debounce } = util
     add('/compare', compareHandler)
     add('/deep', deepHandler)
     add('/deep/:id', deepHandler)
+    // 智能问答助手：每次进入都会拉一次概览（就绪状态 + 库藏统计）
+    add('/copilot', copilotHandler)
     // 使用文档：静态页，不依赖任何接口，所以放在最后注册（不会被 :id 之类吃掉）
     add('/guide', guideHandler)
   }

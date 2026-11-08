@@ -4,8 +4,8 @@
 契约名：llm.chat(messages) / llm.stream(messages)
 
 设计要点（与 Node 版逐条对齐）：
-  · 只支持「OpenAI 兼容」接口（DeepSeek / OpenAI / Kimi / 通义 / 本地 Ollama 都是这个格式），
-    换模型只改 baseURL + 模型名；
+  · 默认走「OpenAI 兼容」接口（DeepSeek / OpenAI / Kimi / 通义 / 本地 Ollama 都是这个格式），
+    换模型只改 baseURL + 模型名；provider=anthropic 时切到 Claude 原生协议（/v1/messages、x-api-key）；
   · 密钥存 data/settings.json，只在本机；public_settings 绝不回传密钥（只给 hasKey/keyHint）；
   · stream() 用 urllib 直连 SSE，逐块回调 on_delta，usage 原样带回；chat() 是非流式版本；
   · 错误一律抛 LLMError，消息是中文可读文案（401/402/404/429 各有专门说法），
@@ -27,6 +27,9 @@ PRESETS = [
     {"id": "deepseek", "label": "DeepSeek（推荐，便宜、中文好）",
      "baseURL": "https://api.deepseek.com/v1", "model": "deepseek-chat",
      "docs": "https://platform.deepseek.com/api_keys"},
+    {"id": "anthropic", "label": "Claude（Anthropic，长文与推理强）",
+     "baseURL": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-5",
+     "docs": "https://console.anthropic.com/settings/keys"},
     {"id": "openai", "label": "OpenAI", "baseURL": "https://api.openai.com/v1",
      "model": "gpt-4o-mini", "docs": "https://platform.openai.com/api-keys"},
     {"id": "moonshot", "label": "Kimi（月之暗面）", "baseURL": "https://api.moonshot.cn/v1",
@@ -60,6 +63,7 @@ DEFAULT_SETTINGS = {
 DEFAULT_TIMEOUT_MS = 180000
 TIMEOUT_MESSAGE = "请求超时（可以到设置里调小 max_tokens，或换更快的模型）"
 LOCAL_URL_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost)", re.I)
+ANTHROPIC_VERSION = "2023-06-01"
 
 
 class LLMError(RuntimeError):
@@ -216,6 +220,35 @@ class LLM:
     def install_hint(self):
         return "还没有配置大模型：到「设置 → 大模型」填入 API Key（或切到本地 Ollama）"
 
+    # ---------- 协议分支：OpenAI 兼容 / Anthropic ----------
+    def _is_anthropic(self):
+        """只按 provider 判定，不动历史配置：老数据没有这个字段，仍走 OpenAI 兼容。"""
+        return str(self.settings.get("provider") or "").strip().lower() == "anthropic"
+
+    def _anthropic_parts(self, messages):
+        """Anthropic 的 system 是顶层字段，且 messages 必须 user 开头、角色交替。"""
+        system = []
+        chat = []
+        for item in messages or []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "user")
+            content = item.get("content")
+            if content is None:
+                continue
+            if role == "system":
+                system.append(str(content))
+                continue
+            if role not in ("user", "assistant"):
+                role = "user"
+            if chat and chat[-1]["role"] == role:
+                chat[-1]["content"] = str(chat[-1]["content"]) + "\n\n" + str(content)
+            else:
+                chat.append({"role": role, "content": content})
+        while chat and chat[0]["role"] != "user":
+            chat.pop(0)
+        return "\n\n".join(system), chat
+
     # ---------- 拼消息 ----------
     def build_user_message(self, paper, excerpt):
         """拼给模型的用户消息（题录 + 正文节选）。"""
@@ -238,23 +271,43 @@ class LLM:
         return text + body
 
     def _payload(self, opts, messages, stream):
-        temperature = _num(self.settings.get("temperature"), 0.3) or 0.3
+        temperature = _num(self.settings.get("temperature"), 0.3)
         max_tokens = _num(opts.get("maxTokens"), 0) or _num(self.settings.get("maxTokens"), 0) or 1200
+        if self._is_anthropic():
+            system, chat = self._anthropic_parts(messages)
+            payload = {
+                "model": self.settings.get("model"),
+                "stream": bool(stream),
+                # Anthropic 的 temperature 只接受 0–1：设置里填 1.5 这类值直接 clamp
+                "temperature": min(1.0, max(0.0, temperature if temperature else 0.3)),
+                "max_tokens": int(max_tokens),
+                "messages": chat,
+            }
+            if system:
+                payload["system"] = system
+            return payload
         return {
             "model": self.settings.get("model"),
             "stream": bool(stream),
-            "temperature": temperature,
+            "temperature": temperature if temperature else 0.3,
             "max_tokens": int(max_tokens),
             "messages": list(messages or []),
         }
 
     def _open(self, payload, timeout_ms):
-        """POST {baseURL}/chat/completions，返回可读的响应对象；错误统一折成 LLMError。"""
-        url = str(self.settings.get("baseURL") or "").rstrip("/") + "/chat/completions"
-        headers = {"Content-Type": "application/json"}
+        """POST 到对应协议的对话端点，返回可读的响应对象；错误统一折成 LLMError。"""
+        base = str(self.settings.get("baseURL") or "").rstrip("/")
         key = str(self.settings.get("apiKey") or "")
-        if key:
-            headers["Authorization"] = "Bearer " + key
+        if self._is_anthropic():
+            url = base + "/messages"
+            headers = {"Content-Type": "application/json", "anthropic-version": ANTHROPIC_VERSION}
+            if key:
+                headers["x-api-key"] = key
+        else:
+            url = base + "/chat/completions"
+            headers = {"Content-Type": "application/json"}
+            if key:
+                headers["Authorization"] = "Bearer " + key
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(url, data=data, headers=headers, method="POST")
         timeout = max(1.0, _num(timeout_ms, DEFAULT_TIMEOUT_MS) / 1000.0)
@@ -279,6 +332,15 @@ class LLM:
             raise LLMError(TIMEOUT_MESSAGE) from None
 
     # ---------- 调用 ----------
+    def _delta_of(self, chunk):
+        """一条 SSE JSON 里的增量文本（两种协议）。"""
+        if self._is_anthropic():
+            if not isinstance(chunk, dict) or chunk.get("type") != "content_block_delta":
+                return ""
+            delta = chunk.get("delta")
+            return str(delta.get("text") or "") if isinstance(delta, dict) else ""
+        return _delta_text(chunk)
+
     def stream(self, on_delta=None, options=None):
         """流式对话：on_delta(text_chunk) 反复调用；返回 {"text", "usage"}。
 
@@ -306,7 +368,7 @@ class LLM:
                     chunk = json.loads(chunk_text)
                 except ValueError:
                     continue
-                delta = _delta_text(chunk)
+                delta = self._delta_of(chunk)
                 if delta:
                     pieces.append(delta)
                     if on_delta:
@@ -347,8 +409,12 @@ class LLM:
         if isinstance(choices, list) and choices and isinstance(choices[0], dict):
             choice = choices[0]
         content = ""
+        if self._is_anthropic() and isinstance(data, dict):
+            for block in data.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    content += str(block.get("text") or "")
         message = choice.get("message")
-        if isinstance(message, dict):
+        if isinstance(message, dict) and not content:
             content = message.get("content") or ""
         if not content:
             content = choice.get("text") or ""
