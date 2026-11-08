@@ -81,6 +81,38 @@ class SearchIndex:
                     self.postings.pop(key, None)
         self.docs.pop(paper_id, None)
 
+    def _match_token(self, token):
+        """查一个查询词命中的 (paper_id, 字段权重, 折扣系数)。
+
+        先按整词精确查；**整词一个都没命中**时才放宽成「前缀 > 子串」，
+        这样 "cucur" 也能命中索引里的 "cucurbiturils"，而精确命中的排序权重不受影响。
+        放宽只在精确零命中时发生，常用词的查询路径不会变慢。
+        """
+        hits = []
+        exact = False
+        for field in INDEX_FIELDS:
+            bucket = self.postings.get(_token_key(field, token))
+            if not bucket:
+                continue
+            exact = True
+            factor = 1.0 if len(token) > 1 else 0.35
+            for paper_id, weight in bucket.items():
+                hits.append((paper_id, weight, factor))
+        # 单字不做模糊：会把整库都捞出来，反而更糟
+        if exact or len(token) < 2:
+            return hits
+        for key, bucket in self.postings.items():
+            _, _, word = key.partition("\u0000")
+            if word.startswith(token):
+                factor = 0.7          # 前缀命中：接近整词，但要排在精确命中后面
+            elif token in word:
+                factor = 0.45         # 词内子串：更弱
+            else:
+                continue
+            for paper_id in bucket:
+                hits.append((paper_id, bucket[paper_id], factor))
+        return hits
+
     def search(self, query):
         """返回 [{id, score}] 按分数降序；空查询返回 None（表示不过滤）。"""
         terms = query_terms(query)
@@ -95,15 +127,10 @@ class SearchIndex:
             bigrams = [t for t in unique if len(t) > 1]
             hit = {}
             for token in unique:
-                for field in INDEX_FIELDS:
-                    bucket = self.postings.get(_token_key(field, token))
-                    if not bucket:
-                        continue
-                    factor = 1.0 if len(token) > 1 else 0.35
-                    for paper_id, weight in bucket.items():
-                        entry = hit.setdefault(paper_id, {"total": 0.0, "matched": set()})
-                        entry["total"] += weight * factor
-                        entry["matched"].add(token)
+                for paper_id, weight, factor in self._match_token(token):
+                    entry = hit.setdefault(paper_id, {"total": 0.0, "matched": set()})
+                    entry["total"] += weight * factor
+                    entry["matched"].add(token)
             accepted = {}
             for paper_id, entry in hit.items():
                 if len(bigrams) >= 2:
@@ -114,6 +141,14 @@ class SearchIndex:
                         continue
                 coverage = len(entry["matched"]) / float(len(unique))
                 accepted[paper_id] = entry["total"] * (0.6 + coverage * coverage * 0.9)
+            if not accepted and len(bigrams) >= 2:
+                # 中文长词（无空格、靠 bigram 定位）严格「全 bigram 命中」常常落空：
+                # 查「单原子催化」匹配不到「单原子电催化剂」——中间多了一个「电」字就断链。
+                # 这里按同一套「交集为空退化为并集」的思路放宽：任一 bigram 命中就算，
+                # 分数打个 8 折，保证排在严格命中之后。
+                for paper_id, entry in hit.items():
+                    coverage = len(entry["matched"]) / float(len(unique))
+                    accepted[paper_id] = entry["total"] * (0.6 + coverage * coverage * 0.9) * 0.8
             per_term.append(accepted)
         if not per_term:
             return None

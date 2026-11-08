@@ -250,7 +250,10 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
           '搜索之后，这里会按年份、作者、期刊、类型、标签列出当前结果集里的分布，可以多选细化。'))
         return
       }
-      facetBody.replaceChildren(
+      /* 末尾「清除全部筛选」在没有选中项时是 null：
+         Element.replaceChildren(null) 会把 null 转成文本 "null" 插进面板，
+         于是筛选栏最下面一直挂着一行 "null"。先过滤掉再塞。 */
+      facetBody.replaceChildren(...[
         h('div', { style: { fontSize: '12.4px', color: 'var(--muted)' } },
           '当前结果集 ' + lastFacets.total + ' 条' + (anySelected ? '（已筛）' : '')),
         ...FACET_GROUPS.map(g => renderFacetGroup(g, lastFacets[g.key])),
@@ -264,14 +267,17 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
             }
           }, '清除全部筛选')
           : null
-      )
+      ].filter(Boolean))
     }
 
-    async function refreshFacets (query) {
+    async function refreshFacets (query, seq) {
       try {
         const res = await api.queryFacets(Object.assign({}, query, { page: 1, pageSize: 1 }))
+        // 已经不是最新一次检索了：这份计数作废，别覆盖后发的结果
+        if (seq != null && seq !== searchSeq) return
         lastFacets = res && res.query ? res.query : null
       } catch (err) {
+        if (seq != null && seq !== searchSeq) return
         lastFacets = null
       }
       if (lastSession && lastSession.key === sessionKey) {
@@ -335,12 +341,14 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
     const input = h('input.input', {
       type: 'search',
       id: 'search-page-input',
-      placeholder: '搜索标题、作者、摘要、正文…（支持 AND / OR / NOT 与括号，#标签 可按标签筛选）',
+      placeholder: '搜索标题、作者、摘要、正文…（输入即搜，支持前缀 / 子串；AND / OR / NOT 与括号；#标签 可筛标签）',
       value: state.q,
       autocomplete: 'off',
+      // 输入即搜：防抖后只在结果区就地刷新，不重绘整页（重绘会把输入框连焦点一起换掉）
+      oninput: ev => scheduleLive(ev.target.value),
       onkeydown: ev => {
-        if (ev.key === 'Enter') { state.q = trim(ev.target.value); state.page = 1; apply() }
-        if (ev.key === 'Escape') { ev.target.value = ''; state.q = ''; state.page = 1; apply() }
+        if (ev.key === 'Enter') { ev.preventDefault(); flushLive(ev.target.value) }
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.target.value = ''; flushLive('') }
       }
     })
 
@@ -385,6 +393,44 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
         return
       }
       go('search', next)
+    }
+
+    /* ---------- 输入即搜（动态即时刷新） ----------
+       不经过 apply()/go()：那会改 hash → 触发整页重绘 → 输入框被换成新节点，打字直接断。
+       这里只改 state、静默同步地址栏、就地重画结果区，输入焦点全程保留。 */
+    const LIVE_DELAY = 160
+    let liveTimer = null
+
+    /** 地址栏跟着条件走，但用 replaceState（不产生历史、也不触发 hashchange） */
+    function syncUrlSilent () {
+      const next = toParams(state)
+      const qs = new URLSearchParams()
+      for (const [k, v] of Object.entries(next)) if (v !== '' && v != null) qs.set(k, String(v))
+      const hash = '#/search' + (qs.toString() ? '?' + qs.toString() : '')
+      if (location.hash === hash) return
+      try { history.replaceState(null, '', hash) } catch (err) { /* 隐私模式等：忽略 */ }
+    }
+
+    function scheduleLive (value) {
+      if (liveTimer) clearTimeout(liveTimer)
+      liveTimer = setTimeout(() => { liveTimer = null; runLive(value) }, LIVE_DELAY)
+    }
+
+    function flushLive (value) {
+      if (liveTimer) { clearTimeout(liveTimer); liveTimer = null }
+      runLive(value)
+    }
+
+    function runLive (value) {
+      const q = trim(value)
+      if (q === state.q) return
+      state.q = q
+      state.page = 1
+      syncUrlSilent()
+      patch({ lastSearchParams: toParams(state) })
+      renderChips()
+      // keepResults：输入过程中不要先把列表清成「正在检索…」，那样每敲一个字都会闪一下
+      runSearch(false, { keepResults: true })
     }
 
     /* ---------- 高级搜索面板 ---------- */
@@ -594,7 +640,12 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
       return query
     }
 
-    async function runSearch (force) {
+    /** 每次检索递增；响应回来时若已经不是最新一次，直接丢弃（打字快时防旧结果盖新结果） */
+    let searchSeq = 0
+
+    async function runSearch (force, options) {
+      const opts = options || {}
+      const seq = ++searchSeq
       if (!hasAnyCondition(state)) {
         lastResult = null
         renderResults()
@@ -615,14 +666,17 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
       }
       loading = true
       staleHint.hidden = true
-      renderResults()
+      // 输入即搜（keepResults）时不先把列表刷成「正在检索…」，否则每敲一个字都闪一下；
+      // 保留上一批结果，等新结果到了直接替换
+      if (!opts.keepResults) renderResults()
       const query = buildQueryParams()
       try {
         const res = await api.listPapers(query)
-        if (isStale()) return
+        if (isStale() || seq !== searchSeq) return
         lastResult = res
         rememberTitles(res.items || [])
       } catch (err) {
+        if (seq !== searchSeq) return
         lastResult = { total: 0, items: [], page: 1, pageCount: 1 }
         results.replaceChildren(h('div.empty',
           h('div.big', '搜索失败'),
@@ -644,7 +698,7 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
         external: (lastSession && lastSession.key === sessionKey && lastSession.external) || null
       }
       // facet 计数必须和主列表同源：用同一套参数再问一次服务端
-      await refreshFacets(query)
+      await refreshFacets(query, seq)
     }
 
     /* ---------- 外部检索结果区 ---------- */
@@ -1519,7 +1573,7 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
             h('div', { style: { flex: '1 1 320px', minWidth: '200px' } }, input),
             h('button.btn.primary', {
               type: 'button',
-              onclick: () => { state.q = trim(input.value); state.page = 1; apply() }
+              onclick: () => flushLive(input.value)
             }, '搜索'),
             advancedToggle
           ),
