@@ -13,6 +13,7 @@ from __future__ import annotations
 from paperlib.api import (
     ai,
     chat,
+    folders,
     compare,
     deep,
     export_extra,
@@ -35,6 +36,13 @@ ROUTES = [
     {"name": "shutdown-status", "methods": ("GET",), "pattern": "/api/shutdown/status", "handler": system.shutdown_status},
     {"name": "shutdown", "methods": ("POST",), "pattern": "/api/shutdown", "handler": system.shutdown_now},
     {"name": "release-build", "methods": ("POST",), "pattern": "/api/release/build", "handler": system.release_build},
+    # 文件夹分类（库内分类，类似资源管理器）：树 / 新建 / 重命名 / 删除 / 移动文献
+    {"name": "folders-list", "methods": ("GET",), "pattern": "/api/folders", "handler": folders.list_folders},
+    {"name": "folders-create", "methods": ("POST",), "pattern": "/api/folders", "handler": folders.create_folder},
+    {"name": "folders-update", "methods": ("PATCH",), "pattern": "/api/folders", "handler": folders.rename_folder},
+    {"name": "folders-delete", "methods": ("DELETE",), "pattern": "/api/folders", "handler": folders.delete_folder},
+    {"name": "folders-move", "methods": ("POST",), "pattern": "/api/folders/move", "handler": folders.move_papers},
+
     # 在线监听：页面挂一条 SSE，关掉页面 30 秒后服务自动停（--idle-exit，0 = 关闭该行为）
     {"name": "presence", "methods": ("GET",), "pattern": "/api/presence", "handler": presence.stream},
     {"name": "presence-status", "methods": ("GET",), "pattern": "/api/presence/status", "handler": presence.status},

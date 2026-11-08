@@ -117,7 +117,10 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
   border-right: 1px solid var(--border);
   padding: 20px 14px 28px;
   position: fixed; inset: 0 auto 0 0; width: var(--sidebar-w); height: 100vh; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 18px;
+  /* 间距与导航项一致（.nav 里也是 2px）：原来这里是 18px，
+     结果「设置与备份 → 分类文件夹」比「深度分析 → 设置与备份」多出 16px，
+     侧栏下半段看起来像被切成两截。品牌区与导航之间单独用 margin 给 16px。 */
+  display: flex; flex-direction: column; gap: 2px;
   z-index: 45;
   will-change: transform;
   transition: transform .26s cubic-bezier(.22, .61, .36, 1), box-shadow .26s ease;
@@ -181,7 +184,7 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
   transform: translateY(-1px);
 }
 
-.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav { display: flex; flex-direction: column; gap: 2px; margin-top: 16px; }
 .nav-item {
   display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm);
   color: var(--muted); font-size: 14px; border: 0; background: transparent; width: 100%; text-align: left;
@@ -207,6 +210,175 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .tag-chip:hover { border-color: var(--border-strong); }
 .tag-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .tag-chip .n { opacity: .6; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* ---------- 分类文件夹（侧栏树 / 选择器 / 管理器共用） ---------- */
+.side-folders { display: grid; gap: 2px; min-height: 0; }   /* 与 .nav 的 2px 一致 */
+.side-folders-head { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+/* 表头 = 开关，但排版与导航项完全相同：
+   同样的 14px / 38px 行高 / 10px 内边距，▾ 占 18px 图标列，
+   于是「分类文件夹」四个字和「全部文献」这些文字落在同一条竖线（x=52）上。 */
+.side-folders-toggle {
+  flex: 1 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0;
+  padding: 8px 10px; border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--muted); font-size: 14px; letter-spacing: normal;
+}
+.side-folders-toggle:hover { background: var(--surface-3); color: var(--text); }
+.side-folders-caret {
+  flex: none; width: 18px; display: grid; place-items: center;
+  font-size: 10px; line-height: 1; transition: transform .16s;
+}
+.is-collapsed .side-folders-caret { transform: rotate(-90deg); }
+.side-folders-title {
+  flex: 1 1 auto; min-width: 0; text-align: left;
+  text-transform: none; letter-spacing: normal; font-size: 14px;
+}
+.side-folders-body { display: grid; min-height: 0; }
+/* 收起时整块树消失，不留空白；展开后把 gap 补回来 */
+.is-collapsed .side-folders-body { display: none; }
+.side-folders-btn {
+  width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px;
+  border: 1px solid transparent; background: none; color: var(--faint); font-size: 13px; line-height: 1;
+}
+.side-folders-btn:hover { background: var(--surface-3); color: var(--accent-text); border-color: var(--border); }
+
+.fld-tree { display: grid; gap: 1px; min-width: 0; }
+/* 侧栏里限高：目录多了不能把底部「使用文档 / 统计」顶出屏幕 */
+.side-folders .fld-tree { max-height: 32vh; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+.fld-nodes { display: grid; gap: 1px; }
+.fld-kids { display: grid; gap: 1px; }
+
+/* ---------- 侧栏里的树：跟上方导航项同一套排版 ----------
+   同样的行高/字号/圆角/计数位置，图标落在 18px 那一列，
+   这样「全部文献 / 我的收藏 …」和「未分类 / 电催化」看起来是一栏东西。 */
+/* 注意不要加 border：导航项没有边框，多 1px 就会让行高 38→40、图标右移 1px */
+.side-folders .fld-row {
+  position: relative; display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 0; border-radius: var(--radius-sm);
+  color: var(--muted); font-size: 14px;
+}
+.side-folders .fld-row:hover { background: var(--surface-3); color: var(--text); }
+.side-folders .fld-row.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+/* 侧栏里相邻行的间距统一交给 gap（2px）：这里不要再加 margin，
+   否则「未分类 → 第一个文件夹」会变成 3px、其余是 1px，看着不齐 */
+.side-folders .fld-row--root { margin-bottom: 0; }
+.side-folders .fld-tree,
+.side-folders .fld-nodes,
+.side-folders .fld-kids { gap: 2px; }
+.side-folders .fld-ico { width: 18px; display: grid; place-items: center; opacity: .9; }
+.side-folders .fld-row.active .fld-ico { opacity: 1; }
+.side-folders .fld-name { font-size: 14px; }
+.side-folders .fld-count { margin-left: auto; font-size: 12px; }
+/* ▸ 只在侧栏里绝对定位（藏在缩进区），不占 flow 宽度 —— 这是图标能与导航对齐的关键。
+   选择器/管理器里仍用行内 14px 的 ▸，那里不需要和导航对齐。 */
+.side-folders .fld-caret {
+  position: absolute; top: 50%; left: calc(var(--fld-indent, 10px) - 10px);
+  width: 10px; height: 18px; margin: 0; transform: translateY(-50%);
+  font-size: 10px; color: var(--muted);
+}
+.side-folders .fld-caret.open { transform: translateY(-50%) rotate(90deg); }
+
+.fld-row {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+  padding: 5px 6px; border-radius: var(--radius-sm); border: 1px solid transparent;
+  color: var(--muted); font-size: 13px; cursor: pointer; user-select: none;
+}
+.fld-row:hover { background: var(--surface-3); color: var(--text); }
+.fld-row.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.fld-row--root { margin-bottom: 2px; }
+.fld-caret {
+  flex: none; width: 14px; height: 14px; display: grid; place-items: center;
+  border: 0; background: none; color: var(--faint); font-size: 10px; line-height: 1;
+  transition: transform .15s; padding: 0;
+}
+.fld-caret.open { transform: rotate(90deg); }
+.fld-caret--empty { visibility: hidden; }
+.fld-ico { flex: none; font-size: 12px; line-height: 1; opacity: .9; }
+.fld-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fld-count { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.fld-actions { display: none; gap: 2px; }
+.fld-row:hover .fld-actions { display: flex; }
+/* 管理器里没有 hover 提示也要看得见「改名/删除」，否则没人知道能改 */
+.fld-row--manager .fld-actions { display: flex; }
+.fld-row--manager:hover .fld-count { display: none; }
+.fld-act {
+  width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px;
+  border: 0; background: none; color: var(--muted); font-size: 12px; line-height: 1;
+}
+.fld-act:hover { background: var(--surface); color: var(--danger); }
+.fld-row--manager .fld-act { color: var(--accent-text); }
+.fld-row--manager .fld-act:hover { color: var(--danger); background: var(--danger-soft); }
+.fld-empty { padding: 6px 10px 4px; font-size: 11.5px; line-height: 1.7; color: var(--faint); }
+
+/* 弹窗 */
+.fld-modal {
+  position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px;
+  background: rgba(20, 18, 12, .42);
+}
+.fld-panel {
+  width: min(560px, 100%); max-height: 86vh; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-2); overflow: hidden;
+}
+.fld-panel--wide { width: min(760px, 100%); }
+.fld-head {
+  display: flex; align-items: center; gap: 10px; padding: 13px 16px;
+  border-bottom: 1px solid var(--border); background: var(--surface-2);
+}
+.fld-title { flex: 1 1 auto; font-size: 14px; font-weight: 650; }
+.fld-x {
+  width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 12px;
+}
+.fld-x:hover { color: var(--text); border-color: var(--border-strong); }
+.fld-body { display: grid; grid-template-columns: minmax(0, 1fr) 248px; gap: 0; min-height: 260px; overflow: hidden; }
+.fld-body--ask { grid-template-columns: minmax(0, 1fr); padding: 16px; min-height: 0; }
+.fld-left { padding: 12px; overflow-y: auto; max-height: 60vh; border-right: 1px solid var(--border); }
+.fld-right { padding: 12px; display: grid; gap: 8px; align-content: start; background: var(--surface-2); }
+.fld-side-title { font-size: 11px; letter-spacing: .1em; color: var(--faint); text-transform: uppercase; }
+.fld-pick-path {
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; color: var(--accent-text);
+  background: var(--accent-soft); border-radius: 8px; padding: 7px 9px; overflow-wrap: anywhere;
+}
+.fld-new-row { display: flex; gap: 6px; align-items: center; }
+.fld-new-row .input { flex: 1 1 auto; min-width: 0; }
+.fld-foot {
+  display: flex; align-items: center; gap: 8px; padding: 11px 16px;
+  border-top: 1px solid var(--border); background: var(--surface-2); flex-wrap: wrap;
+}
+.fld-hint { font-size: 11.5px; color: var(--faint); line-height: 1.6; }
+.fld-hint p { margin: 0 0 4px; }
+.fld-spacer { flex: 1 1 auto; }
+
+/* 表单里的「分类文件夹」字段 */
+.fld-field { display: flex; gap: 8px; align-items: center; }
+.fld-field-value {
+  flex: 1 1 auto; min-width: 0; text-align: left; padding: 8px 11px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
+  color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fld-field-value:hover { border-color: var(--border-strong); }
+.fld-field-value.is-empty { color: var(--faint); }
+
+/* 列表页目录面包屑 */
+.fld-crumbs {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: 12px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.fld-crumbs-ico { font-size: 13px; margin-right: 2px; }
+.fld-crumb {
+  border: 0; background: none; color: var(--accent-text); font-size: 13px; padding: 2px 4px; border-radius: 5px;
+}
+.fld-crumb:hover { background: var(--accent-soft); }
+.fld-crumb.current { color: var(--text); font-weight: 600; cursor: default; }
+.fld-crumb-sep { color: var(--faint); font-size: 12px; }
+.fld-deep { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); }
+.fld-deep input { accent-color: var(--accent); }
+
+@media (max-width: 720px) {
+  .fld-body { grid-template-columns: minmax(0, 1fr); }
+  .fld-left { border-right: 0; border-bottom: 1px solid var(--border); max-height: 44vh; }
+}
 
 /* 底部区块：文档入口 + 统计提示，整块用 margin-top:auto 贴到侧栏底部 */
 .side-bottom { margin-top: auto; display: grid; gap: 9px; }
@@ -858,14 +1030,48 @@ a.external-title:hover { color: var(--accent-text); }
 /* 列表（表格）视图 */
 .rows { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
 .row-item {
-  display: grid; grid-template-columns: 26px minmax(0, 1fr) 92px 108px 76px; gap: 12px; align-items: center;
+  /* 第一列：星标 + 改分类（22+4+22），其余列不变 */
+  display: grid; grid-template-columns: 48px minmax(0, 1fr) 92px 108px 76px; gap: 12px; align-items: center;
   padding: 11px 15px; border-bottom: 1px solid var(--border); font-size: 13.5px;
 }
+.row-lead { display: flex; align-items: center; gap: 4px; }
 .row-star { display: flex; justify-content: center; }
+/* 行首的「改分类」：图标按钮，已分类时染上主色，一眼能看出这篇归过档 */
+.row-folder {
+  flex: none; width: 22px; height: 22px; display: grid; place-items: center;
+  /* 常显边框：光一个灰图标太容易被当成装饰（用户就是找不到入口才提的需求） */
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--muted);
+  padding: 0;
+}
+.row-folder:hover { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.row-folder.has { color: var(--accent-text); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 26%, transparent); }
+.row-folder-ico { display: inline-flex; }
+
+/* 卡片上的分类胶囊：常显「当前在哪个文件夹」，点开就能换 */
+.card-folder {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 46%; min-width: 0;
+  padding: 1px 7px 1px 5px; border-radius: 999px; line-height: 1.7;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+  font-size: 11.5px;
+}
+.card-folder:hover { border-color: var(--border-strong); background: var(--accent-soft); color: var(--accent-text); }
+.card-folder.has { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 24%, transparent); }
+.card-folder-ico { display: inline-flex; }
+.card-folder-t { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 详情页「文献信息」里的分类胶囊：显示完整路径 + 一个「更改」提示 */
+.meta-folder { max-width: 100%; font-size: 13px; padding: 3px 9px 3px 7px; }
+.meta-folder-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta-folder-edit {
+  flex: none; margin-left: 2px; padding-left: 7px; border-left: 1px solid var(--border);
+  font-size: 11.5px; color: var(--faint);
+}
+.meta-folder:hover .meta-folder-edit { color: var(--accent-text); border-left-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .row-item:last-child { border-bottom: 0; }
 .row-item:hover { background: var(--surface-2); }
 .row-title { font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-sub { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-tags { display: flex; gap: 5px; flex-wrap: wrap; }
 
 /* ---------- 详情页 ---------- */
 .detail { display: grid; gap: 20px; }
@@ -1624,14 +1830,23 @@ a.external-title:hover { color: var(--accent-text); }
     font-size: 14px; line-height: 1; cursor: pointer;
   }
   .side-close:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-3); }
+  /* 抽屉里竖向空间更宽松：目录树可以高一些，少一层内滚动 */
+  .side-folders .fld-tree { max-height: 42vh; }
 }
 
 @media (max-width: 880px) {
   .content { padding: 18px 16px 60px; }
   .topbar { padding: 10px 14px; }
   .cards { grid-template-columns: 1fr; }
-  .row-item { grid-template-columns: 26px minmax(0, 1fr) auto; }
+  .row-item { grid-template-columns: 48px minmax(0, 1fr) auto; }
   .row-item .row-hide { display: none; }
+  /* 批量条按钮多（清空/全选/加标签/收藏/移动/引用/删除），窄屏一行放不下会溢出到屏幕外：
+     改成左右贴边 + 允许换行 */
+  .bulkbar {
+    left: 12px; right: 12px; transform: none; max-width: none;
+    flex-wrap: wrap; justify-content: center; row-gap: 6px;
+    padding: 10px 12px; border-radius: 18px;
+  }
   .tl-year { grid-template-columns: 58px minmax(0, 1fr); gap: 10px; }
 }
 

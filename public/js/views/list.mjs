@@ -4,6 +4,7 @@ import * as components from '../components.mjs'
 import { api } from '../api.mjs'
 import { getState } from '../state/store.mjs'
 import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refreshMeta, rememberTitles, setHash } from '../shell/app-api.mjs'
+import * as foldersUi from '../folders.mjs'
 
   const { h, toast, confirmDialog, typeLabel } = util
   const { paperCard, paperRow } = components
@@ -21,6 +22,9 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
    * 为了让「看不见的勾选」不至于变成一个陷阱，批量条上常驻一个「清空选择」。
    */
   let batch = { selectMode: false, selected: new Set() }
+
+  /** 目录视图里「含子文件夹」开关（默认开：点父目录就该看到全部后代） */
+  let folderDeep = true
 
   /**
    * 「空库」的起步板：三条真实可用的入库路径，点整张卡片就能去对应页面。
@@ -87,15 +91,17 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
     function hasAnyFilter (q) {
       const query = q || state.query
       return !!(query.q || (query.tags || []).length || (query.extraTags || []).length ||
-        (query.type && query.type !== 'all') || query.starred)
+        (query.type && query.type !== 'all') || query.starred || query.folder != null)
     }
 
     const bar = h('div', { id: 'list-bar', style: { marginBottom: '14px', display: 'grid', gap: '10px' } })
+    // 目录面包屑：只在「按文件夹筛选」时出现，用来看清自己在哪一级、并一键回到上层
+    const folderBar = h('div', { id: 'list-folder', hidden: true })
     const results = h('div', { id: 'list-results' })
     const pager = h('div', { id: 'list-pager' })
     // 批量条挂在这一页的容器里（不是 document.body）：这样切到别的页面时
     // 它会跟着列表一起消失，不会留在屏幕上（以前从批量模式点侧栏去别的页，条子还飘在那儿）
-    const content = h('div.content', bar, results, pager)
+    const content = h('div.content', folderBar, bar, results, pager)
     outlet.replaceChildren(content)
 
     let items = []
@@ -106,6 +112,52 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
     const isSelectMode = () => batchState.selectMode
 
     /* ---------- 顶部筛选条 ---------- */
+
+    /** 面包屑：全部文献 / A / B  + 「含子文件夹」开关 + 退出目录 */
+    function renderFolderBar () {
+      const current = state.query.folder
+      if (current == null) {
+        folderBar.hidden = true
+        folderBar.replaceChildren()
+        return
+      }
+      folderBar.hidden = false
+      const segs = current ? current.split('/') : []
+      const crumbs = [
+        h('button.fld-crumb', { type: 'button', title: '回到全部文献', onclick: () => go('') }, '全部文献')
+      ]
+      segs.forEach((seg, idx) => {
+        const prefix = segs.slice(0, idx + 1).join('/')
+        crumbs.push(h('span.fld-crumb-sep', '/'))
+        crumbs.push(h('button.fld-crumb' + (idx === segs.length - 1 ? '.current' : ''), {
+          type: 'button',
+          onclick: () => foldersUi.navTo(prefix)
+        }, seg))
+      })
+      if (!segs.length) {
+        crumbs.length = 1
+        crumbs.push(h('span.fld-crumb-sep', '/'))
+        crumbs.push(h('span.fld-crumb.current', foldersUi.ROOT_LABEL))
+      }
+
+      const deepToggle = h('label.fld-deep',
+        h('input', {
+          type: 'checkbox',
+          checked: folderDeep,
+          onchange: ev => { folderDeep = !!ev.target.checked; load() }
+        }),
+        h('span', '含子文件夹'))
+
+      folderBar.replaceChildren(h('div.fld-crumbs',
+        h('span.fld-crumbs-ico', '📂'),
+        ...crumbs,
+        h('span', { style: { flex: '1 1 auto' } }),
+        deepToggle,
+        h('button.btn.sm.ghost', {
+          type: 'button', title: '退出目录视图',
+          onclick: () => go('')
+        }, '× 退出目录')))
+    }
 
     function renderBar (info) {
       const q = state.query
@@ -152,7 +204,7 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
         ? h('button.btn.sm.ghost', {
           type: 'button',
           onclick: () => {
-            state.query = { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: state.query.sort, page: 1 }
+            state.query = { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: state.query.sort, page: 1, folder: null }
             setHash('', queryToParams())
           }
         }, '清空筛选')
@@ -214,7 +266,7 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
             h('button.btn', {
               type: 'button',
               onclick: () => {
-                state.query = { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: state.query.sort, page: 1 }
+                state.query = { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: state.query.sort, page: 1, folder: null }
                 setHash('', queryToParams())
               }
             }, '清空筛选')
@@ -229,6 +281,8 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
           // 点卡片上的标签 → 填进搜索栏（同时清掉类型/状态筛选，免得筛出空结果）
           if (filterByTag) filterByTag(tag, { resetType: true, resetStarred: true })
         },
+        // 直接把这一篇挪到别的分类文件夹（弹窗里也能顺手新建）
+        onFolder: paper => changeFolder(paper),
         onSelect: (id, checked) => {
           if (checked) selected.add(id)
           else selected.delete(id)
@@ -247,6 +301,73 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
           paperCard(item, Object.assign({}, common, { selected: selected.has(item.id) })))))
       }
       renderBulkBar()
+    }
+
+    /**
+     * 改单篇文献的分类：弹目录树 → 移动 → 刷新列表。
+     * 正在目录视图里时，这一篇会被移出当前目录，所以必须重新 load 而不是只改本地字段。
+     */
+    function changeFolder (paper) {
+      foldersUi.openFolderPicker({
+        current: paper.folder || '',
+        onPick: async path => {
+          if ((paper.folder || '') === path) {
+            toast('分类没有变化')
+            return
+          }
+          try {
+            await api.movePapers([paper.id], path)
+            foldersUi.notifyChanged()
+            toast('已移到「' + (path ? path.split('/').pop() : foldersUi.ROOT_LABEL) + '」')
+            load()
+          } catch (err) {
+            toast('移动失败：' + (err && err.message ? err.message : err))
+          }
+        }
+      })
+    }
+
+    /**
+     * 批量移动：选中多篇 → 选目录 → 一次请求 → 刷新。
+     * 与单篇的 changeFolder 共用同一个目录选择器（里面也能新建目录），
+     * 区别只在接口拿到的是一批 id。
+     */
+    function moveSelectedToFolder () {
+      const ids = [...selected]
+      if (!ids.length) return
+      // 批量条自己的 refresh 在 renderBulkBar 里，这里拿不到；用列表页这一层的重绘
+      const refresh = () => { renderBar(lastInfo); renderResults() }
+      foldersUi.openFolderPicker({
+        current: getState().query.folder || '',
+        onPick: async path => {
+          const where = path ? path.split('/').pop() : foldersUi.ROOT_LABEL
+          // 全都已经在这个目录里就不用发请求了（后端会把它们再算一遍 moved）
+          const known = items.filter(i => selected.has(i.id))
+          if (known.length === ids.length && known.every(i => (i.folder || '') === path)) {
+            toast('这些文献已经在「' + where + '」里，没有移动', 'warn')
+            selected.clear()
+            refresh()
+            return
+          }
+          try {
+            const res = await api.movePapers(ids, path)
+            const moved = res && typeof res.moved === 'number' ? res.moved : ids.length
+            if (!moved) {
+              toast('这些文献已经在「' + where + '」里，没有移动', 'warn')
+              selected.clear()
+              refresh()
+              return
+            }
+            toast('已把 ' + moved + ' 篇移到「' + where + '」')
+            selected.clear()
+            // 侧栏计数立刻变；列表按当前筛选重新拉（在目录视图里被移走的会消失）
+            foldersUi.notifyChanged()
+            refreshMeta().then(() => load()).catch(() => load())
+          } catch (err) {
+            toast('移动失败：' + (err && err.message ? err.message : err), 'error')
+          }
+        }
+      })
     }
 
     let bulkBar = null
@@ -331,6 +452,10 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
             } catch (err) { toast(err.message, 'error') }
           }
         }),
+        action('移动到目录', {
+          title: '把选中的文献一起移到某个分类文件夹',
+          run: () => moveSelectedToFolder()
+        }),
         action('复制引用', {
           title: '复制选中第一条的 GB/T 7714 引用',
           run: async () => {
@@ -394,6 +519,8 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
       const params = effectiveQuery
         ? effectiveQuery()
         : { q: state.query.q, tags: state.query.tags, page: state.query.page, pageSize: state.prefs.pageSize }
+      // 目录视图：默认连子文件夹一起看，用户可关掉
+      if (state.query.folder != null) params.includeSubfolders = folderDeep ? 'true' : 'false'
       try {
         const res = await api.listPapers(params)
         if (isStale()) return
@@ -412,6 +539,7 @@ import { applyQueryFromUrl, effectiveQuery, filterByTag, go, queryToParams, refr
         return
       }
       loading = false
+      renderFolderBar()
       renderBar(lastInfo)
       renderResults()
       renderPager(lastInfo)

@@ -121,6 +121,19 @@ def _auto_summary_ready(llm):
         return False
 
 
+def _ensure_folder(services, payload):
+    """文献写入前把 folder 归一化并确保目录存在（导入时用户可能直接选一个还没建的路径）。"""
+    if not isinstance(payload, dict):
+        return
+    raw = payload.get("folder")
+    if raw is None:
+        return
+    folders = getattr(services, "folders", None)
+    if folders is None:
+        return
+    payload["folder"] = folders.ensure(raw) if str(raw).strip() else ""
+
+
 def _stamp():
     """导出文件名里的日期：与 Node 的 new Date().toISOString().slice(0, 10) 一致（UTC）。"""
     return now_iso()[:10]
@@ -194,6 +207,7 @@ def list_papers(ctx):
 def create(ctx):
     services = ctx.services
     body = ctx.read_json() or {}
+    _ensure_folder(services, body)
     paper = services.library.create(body)
     # 新增文献后自动补一份中文一句话总结（后台跑、不阻塞创建；失败不影响保存）。
     if _auto_summary_ready(services.llm):
@@ -361,6 +375,7 @@ def update(ctx):
     if not paper:
         return None
     body = ctx.read_json() or {}
+    _ensure_folder(ctx.services, body)
     updated = ctx.services.library.update(ctx.params.get("id"), body)
     return ctx.json(200, {"ok": True, "paper": updated})
 

@@ -2,6 +2,7 @@
 import * as util from '../util.mjs'
 import * as components from '../components.mjs'
 import { api } from '../api.mjs'
+import * as foldersUi from '../folders.mjs'
 import { getState } from '../state/store.mjs'
 import { go, refreshMeta } from '../shell/app-api.mjs'
 
@@ -41,7 +42,9 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
       doi: strOf(form.doi),
       url: strOf(form.url),
       keywords: Array.isArray(form.keywords) ? form.keywords : [],
-      summary: String(form.summary || '')
+      summary: String(form.summary || ''),
+      // 分类文件夹（库内分类，空串 = 未分类）；服务端会补建目录
+      folder: strOf(form.folder)
     }, extra || {})
   }
 
@@ -82,6 +85,12 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
         h('option', { value: key, selected: (form.type || 'journal') === key }, label)))
     typeSelect.addEventListener('change', () => { form.type = typeSelect.value })
 
+    // 分类文件夹：值存在 form.folder 上，保存时随 payload 一起提交
+    const folderFieldEl = foldersUi.folderField({
+      value: form.folder || '',
+      onChange: value => { form.folder = value }
+    })
+
     const headBits = [
       opts.subtitle || '',
       opts.duplicate ? '库里可能已有这篇：' + String(opts.duplicate.title || '').slice(0, 40) : ''
@@ -111,6 +120,19 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
         textLine('DOI', 'doi', '10.xxxx/xxxxx', '1 1 200px')
       ),
       h('div.field', h('label', '摘要'), summaryInput),
+      // 导入时指定分类：点「选择…」弹目录树，弹窗里也能直接新建
+      h('div.import-row',
+        folderFieldEl,
+        opts.onApplyFolder
+          ? h('div.field', { style: { flex: '0 0 auto' } },
+            h('label', '\u00a0'),
+            h('button.btn.sm', {
+              type: 'button',
+              title: '把这一批卡片都放到同一个目录',
+              onclick: () => opts.onApplyFolder(form.folder || '')
+            }, '应用到本批全部'))
+          : null
+      ),
       opts.hint ? h('div.hint', opts.hint) : null
     )
 
@@ -242,7 +264,9 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
           error: '',
           form: {
             title: '', authors: [], year: null, type: 'journal', venue: '', doi: '',
-            volume: '', issue: '', pages: '', publisher: '', url: '', summary: '', keywords: []
+            volume: '', issue: '', pages: '', publisher: '', url: '', summary: '', keywords: [],
+            // 在某个目录里点「新增文献」时，默认就放进那个目录
+            folder: getState().query.folder || ''
           }
         }
         cards.push(card)
@@ -290,6 +314,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
           sources: src,
           sourceErrors: errs,
           form: {
+            folder: getState().query.folder || '',
             title: doc.title || '',
             authors: doc.authors || [],
             year: doc.year || null,
@@ -377,6 +402,14 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
         duplicate: entry.duplicate,
         badge,
         hint: hintBits.join('；'),
+        // 一次拖进来十几篇时，不必逐个选目录
+        onApplyFolder: cards.length > 1
+          ? path => {
+            cards.forEach(card => { card.form.folder = path })
+            renderCards()
+            toast('已把本批 ' + cards.length + ' 篇都放到「' + (path || '未分类') + '」')
+          }
+          : null,
         actions: [
           h('button.btn.sm.primary', {
             type: 'button',
@@ -468,6 +501,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
         if (ok) {
           toast('已导入 1 篇')
           refreshMeta()
+          foldersUi.notifyChanged()
           renderCards()
         }
       } catch (err) {
@@ -493,6 +527,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
       setBusy(false)
       renderCards()
       refreshMeta()
+      foldersUi.notifyChanged()
       if (failed.length) {
         toast('导入 ' + ok + ' 篇，' + failed.length + ' 篇失败：' + failed[0], 'warn')
       } else {
@@ -596,6 +631,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
         const res = await api.createPaper(payload)
         toast('已新增文献')
         refreshMeta()
+        foldersUi.notifyChanged()
         go('#/paper/' + encodeURIComponent(res.paper.id))
       } catch (err) {
         toast('保存失败：' + err.message, 'error')
@@ -743,6 +779,13 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
     }
     renderRating()
 
+    // 分类文件夹（库内分类）：改完直接生效，不需要走「导入」
+    let folderValue = paper.folder || ''
+    const folderField = foldersUi.folderField({
+      value: folderValue,
+      onChange: value => { folderValue = value }
+    })
+
     const pdfInput = h('input', { type: 'file', accept: 'application/pdf,.pdf', style: { display: 'none' } })
     let pendingPdfFile = null
     const pdfNameText = h('span', { style: { flex: '1', minWidth: '0' } })
@@ -796,6 +839,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
           notes: String(paper.notes || ''),
           refs: Array.isArray(paper.refs) ? paper.refs : [],
           pdfFile: strOf(paper.pdfFile),
+          folder: folderValue || '',
           bibtexKey: strOf(f.bibtexKey.value)
         }
         if (!payload.title) { toast('标题不能为空', 'warn'); f.title.focus(); return }
@@ -816,6 +860,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
             toast('已保存修改')
           }
           refreshMeta()
+          foldersUi.notifyChanged()
           go('#/paper/' + encodeURIComponent(saved.id))
         } catch (err) {
           toast('保存失败：' + err.message, 'error')
@@ -853,6 +898,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
             h('div.field', h('label', '出版社'), f.publisher),
             h('div.field', h('label', 'BibTeX 键'), f.bibtexKey)),
           h('div.field', h('label', '标签'), tags),
+          folderField,
           h('div.field', h('label', '原文关键词'), f.keywords),
           h('div.field', h('label', '摘要'), f.summary),
           h('div', { id: 'pdf-row' },
@@ -876,6 +922,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
                 await api.deletePaper(id)
                 toast('已删除')
                 refreshMeta()
+                foldersUi.notifyChanged()
                 go('#/')
               } catch (err) { toast(err.message, 'error') }
             }

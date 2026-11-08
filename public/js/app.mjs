@@ -22,6 +22,8 @@ import { compareHandler } from './views/compare.mjs'
 import { deepHandler } from './views/deep.mjs'
 // 使用文档（新手手册）：纯静态页，放在侧栏最下方
 import { guideHandler } from './views/guide.mjs'
+// 文件夹分类：侧栏树、导入选目录、管理器共用的组件
+import * as foldersUi from './folders.mjs'
 
 const { h, toast, debounce } = util
 
@@ -275,7 +277,47 @@ const { h, toast, debounce } = util
     )
   }
 
+  /** 新建文件夹：默认建在「当前浏览的目录」下面（不在目录里就建在根） */
+  async function createFolderPrompt (tree) {
+    const parent = getState().query.folder || ''
+    const name = await foldersUi.askName({
+      title: parent ? '在「' + foldersUi.labelOf(parent) + '」下新建文件夹' : '新建文件夹',
+      label: '文件夹名',
+      placeholder: '例如：电催化'
+    })
+    if (!name) return
+    const created = await foldersUi.createFolder(parent, name)
+    if (created && tree) await tree.reload()
+  }
+
+  // 只保留一份「当前侧栏树」的引用：变更事件统一刷新它，避免每次渲染都挂监听造成泄漏
+  let activeFolderTree = null
+
+  // 「分类文件夹」是否收起：侧栏每次切页都会重绘，状态必须放模块级并持久化，
+  // 否则点一下导航就又展开了（用户的分类多起来时很烦）
+  let foldersCollapsed = (() => {
+    try { return localStorage.getItem('lv.foldersCollapsed') === '1' } catch (err) { return false }
+  })()
+
+  function setFoldersCollapsed (next) {
+    foldersCollapsed = !!next
+    try { localStorage.setItem('lv.foldersCollapsed', foldersCollapsed ? '1' : '0') } catch (err) { /* 隐私模式下忽略 */ }
+  }
+
+  /** 折叠/展开：只切 class，不重画侧栏（重画会丢树的展开状态与滚动位置） */
+  function toggleFolders (btn) {
+    setFoldersCollapsed(!foldersCollapsed)
+    const box = btn.closest('.side-folders')
+    if (box) box.classList.toggle('is-collapsed', foldersCollapsed)
+    btn.setAttribute('aria-expanded', foldersCollapsed ? 'false' : 'true')
+    btn.title = foldersCollapsed ? '展开分类文件夹' : '收起分类文件夹'
+  }
+
   function renderSidebar (activePath) {
+    const folderTree = foldersUi.folderTree({ mode: 'side', active: getState().query.folder })
+    activeFolderTree = folderTree
+    // 先用缓存画（可能为空），再异步拉一次真实目录树
+    foldersUi.load().then(() => { if (activeFolderTree === folderTree) folderTree.reload() }).catch(() => {})
     const totalEl = navItem('全部文献', '#/', '▤', state.stats ? state.stats.total : null, activePath === '/', 'total')
     const starredEl = navItem('我的收藏', '#/starred', '★',
       state.stats && state.stats.starred ? state.stats.starred : null, activePath === '/starred', 'starred')
@@ -323,6 +365,32 @@ const { h, toast, debounce } = util
         navItem('横向对比', '#/compare', '⇄', null, activePath === '/compare'),
         navItem('深度分析', '#/deep', '🔬', null, activePath === '/deep'),
         navItem('设置与备份', '#/settings', '⚙', null, activePath === '/settings')
+      ),
+      // 分类文件夹：和导航同处左侧栏，但它是「树」，单独一块更好读。
+      // 新建 / 管理两个入口放在这一块的表头，符合「整合到分类与导航区域」的要求。
+      h('div.side-folders' + (foldersCollapsed ? '.is-collapsed' : ''),
+        h('div.side-folders-head',
+          // 标题本身就是展开/收起开关（带 ▾），跟导航项一样整行可点
+          h('button.side-folders-toggle', {
+            type: 'button',
+            'aria-expanded': foldersCollapsed ? 'false' : 'true',
+            'aria-controls': 'side-folders-body',
+            title: foldersCollapsed ? '展开分类文件夹' : '收起分类文件夹',
+            onclick: ev => toggleFolders(ev.currentTarget)
+          },
+            h('span.side-folders-caret', '▾'),
+            h('span.side-folders-title', '分类文件夹')
+          ),
+          h('button.side-folders-btn', {
+            type: 'button', title: '新建文件夹',
+            onclick: () => createFolderPrompt(folderTree)
+          }, '＋'),
+          h('button.side-folders-btn', {
+            type: 'button', title: '管理文件夹（重命名 / 删除）',
+            onclick: () => foldersUi.openFolderManager()
+          }, '⚙')
+        ),
+        h('div.side-folders-body', { id: 'side-folders-body' }, folderTree.el)
       ),
       // 底部区块：文档入口 + 统计/提示。用 margin-top:auto 整体贴底，
       // 这样入口正好落在「共 N 条 · N 个标签」上方那一块，而不是挤在功能导航里
@@ -695,6 +763,10 @@ const { h, toast, debounce } = util
     // 只监听 hashchange（用户手改地址、前进后退）；应用内导航统一走 go() → scheduleRender
     window.addEventListener('hashchange', () => scheduleRender())
     bindShortcuts()
+    // 文件夹增删改 → 刷新侧栏那棵树（保留展开状态与当前选中）
+    document.addEventListener('folders:changed', () => {
+      if (activeFolderTree) activeFolderTree.reload()
+    })
     if (!location.hash) {
       location.hash = '#/'
       scheduleRender()

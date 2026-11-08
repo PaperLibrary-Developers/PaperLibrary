@@ -236,6 +236,64 @@ class Store:
     def list_text_keys(self):
         return self.repo.list_text_keys()
 
+    # ------------------------------------------------------------------ 文件夹（库内分类）
+    # 说明：分类只活在库里（folders 表 + papers.folder），不与磁盘目录同步。
+    # 所有写操作都要顺手把**内存里那份 papers** 改掉：查询/排序走的是内存，
+    # 只改 SQL 的话界面上要等重启才看得到变化。
+    def list_folders(self):
+        return self.repo.list_folders()
+
+    def get_folder(self, path):
+        return self.repo.get_folder(path)
+
+    def folder_counts(self):
+        return self.repo.folder_counts()
+
+    def save_folder(self, path, name, parent, sort=0):
+        return self.repo.save_folder(path, name, parent, sort)
+
+    def _sync_folder_memory(self, ids):
+        """把指定文献的 folder 从库里重新读回来，写进内存卡片（哈希一起更新，避免 touch 反复写）。"""
+        changed = 0
+        with self._lock:
+            for pid in ids or []:
+                row = self.repo.get_paper(pid)
+                paper = self.find_paper(pid)
+                if not row or paper is None:
+                    continue
+                folder = row.get("folder") or ""
+                if folder:
+                    if paper.get("folder") != folder:
+                        paper["folder"] = folder
+                        changed += 1
+                elif paper.pop("folder", None) is not None:
+                    changed += 1
+                self._hashes[pid] = _hash_paper(paper)
+        return changed
+
+    def rename_folder_prefix(self, old, new):
+        ids = self.repo.papers_in_folder(old)
+        count = self.repo.rename_folder_prefix(old, new)
+        self._sync_folder_memory(ids)
+        return count
+
+    def move_folder_papers(self, prefix, dest):
+        ids = self.repo.papers_in_folder(prefix)
+        count = self.repo.move_folder_papers(prefix, dest)
+        self._sync_folder_memory(ids)
+        return count
+
+    def delete_folder_rows(self, prefix):
+        self.repo.delete_folder_rows(prefix)
+
+    def set_paper_folders(self, ids, path):
+        count = self.repo.set_paper_folders(ids, path)
+        self._sync_folder_memory(ids)
+        return count
+
+    def papers_in_folder(self, prefix):
+        return self.repo.papers_in_folder(prefix)
+
     # ------------------------------------------------------------------ 旧目录迁移
     def migrate_legacy_dirs(self):
         """把老布局搬进 data/article/（幂等）：papers/*、attachments/<id>/*。"""

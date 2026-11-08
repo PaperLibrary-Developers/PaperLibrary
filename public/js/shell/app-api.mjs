@@ -120,6 +120,13 @@ export function setShellHooks (hooks) {
     state.query.starred = params.get('starred') === 'true'
     state.query.sort = params.get('sort') || ''
     state.query.page = Number(params.get('page')) || 1
+    // 文件夹：URL 里用 "/" 表示根目录（未分类）——空串会被 setHash 过滤掉，没法表达「只看根」
+    if (params.has('folder')) {
+      const raw = params.get('folder') || '/'
+      state.query.folder = raw === '/' ? '' : raw
+    } else {
+      state.query.folder = null
+    }
   }
 
   let currentRenderToken = 0
@@ -223,6 +230,7 @@ export function setShellHooks (hooks) {
       q: combined,
       type: q.type !== 'all' ? q.type : '',
       // 收藏筛选由「路径」表达（#/starred），不重复放进查询串
+      folder: q.folder == null ? '' : (q.folder === '' ? '/' : q.folder),
       sort: q.sort || '',
       page: q.page > 1 ? q.page : ''
     }
@@ -285,6 +293,8 @@ export function setShellHooks (hooks) {
     return {
       q: q.q || '',
       tags,
+      // folder 只在「指定了目录」时才发；'' 会被 qs() 丢掉，所以根目录用 '/' 兜一下
+      folder: q.folder == null ? '' : (q.folder === '' ? '/' : q.folder),
       type: q.type !== 'all' ? q.type : '',
       starred: q.starred ? 'true' : '',
       sort: q.sort || (q.q ? '' : 'updatedAt'),

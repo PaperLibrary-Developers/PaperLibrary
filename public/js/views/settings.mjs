@@ -4,7 +4,7 @@ import { api } from '../api.mjs'
 import { getState } from '../state/store.mjs'
 import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
 
-  const { h, toast, confirmDialog, fileSize, formatDate } = util
+  const { h, toast, rich, confirmDialog, fileSize, formatDate } = util
   
   function download (url) {
     const a = h('a', { href: url, download: '' })
@@ -107,7 +107,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
           releaseResult.replaceChildren(
             h('div', { style: { fontSize: '13px' } }, '→ ' + res.relPath + '　' + stamp),
             h('div.hint', res.note || ''),
-            h('div.hint', '库里当前 ' + res.papers + ' 条文献都在 data/ 里，**不会**进这个包；发给同学的就是这个 zip。'),
+            h('div.hint', rich('库里当前 ' + res.papers + ' 条文献都在 data/ 里，**不会**进这个包；发给同学的就是这个 zip。')),
             h('button.btn.sm', {
               type: 'button',
               title: '再打一次（比如刚又改了代码）',
@@ -119,7 +119,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
           if (err && err.status === 409) {
             releaseStatus.textContent = err.message
           } else if (/隐私扫描/.test(err.message)) {
-            releaseStatus.textContent = '已中止：包里发现了不该出现的内容，**没有生成新包**（上一份还在）。'
+            releaseStatus.textContent = '已中止：包里发现了不该出现的内容，没有生成新包（上一份还在）。'
             releaseResult.replaceChildren(
               h('pre.import-error', { style: { whiteSpace: 'pre-wrap', margin: 0, fontSize: '12.5px' } },
                 String(err.message).split('\n').slice(1).join('\n').trim() || '（明细见服务端日志）'),
@@ -325,7 +325,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
               ? h('span.hint', '被「' + String(item.usedBy[0].title).slice(0, 22) + '」使用')
               : h('span.hint', '没有记录使用')
           )),
-          h('div.hint', '保留理由：' + g.keepReason + '。清理是**移到隔离区**，不是直接删除。'),
+          h('div.hint', rich('保留理由：' + g.keepReason + '。清理是**移到隔离区**，不是直接删除。')),
           g.removable.length
             ? h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
               ...g.removable.map(file => h('button.btn.sm', {
@@ -348,7 +348,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
               }, '清理副本：' + (file.length > 40 ? file.slice(0, 38) + '…' : file))))
             : h('div.hint', '重复的那几份都有记录在用，这里不动它们。'),
           g.blocked && g.blocked.length
-            ? h('div.hint', '另有 ' + g.blocked.length + ' 个内容相同但**已被记录引用**，已跳过（不会动）。')
+            ? h('div.hint', rich('另有 ' + g.blocked.length + ' 个内容相同但**已被记录引用**，已跳过（不会动）。'))
             : null
         )
         rows.push(card)
@@ -689,9 +689,9 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
     const sourcesPanel = panel('学术检索来源（OpenAlex）',
       h('div', { style: { display: 'grid', gap: '13px' } },
         h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
-          'OpenAlex 现在按「每日额度」计费：不填密钥时额度按**共享 IP** 计算（别人用完你就会被限流，' +
-          '会出现「429 / 额度已用尽」）；注册免费账号并填入自己的密钥后，额度按你的账号算，且**提升约 10 倍**。' +
-          '密钥只存在你本机的 data/sources.json，不回显、不外传。'),
+          rich('OpenAlex 现在按「每日额度」计费：不填密钥时额度按**共享 IP** 计算（别人用完你就会被限流，' +
+            '会出现「429 / 额度已用尽」）；注册免费账号并填入自己的密钥后，额度按你的账号算，且**提升约 10 倍**。' +
+            '密钥只存在你本机的 data/sources.json，不回显、不外传。')),
         srcStatus,
         srcQuotaLine,
         h('div.field', h('label', 'OpenAlex API Key'), fOaKey),
@@ -746,8 +746,8 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
         h('div', { style: { display: 'grid', gap: '9px' } },
           h('div', { style: { fontSize: '13px', fontWeight: '600' } }, '补摘要'),
           h('div', { style: { color: 'var(--muted)', fontSize: '13px' } },
-            '有些出版社（ACS 全系、Nature、旧版 RSC/Wiley）不向 Crossref 交摘要，导入时就会是空的。' +
-            '这里按「PDF 本地抽取 → OpenAlex」的顺序给你**没摘要的那些**补上；**只补空的，不会动你已经有的摘要**。'),
+            rich('有些出版社（ACS 全系、Nature、旧版 RSC/Wiley）不向 Crossref 交摘要，导入时就会是空的。' +
+              '这里按「PDF 本地抽取 → OpenAlex」的顺序给你**没摘要的那些**补上；**只补空的，不会动你已经有的摘要**。')),
           h('div', { style: { display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' } },
             oaBackfillBtn),
           oaBackfillResult
@@ -950,7 +950,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
         h('div.form-grid',
           h('div.field', h('label', '服务商'), presetSelect),
           h('div.field', h('label', '模型名称'), fModel,
-            h('div.hint', '要填接口的**模型 id**（DeepSeek 就是 deepseek-chat），不是网页版上显示的名字'))
+            h('div.hint', rich('要填接口的**模型 id**（DeepSeek 就是 deepseek-chat），不是网页版上显示的名字')))
         ),
         h('div.field', h('label', '接口地址（baseURL）'), fBase,
           h('div.hint', 'OpenAI 兼容接口即可。本地 Ollama 填 http://127.0.0.1:11434/v1，无需密钥。')),

@@ -7,6 +7,43 @@ import { go } from './shell/app-api.mjs'
 
 const { h, typeLabel, authorsText, starsHtml, toast, copyText, escapeHtml } = util
 
+  /** 文件夹小图标：行内 SVG，比 emoji 在深浅主题下都稳，尺寸也能压到跟导航图标一致 */
+  function folderGlyph (cls) {
+    return h('span' + (cls ? '.' + cls : ''), {
+      html: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" ' +
+        'stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M1.9 4.4A1.4 1.4 0 0 1 3.3 3h2.9l1.4 1.7h4.5a1.4 1.4 0 0 1 1.4 1.4v5.5a1.4 1.4 0 0 1-1.4 1.4H3.3a1.4 1.4 0 0 1-1.4-1.4z"/></svg>'
+    })
+  }
+
+  /** 路径只显示最后一段（卡片上放不下 'A/B/C'） */
+  function folderLabel (path) {
+    const text = String(path || '')
+    return text ? text.split('/').pop() : '未分类'
+  }
+
+  /** 单篇文献的「改分类」按钮：卡片与紧凑行共用同一套判定与提示文案 */
+  function folderButton (paper, onFolder, kind) {
+    const path = String(paper.folder || '')
+    const tips = '分类：' + (path || '未分类') + '（点击更改）'
+    const cls = kind === 'row' ? 'row-folder' : 'card-folder'
+    return h('button.' + cls + (path ? '.has' : ''), {
+      type: 'button',
+      title: tips,
+      'aria-label': '更改《' + (paper.title || '') + '》的分类文件夹，当前：' + (path || '未分类'),
+      onclick: ev => {
+        // 卡片/整行本身就是「打开详情」的热区，这里必须拦住冒泡
+        ev.stopPropagation()
+        ev.preventDefault()
+        onFolder(paper)
+      },
+      onkeydown: ev => ev.stopPropagation()
+    },
+      folderGlyph(kind === 'row' ? 'row-folder-ico' : 'card-folder-ico'),
+      kind === 'card' ? h('span.card-folder-t', folderLabel(path)) : null
+    )
+  }
+
   function tagNodes (tags, options) {
     const opts = options || {}
     const nodes = (tags || []).slice(0, opts.max || 6).map(tag =>
@@ -170,6 +207,8 @@ const { h, typeLabel, authorsText, starsHtml, toast, copyText, escapeHtml } = ut
       starButton(paper, { inert: s.selectable }),
       h('span.badge.type', { text: typeLabel(paper.type) }),
       paper.hasPdf ? h('span.badge.pdf', { text: 'PDF' }) : null,
+      // 分类：常显「当前在哪个文件夹」，点一下就换（不然只能在编辑页里翻）
+      opts.onFolder ? folderButton(paper, opts.onFolder, 'card') : null,
       h('span.right',
         starsNode(paper.rating),
         h('span', { text: util.relTime(paper.updatedAt) })
@@ -189,16 +228,20 @@ const { h, typeLabel, authorsText, starsHtml, toast, copyText, escapeHtml } = ut
       onclick: s.onClick,
       onkeydown: s.onKeydown
     },
-      // 批量模式下第一格换成勾选框（紧凑视图以前整个没有勾选框，根本没得选）
-      s.selectable
-        ? h('div.row-star.row-check', h('input.check', {
-          type: 'checkbox',
-          checked: s.selected,
-          title: '选中以批量操作',
-          'aria-label': '选中《' + (paper.title || '') + '》',
-          onclick: ev => { ev.stopPropagation(); s.toggle() }
-        }))
-        : h('div.row-star', starButton(paper)),
+      // 第一格：星标（批量模式下换成勾选框）+ 「改分类」按钮。
+      // 以前分类只能进详情页改，列表上完全看不到入口（用户反馈「不知道在哪改」）。
+      h('div.row-lead',
+        s.selectable
+          ? h('input.check', {
+            type: 'checkbox',
+            checked: s.selected,
+            title: '选中以批量操作',
+            'aria-label': '选中《' + (paper.title || '') + '》',
+            onclick: ev => { ev.stopPropagation(); s.toggle() }
+          })
+          : starButton(paper),
+        opts.onFolder ? folderButton(paper, opts.onFolder, 'row') : null
+      ),
       h('div', { style: { minWidth: 0 } },
         h('div.row-title', { text: paper.title }),
         // 副标题：作者 · 期刊，末尾补一个 PDF 标记。
@@ -215,7 +258,9 @@ const { h, typeLabel, authorsText, starsHtml, toast, copyText, escapeHtml } = ut
         )
       ),
       h('div.row-hide', h('span.badge.type', { text: typeLabel(paper.type) })),
-      h('div.row-hide', { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
+      // 注意别用内联 display：窄屏靠 .row-item .row-hide { display:none } 收掉这一列，
+      // 内联样式优先级更高，会让它占着第 3 列（0 宽）把年份挤到下一行
+      h('div.row-hide.row-tags',
         (paper.tags || []).slice(0, 2).map(t => h('span.tag', { text: t }))),
       h('div', { style: { textAlign: 'right' } },
         h('div', { text: paper.year || '—' }),
@@ -366,5 +411,5 @@ const { h, typeLabel, authorsText, starsHtml, toast, copyText, escapeHtml } = ut
     )
   }
 
-  export { paperCard, paperRow, tagNodes, starsNode, starButton, tagInput, citePanel, hero, CITE_LABELS }
-  export default { paperCard, paperRow, tagNodes, starsNode, starButton, tagInput, citePanel, hero, CITE_LABELS }
+  export { paperCard, paperRow, tagNodes, starsNode, starButton, folderButton, folderGlyph, tagInput, citePanel, hero, CITE_LABELS }
+  export default { paperCard, paperRow, tagNodes, starsNode, starButton, folderButton, folderGlyph, tagInput, citePanel, hero, CITE_LABELS }

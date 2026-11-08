@@ -48,6 +48,27 @@ import * as htmlText from '/shared/html-text.mjs'
   }
 
   /**
+   * 文案里用 **重点** 标出加粗：返回「文本 + <b>」的节点数组。
+   *
+   * 界面里大量提示是纯文本拼出来的（不走 markdown 渲染），直接写 ** 会原样显示星号，
+   * 之前「删除文件夹」确认框、设置页几处提示就露着 `**`。统一走这个函数，少写一堆拆分。
+   */
+  function rich (text) {
+    const src = String(text == null ? '' : text)
+    const out = []
+    const re = /\*\*([^*]+)\*\*/g
+    let last = 0
+    let m
+    while ((m = re.exec(src))) {
+      if (m.index > last) out.push(src.slice(last, m.index))
+      out.push(h('b', m[1]))
+      last = m.index + m[0].length
+    }
+    if (last < src.length) out.push(src.slice(last))
+    return out
+  }
+
+  /**
    * 安全地替换子节点：等于 el.replaceChildren(...) 的「会跳过空值」版本。
    *
    * 为什么需要它：浏览器里 `el.replaceChildren(node, null)` 会把 null **当成字符串**插进去，
@@ -320,7 +341,7 @@ import * as htmlText from '/shared/html-text.mjs'
   }
 
   const exported = {
-    h, append, fromHtml, mount, on,
+    h, append, fromHtml, mount, on, rich,
     escapeHtml, toPlainText, formatDate, relTime, fileSize, debounce, throttle, copyText, deburr,
     safeFileName, normalizeTagInput, splitTagInput, replace, truncate,
     toast, confirmDialog,
@@ -329,7 +350,7 @@ import * as htmlText from '/shared/html-text.mjs'
   }
   export default exported
   export {
-    h, append, fromHtml, mount, on,
+    h, append, fromHtml, mount, on, rich,
     escapeHtml, toPlainText, formatDate, relTime, fileSize, debounce, throttle, copyText, deburr,
     safeFileName, normalizeTagInput, splitTagInput, replace, truncate,
     toast, confirmDialog,

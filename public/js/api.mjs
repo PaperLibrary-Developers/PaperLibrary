@@ -277,6 +277,18 @@
 
     exportUrl: (kind, ids) => '/api/export/' + kind + qs({ ids }),
 
+    /* ---------- 文件夹分类（库内，类似资源管理器） ---------- */
+    /** 扁平列表 + 计数；前端自己拼树 */
+    listFolders: () => request('GET', '/api/folders'),
+    /** 新建：{path} 或 {parent,name}；已存在时幂等返回 */
+    createFolder: body => request('POST', '/api/folders', { body }),
+    /** 重命名：{path, name}，整棵子树一起改 */
+    renameFolder: (path, name) => request('PATCH', '/api/folders', { body: { path, name } }),
+    /** 删除：含子文件夹；里面的文献上移到父级 */
+    deleteFolder: path => request('DELETE', '/api/folders' + qs({ path })),
+    /** 把一批文献移到某个文件夹（path 为空串 = 根目录） */
+    movePapers: (ids, path) => request('POST', '/api/folders/move', { body: { ids, path } }),
+
     /* ---------- 合并后新增的 10 个端点（契约：docs/合并新增端点契约-20261107.md） ---------- */
 
     /** 图表画廊（跨文献）：q 图注检索 / paperId 单篇 / type 图类型 / page / pageSize(1-100) */

@@ -5,8 +5,9 @@ import * as searchSyntax from '../search.mjs'
 import { api } from '../api.mjs'
 import { getState, patch } from '../state/store.mjs'
 import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } from '../shell/app-api.mjs'
+import * as foldersUi from '../folders.mjs'
 
-  const { h, toast, typeLabel, authorsText, toPlainText } = util
+  const { h, toast, rich, typeLabel, authorsText, toPlainText } = util
   const { paperCard, paperRow } = components
   
   const TYPE_OPTIONS = [['all', '全部类型'], ['journal', '期刊'], ['conference', '会议'], ['preprint', '预印本'],
@@ -586,13 +587,37 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
         return
       }
       const common = {
-        onTag: tag => { state.tags = [tag]; state.page = 1; apply() }
+        onTag: tag => { state.tags = [tag]; state.page = 1; apply() },
+        // 搜索结果里也能直接改分类（列表页有入口，这里没有的话用户会以为功能消失了）
+        onFolder: paper => changeFolder(paper)
       }
       if (getState().prefs.view === 'rows') {
-        results.replaceChildren(h('div.rows', lastResult.items.map(item => paperRow(item))))
+        // 以前这里连 common 都没传：紧凑视图里点标签不会筛选，也没有改分类的入口
+        results.replaceChildren(h('div.rows', lastResult.items.map(item => paperRow(item, common))))
       } else {
         results.replaceChildren(h('div.cards', lastResult.items.map(item => paperCard(item, common))))
       }
+    }
+
+    /** 改分类：搜索结果里直接移动，成功后就地重新检索（目录变了，结果集可能也要跟着变） */
+    function changeFolder (paper) {
+      foldersUi.openFolderPicker({
+        current: paper.folder || '',
+        onPick: async path => {
+          if ((paper.folder || '') === path) {
+            toast('分类没有变化')
+            return
+          }
+          try {
+            await api.movePapers([paper.id], path)
+            foldersUi.notifyChanged()
+            toast('已移到「' + (path ? path.split('/').pop() : foldersUi.ROOT_LABEL) + '」')
+            apply()
+          } catch (err) {
+            toast('移动失败：' + (err && err.message ? err.message : err))
+          }
+        }
+      })
     }
 
     function renderPager () {
@@ -953,7 +978,7 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
       const w = state.webFacets
       if (!f.total) {
         webFacetBody.replaceChildren(h('div.hint', { style: { fontSize: '12.5px' } },
-          '先在上面输入关键词并检索，这里会列出**已取回结果**里的年份 / 期刊 / 作者分布。'))
+          rich('先在上面输入关键词并检索，这里会列出**已取回结果**里的年份 / 期刊 / 作者分布。')))
         return
       }
       const groups = [

@@ -16,6 +16,7 @@ from paperlib.adapters.llm import LLM
 from paperlib.adapters.pdf import FullText
 from paperlib.adapters.sources import Sources
 from paperlib.adapters.websearch import WebSearch
+from paperlib.domain.folders import Folders
 from paperlib.domain.library import Library
 from paperlib.util import ensure_dir, now_iso, safe_path_join
 
@@ -69,6 +70,7 @@ class Prefs:
 def create_services(config, store):
     started_at = getattr(config, "started_at", 0.0) or time.time()
     library = Library(store)
+    folders = Folders(store)
 
     fulltext = FullText(store)
     try:
@@ -167,6 +169,7 @@ def create_services(config, store):
     services = SimpleNamespace(
         db=store,
         library=library,
+        folders=folders,
         prefs=prefs,
         fulltext=fulltext,
         llm=llm,

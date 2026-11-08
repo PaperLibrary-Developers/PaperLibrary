@@ -27,7 +27,8 @@ function readStoredPrefs () {
 
 const state = {
   prefs: Object.assign({ theme: 'paper', view: 'cards', sort: 'updatedAt', pageSize: 30 }, readStoredPrefs()),
-  query: { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: '', page: 1 },
+  // folder: null = 不按文件夹过滤；'' = 只看未分类（根）；'A/B' = 某个文件夹
+  query: { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: '', page: 1, folder: null },
   tags: [],
   stats: null,
   titleMap: new Map(),

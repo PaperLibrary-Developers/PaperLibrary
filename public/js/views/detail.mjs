@@ -6,9 +6,10 @@ import { api } from '../api.mjs'
 import * as pdfviewer from '../pdfviewer.mjs'
 import { getState } from '../state/store.mjs'
 import { filterByTag, go, lookupTitle, refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
+import * as foldersUi from '../folders.mjs'
 
   const { h, toast, confirmDialog, typeLabel, authorsText, relTime, formatDate, starsHtml } = util
-  const { starsNode } = components
+  const { starsNode, folderGlyph } = components
   
   function metaCell (key, value, options) {
     const opts = options || {}
@@ -240,6 +241,37 @@ import { filterByTag, go, lookupTitle, refreshMeta, render, savePrefs } from '..
       h('div.meta-v', (opts && opts.title) ? { title: opts.title } : null, value)
     )
 
+    /** 详情页里直接改分类：不用先去列表再找那颗文件夹按钮 */
+    function changeFolderFromDetail () {
+      foldersUi.openFolderPicker({
+        current: paper.folder || '',
+        onPick: async path => {
+          if ((paper.folder || '') === path) {
+            toast('分类没有变化')
+            return
+          }
+          try {
+            await api.movePapers([paper.id], path)
+            foldersUi.notifyChanged()
+            toast('已移到「' + (path ? path.split('/').pop() : foldersUi.ROOT_LABEL) + '」')
+            render()
+          } catch (err) {
+            toast('移动失败：' + (err && err.message ? err.message : err))
+          }
+        }
+      })
+    }
+
+    const folderChip = h('button.card-folder.meta-folder' + (paper.folder ? '.has' : ''), {
+      type: 'button',
+      title: '当前分类：' + (paper.folder || '未分类') + '（点击更改）',
+      onclick: () => changeFolderFromDetail()
+    },
+      folderGlyph('card-folder-ico'),
+      h('span.meta-folder-t', paper.folder ? paper.folder.split('/').join(' / ') : '未分类'),
+      h('span.meta-folder-edit', '更改')
+    )
+
     const meta = h('section.panel',
       h('div.panel-head', '文献信息'),
       h('div.panel-body', h('div.meta-block',
@@ -254,6 +286,7 @@ import { filterByTag, go, lookupTitle, refreshMeta, render, savePrefs } from '..
         h('div.meta-rows',
           metaRow('作者', authorsText(paper.authors, 40) || '—'),
           metaRow('关键词', (paper.keywords || []).join('、') || '—'),
+          metaRow('分类', folderChip),
           metaRow('PDF 文件', pdfDisplayName || '未关联', { title: paper.pdfFile || '' })
         ),
         h('details.meta-more',

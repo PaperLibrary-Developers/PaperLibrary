@@ -70,6 +70,10 @@ class Repository:
         paper["starred"] = bool(row["starred"])
         if row["folder"]:
             paper["folder"] = row["folder"]
+        else:
+            # folder 列是唯一真源：列空了就必须把 JSON 里的旧值删掉，
+            # 否则「移动到根目录」会被 data JSON 里的旧路径盖回去。
+            paper.pop("folder", None)
         if row["arxiv_id"]:
             paper["arxivId"] = row["arxiv_id"]
         paper["doi"] = row["doi"]
@@ -206,6 +210,106 @@ class Repository:
     def updated_at(self):
         row = self.conn.execute("SELECT MAX(updated_at) AS t FROM papers").fetchone()
         return (row["t"] if row and row["t"] else "") or now_iso()
+
+    # ------------------------------------------------------------------ 文件夹（库内分类）
+    # 说明：这是「文献库内部的分类」，与磁盘目录无关。path 用 '/' 拼层级，
+    # 根目录用空串；folder 列是唯一真（papers.data JSON 里的 folder 会被 _assemble 覆盖）。
+    def list_folders(self):
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT path, name, parent, sort, created_at FROM folders "
+                "ORDER BY parent, sort, name").fetchall()
+        return [{"path": r["path"], "name": r["name"], "parent": r["parent"],
+                 "sort": r["sort"], "createdAt": r["created_at"]} for r in rows]
+
+    def get_folder(self, path):
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM folders WHERE path = ?", (path,)).fetchone()
+        return dict(row) if row else None
+
+    def folder_counts(self):
+        """每个路径下**直属**文献数（不含子文件夹）。"""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT folder, COUNT(*) AS n FROM papers GROUP BY folder").fetchall()
+        return {r["folder"] or "": int(r["n"]) for r in rows}
+
+    def save_folder(self, path, name, parent, sort=0):
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO folders(path, name, parent, sort, created_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(path) DO UPDATE SET name = excluded.name, parent = excluded.parent, "
+                "sort = excluded.sort",
+                (path, name, parent, int(sort), now_iso()))
+            self.conn.commit()
+
+    def delete_folder_rows(self, prefix):
+        """删掉 path == prefix 及其所有子孙（只删文件夹行，不动文献）。"""
+        with self._lock:
+            self.conn.execute("DELETE FROM folders WHERE path = ? OR path LIKE ?",
+                              (prefix, prefix + "/%"))
+            self.conn.commit()
+
+    def rename_folder_prefix(self, old, new):
+        """把 old 及其子树整体改名成 new：文件夹行与 papers.folder 同步迁移。
+
+        返回受影响的文献条数。调用方需先校验 new 未被占用。
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT path, name, parent FROM folders WHERE path = ? OR path LIKE ?",
+                (old, old + "/%")).fetchall()
+            # 被改名那个节点自己的 name 要换掉；子孙节点保留原来的名字
+            renamed_name = new.rsplit("/", 1)[-1]
+            for row in rows:
+                path = row["path"]
+                parent = row["parent"]
+                moved = new + path[len(old):]
+                if parent == old:
+                    parent = new
+                elif parent.startswith(old + "/"):
+                    parent = new + parent[len(old):]
+                name = renamed_name if path == old else row["name"]
+                self.conn.execute(
+                    "UPDATE folders SET path = ?, name = ?, parent = ? WHERE path = ?",
+                    (moved, name, parent, path))
+            cur = self.conn.execute(
+                "UPDATE papers SET folder = ? || substr(folder, ?) "
+                "WHERE folder = ? OR folder LIKE ?",
+                (new, len(old) + 1, old, old + "/%"))
+            affected = cur.rowcount or 0
+            self.conn.commit()
+        return affected
+
+    def move_folder_papers(self, prefix, dest):
+        """把 prefix 子树里所有文献挪到 dest，返回条数。"""
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE papers SET folder = ? WHERE folder = ? OR folder LIKE ?",
+                (dest or "", prefix, prefix + "/%"))
+            count = cur.rowcount or 0
+            self.conn.commit()
+        return count
+
+    def set_paper_folders(self, ids, path):
+        """批量把指定文献放到某个文件夹（path 为空串 = 根目录）。"""
+        ids = [str(i) for i in (ids or []) if str(i)]
+        if not ids:
+            return 0
+        with self._lock:
+            marks = ",".join("?" * len(ids))
+            cur = self.conn.execute("UPDATE papers SET folder = ? WHERE id IN (%s)" % marks,
+                                    tuple([path or ""] + ids))
+            count = cur.rowcount or 0
+            self.conn.commit()
+        return count
+
+    def papers_in_folder(self, prefix):
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id FROM papers WHERE folder = ? OR folder LIKE ?",
+                (prefix, prefix + "/%")).fetchall()
+        return [r["id"] for r in rows]
 
     # ------------------------------------------------------------------ 全文
     def get_text(self, key):

@@ -1,6 +1,6 @@
 """SQLite schema（10 张表）与迁移。
 
-唯一真源：papers / figures / tags / paper_tags / attachments / chat_messages /
+唯一真源：papers / folders / figures / tags / paper_tags / attachments / chat_messages /
 analysis / paper_text / legacy_ids / jobs（+ meta 记录版本）。
 
 设计：
@@ -12,7 +12,7 @@ analysis / paper_text / legacy_ids / jobs（+ meta 记录版本）。
 """
 from __future__ import annotations
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 DDL = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -41,6 +41,15 @@ CREATE TABLE IF NOT EXISTS papers (
 CREATE INDEX IF NOT EXISTS papers_updated ON papers(updated_at);
 CREATE INDEX IF NOT EXISTS papers_year ON papers(year);
 CREATE INDEX IF NOT EXISTS papers_doi ON papers(doi);
+
+CREATE TABLE IF NOT EXISTS folders (
+  path       TEXT PRIMARY KEY,          -- 完整路径，如 "电催化/钙钛矿"；根目录用空串表示，不入表
+  name       TEXT NOT NULL DEFAULT '',
+  parent     TEXT NOT NULL DEFAULT '',
+  sort       INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS folders_parent ON folders(parent);
 
 CREATE TABLE IF NOT EXISTS attachments (
   paper_id      TEXT NOT NULL,

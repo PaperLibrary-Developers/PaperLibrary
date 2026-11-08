@@ -384,6 +384,23 @@ class QueryEngine:
             rows = [p for p in rows if str(p.get("notes") or "").strip()]
         if opts.get("hasPdf") is True or opts.get("hasPdf") == "true":
             rows = [p for p in rows if p.get("pdfFile")]
+        # 文件夹分类：默认连子文件夹一起算（资源管理器里点开父目录就该看到全部后代），
+        # includeSubfolders=false 时只看直属。folder="" 表示根目录（只含未分类的文献）。
+        # 注意用「键存在」判断：?folder=（空值）表示「只看未分类」，不能和「不筛」混为一谈
+        if "folder" in opts:
+            path = str(opts.get("folder") or "").strip("/")
+            deep = str(opts.get("includeSubfolders") or "true").lower() != "false"
+            if path:
+                prefix = path + "/"
+                if deep:
+                    rows = [p for p in rows
+                            if str(p.get("folder") or "") == path
+                            or str(p.get("folder") or "").startswith(prefix)]
+                else:
+                    rows = [p for p in rows if str(p.get("folder") or "") == path]
+            elif deep:
+                # 根目录：未分类的文献（空 folder）
+                rows = [p for p in rows if not str(p.get("folder") or "")]
         if opts.get("starred") is True or opts.get("starred") == "true":
             rows = [p for p in rows if p.get("starred")]
         if opts.get("yearFrom"):
@@ -516,6 +533,8 @@ class QueryEngine:
             "rating": paper.get("rating"),
             # 收藏必须带上：列表页/收藏页的星标要靠它点亮（漏掉过一次，星标永远是空心的）
             "starred": bool(paper.get("starred")),
+            # 文件夹分类：卡片上显示所在目录、批量移动后不必重新拉整表也能看出变化
+            "folder": str(paper.get("folder") or ""),
             "starredAt": paper.get("starredAt") or "",
             "doi": paper.get("doi"),
             "url": paper.get("url"),
