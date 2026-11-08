@@ -336,5 +336,35 @@ const { h, typeLabel, authorsText, starsHtml, toast, copyText, escapeHtml } = ut
     return panel
   }
 
-  export { paperCard, paperRow, tagNodes, starsNode, starButton, tagInput, citePanel, CITE_LABELS }
-  export default { paperCard, paperRow, tagNodes, starsNode, starButton, tagInput, citePanel, CITE_LABELS }
+  const HERO_TONES = new Set(['blue', 'red', 'yellow', 'green'])
+
+  /**
+   * Hero 区：仿 Google 首页的多色字标（移植自素材 frontend-assets/gallery/components/hero-google.html）
+   * 字标用逐字母上色，颜色固定 Google 四色，不跟主题 --accent 走（深浅两套主题下都清晰）。
+   *
+   * options:
+   *   letters  必填，[[字符, 'blue'|'red'|'yellow'|'green'], …]，顺序即视觉顺序
+   *   sub      可选，字标右侧的圆角胶囊副标文案
+   *   subTone  可选，胶囊底色：'blue'（默认）/ 'emerald'
+   *   tagline  可选，字标下方一行灰色说明
+   * 纯 DOM 构造，零交互零请求，放哪个视图都能直接用。
+   */
+  function hero (options) {
+    const opts = options || {}
+    const logo = h('div.pl-hero__logo',
+      (opts.letters || []).map(([ch, tone]) => h('span.pl-g--' + (HERO_TONES.has(tone) ? tone : 'blue'), String(ch)))
+    )
+    if (opts.sub) {
+      logo.appendChild(h(
+        'span.pl-hero__logo-sub' + (opts.subTone === 'emerald' ? '.pl-hero__logo-sub--emerald' : ''),
+        String(opts.sub)
+      ))
+    }
+    return h('div.pl-hero',
+      logo,
+      opts.tagline ? h('div.pl-hero__tagline', String(opts.tagline)) : null
+    )
+  }
+
+  export { paperCard, paperRow, tagNodes, starsNode, starButton, tagInput, citePanel, hero, CITE_LABELS }
+  export default { paperCard, paperRow, tagNodes, starsNode, starButton, tagInput, citePanel, hero, CITE_LABELS }

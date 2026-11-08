@@ -574,6 +574,11 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 
 .select { width: auto; padding-right: 28px; cursor: pointer; }
 .toolbar { display: flex; align-items: center; gap: 8px; }
+/* 顶栏右侧按钮组（＋新增文献 / 主题切换）恒定贴右：
+   顶栏是 flex 行，平时靠可伸缩的快速筛选框把它顶到右边；搜索页和图表画廊页
+   把那个筛选框藏了（这两页自己有搜索框），没有可伸缩元素时按钮组就落到最左侧。
+   这里用 auto 外边距兜住——有筛选框时自动外边距为 0，不影响其它页面。 */
+.topbar .toolbar { margin-left: auto; }
 
 /* ---------- 按钮 ---------- */
 .btn {
@@ -611,6 +616,53 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
 .page-title { font-family: var(--font-serif); font-size: 25px; letter-spacing: .01em; }
 .page-sub { color: var(--muted); font-size: 13.5px; margin-top: 3px; }
+
+/* ---------- Hero（仿 Google 多色字标） ----------
+   移植自素材 frontend-assets/gallery/components/hero-google.html：
+   28px/700 字标 + 逐字母四色 + 可选胶囊副标 + 一行 12.5px 灰说明，自身水平居中。
+   四色是固定品牌色，不跟主题走；深色主题下 #14161a 上依然可读。 */
+.pl-hero { text-align: center; margin: 0 auto 14px; }
+.pl-hero__logo {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 1.5px; flex-wrap: wrap; row-gap: 6px;
+  font-family: var(--font-sans); font-size: 28px; font-weight: 700;
+  letter-spacing: -.5px; line-height: 1.25;
+}
+.pl-g--blue { color: #4285f4; }
+.pl-g--red { color: #ea4335; }
+.pl-g--yellow { color: #fbbc05; }
+.pl-g--green { color: #34a853; }
+.pl-hero__logo-sub {
+  margin-left: 8px; padding: 2px 8px; border-radius: 12px;
+  background: #4285f4; color: #fff;
+  font-size: 13px; font-weight: 700; letter-spacing: .02em; line-height: 1.5;
+}
+.pl-hero__logo-sub--emerald { background: #059669; }
+.pl-hero__tagline { margin-top: 4px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
+
+/* 页面头部：hero 居中；「← 返回」绝对定位到左侧，不参与居中计算，
+   所以无论按钮在不在、文字多长，字标都落在内容区正中。 */
+.hero-head {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  margin-bottom: 18px;
+}
+.hero-head .pl-hero { margin-bottom: 0; }
+.hero-head .hero-back { position: absolute; left: 0; top: 50%; transform: translateY(-50%); }
+
+/* 搜索页：搜索卡与 hero 同轴居中（素材图 3 的对齐方式）；结果区、筛选栏仍按原样满宽 */
+.hero-search { max-width: 900px; margin-left: auto; margin-right: auto; }
+
+/* 窄屏：返回按钮落回字标上方一行，避免与居中的字标重叠 */
+@media (max-width: 720px) {
+  .hero-head { display: block; }
+  .hero-head .hero-back { position: static; transform: none; margin-bottom: 8px; }
+}
+/* 小屏：字标与胶囊一起缩一档，保证 320px 宽也能整行放下 */
+@media (max-width: 480px) {
+  .pl-hero__logo { font-size: 23px; }
+  .pl-hero__logo-sub { margin-left: 6px; padding: 1px 7px; font-size: 11.5px; }
+  .pl-hero__tagline { font-size: 12px; }
+}
 
 /* ---------- 卡片列表 ---------- */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
@@ -1064,7 +1116,14 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 }
 
 /* ---------- 图表画廊（views/figures.mjs） ---------- */
-.fig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+/* 筛选条：第一行「概要 + 类型下拉」，第二行「搜索框」，两行左右边界都贴内容区。
+   第二行原来在输入框后面塞了一个 flex:1 的占位 span，它和输入框平分剩余宽度，
+   于是输入框只占一半、右半边空白，看着跟上一行的类型下拉错位——占位已从 JS 去掉，
+   这里只补两处细节：输入框不必为顶栏那个 Ctrl K 徽章预留右内边距。 */
+.fig-search .input { padding-right: 11px; }
+.fig-search-row .search-wrap { min-width: 0; }
+
+.fig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; align-items: stretch; }
 .fig-card {
   display: flex; flex-direction: column; overflow: hidden; cursor: pointer;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -1074,19 +1133,23 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 .fig-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .fig-thumb {
   aspect-ratio: 4 / 3; background: var(--surface-3); display: grid; place-items: center;
-  overflow: hidden; border-bottom: 1px solid var(--border);
+  overflow: hidden; border-bottom: 1px solid var(--border); flex: none;
 }
 .fig-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .fig-missing { font-size: 13px; color: var(--faint); }
 .fig-missing-sub { font-size: 11.5px; color: var(--faint); opacity: .8; padding: 2px 8px; text-align: center; }
-.fig-body { padding: 9px 11px 11px; display: grid; gap: 6px; }
+/* 卡片正文：列宽用 minmax(0,1fr) 钉死在卡片宽度内，
+   否则「图注 + 一行元信息」会把网格列撑成 max-content，整块溢出卡片右边缘 */
+.fig-body { padding: 9px 11px 11px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; align-content: start; }
+/* 图注固定占两行高度（截断两行），标题/图号信息固定一行 ——
+   卡片正文高度因此恒定，整行、整页的卡片边界才对齐，不会因图注长短参差。 */
 .fig-cap {
-  font-size: 13px; line-height: 1.5; color: var(--text);
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 13px; line-height: 1.5; color: var(--text); min-height: 3em;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.fig-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
-.fig-paper { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fig-badge { border: 1px solid var(--border); border-radius: 99px; padding: 0 6px; background: var(--surface-2); }
+.fig-meta { display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; font-size: 11.5px; color: var(--muted); }
+.fig-paper { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fig-badge { flex: none; white-space: nowrap; border: 1px solid var(--border); border-radius: 99px; padding: 0 6px; background: var(--surface-2); }
 .fig-paper-chip {
   display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--accent-text);
   background: var(--accent-soft); border-radius: 99px; padding: 3px 6px 3px 11px;

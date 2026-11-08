@@ -12,6 +12,12 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
   const TYPE_OPTIONS = [['all', '全部类型'], ['journal', '期刊'], ['conference', '会议'], ['preprint', '预印本'],
     ['book', '图书'], ['thesis', '学位论文'], ['report', '报告'], ['web', '网页'], ['other', '其他']]
 
+  /* hero 字标的逐字母配色，与素材 components/hero-google.html 的学术搜索页版本逐字一致 */
+  const HERO_PAPER_LIBRARY = [
+    ['P', 'blue'], ['a', 'red'], ['p', 'yellow'], ['e', 'blue'], ['r', 'green'], ['L', 'red'],
+    ['i', 'blue'], ['b', 'yellow'], ['r', 'green'], ['a', 'blue'], ['r', 'red'], ['y', 'yellow']
+  ]
+
   function trim (v) { return String(v == null ? '' : v).trim() }
 
   /**
@@ -1494,16 +1500,16 @@ import { go, refreshMeta, rememberTitles, savePrefs, scheduleRender, setView } f
     tabWeb.onclick = () => switchTab('web')
 
     outlet.replaceChildren(h('div.content',
-      h('div.page-head',
-        h('div', { style: { display: 'grid', gap: '4px' } },
-          h('div', { style: { display: 'flex', gap: '9px', alignItems: 'center' } },
-            h('button.btn.sm.ghost', { type: 'button', onclick: () => go('#/'), title: '返回全部文献' }, '← 返回'),
-            h('div.page-title', '搜索')
-          ),
-          h('div.page-sub', '一个搜索框，两个去处：先查你自己的库，再去网上找')
-        )
+      /* 头部：素材 hero（Google 多色字标）居中；原「搜索」标题与副标题由字标 + tagline 取代，
+         「← 返回」保留，绝对定位在左上角，不参与居中计算 */
+      h('div.hero-head',
+        h('button.btn.sm.ghost.hero-back', { type: 'button', onclick: () => go('#/'), title: '返回全部文献' }, '← 返回'),
+        components.hero({
+          letters: HERO_PAPER_LIBRARY,
+          tagline: '极速语义检索 · 智能穿透标题、摘要、作者与正文相关性排序'
+        })
       ),
-      h('section.panel',
+      h('section.panel.hero-search',
         h('div.panel-body', h('div', { style: { display: 'grid', gap: '9px' } },
           h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
             h('div', { style: { flex: '1 1 320px', minWidth: '200px' } }, input),

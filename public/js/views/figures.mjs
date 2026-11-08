@@ -7,6 +7,7 @@
         §4 POST /api/papers/:id/figures/extract（force 覆盖已有记录）
    依赖：util.mjs / api.mjs / shell/app-api.mjs —— 不 import app.mjs，保持 0 环 import。 */
 import * as util from '../util.mjs'
+import * as components from '../components.mjs'
 import { api } from '../api.mjs'
 import { go, setHash } from '../shell/app-api.mjs'
 
@@ -14,6 +15,12 @@ const { h, toast, replace, truncate } = util
 
 /** 契约默认值：pageSize 1-100，默认 48；画廊按 48 张一页排（缩略图网格） */
 const PAGE_SIZE = 48
+
+/* hero 字标的逐字母配色，与素材 components/hero-google.html 的图检索页版本逐字一致 */
+const HERO_FIGURE_LENS = [
+  ['F', 'blue'], ['i', 'red'], ['g', 'yellow'], ['u', 'blue'], ['r', 'green'],
+  ['e', 'red'], ['L', 'blue'], ['e', 'yellow'], ['n', 'green'], ['s', 'blue']
+]
 
 const TYPE_OPTIONS = [
   ['', '全部类型'],
@@ -40,7 +47,15 @@ function figuresHandler (ctx) {
   const bar = h('div', { id: 'figures-bar', style: { marginBottom: '14px', display: 'grid', gap: '10px' } })
   const grid = h('div', { id: 'figures-grid' })
   const pager = h('div', { id: 'figures-pager' })
-  outlet.replaceChildren(h('div.content', bar, grid, pager))
+  /* 顶部 hero（素材里的图检索页版本：FigureLens + 翠绿胶囊副标）；只建一次，
+     不参与 renderBar 的重绘，筛选/翻页时不会闪烁或丢焦点 */
+  const heroHead = components.hero({
+    letters: HERO_FIGURE_LENS,
+    sub: 'Images & Graphs',
+    subTone: 'emerald',
+    tagline: '自然语言跨语言检索每一张论文图表 · 精确到 Figure 级空间图注对齐'
+  })
+  outlet.replaceChildren(h('div.content', heroHead, bar, grid, pager))
 
   let items = []
   let info = null
@@ -126,9 +141,8 @@ function figuresHandler (ctx) {
     if (st.q) summaryBits.push('关键词「' + st.q + '」')
 
     replace(bar,
-      h('div.list-bar',
+      h('div.list-bar.fig-summary-row',
         h('span.list-summary', { text: summaryBits.join(' · ') }),
-        h('span', { style: { flex: '1 1 auto' } }),
         h('div.list-controls',
           typeSelect,
           extractBtn,
@@ -140,9 +154,9 @@ function figuresHandler (ctx) {
             : null
         )
       ),
-      h('div.list-bar',
-        h('div.search-wrap', h('span.ico', '⌕'), search),
-        h('span', { style: { flex: '1 1 auto' } }),
+      /* 搜索行：不放大占位的 span，让输入框自己铺满整行（单篇筛选胶囊在时才让位给它） */
+      h('div.list-bar.fig-search-row',
+        h('div.search-wrap.fig-search', h('span.ico', '⌕'), search),
         paperChip
       ),
       h('div.hint',
