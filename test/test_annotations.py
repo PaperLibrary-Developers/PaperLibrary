@@ -4,7 +4,7 @@
   · 空库读出来是空数组，不是 404 / null；
   · 坐标一律夹到 0~1：前端算出来的负值 / 超界值不该让标记飞到页外；
   · 认不出来的数据（类型不对、没有 id、高亮没有矩形、便签没有落点）跳过，不整单失败；
-  · 重复 id 只留第一条；颜色不认识退回 yellow；
+  · 重复 id 只留第一条；颜色认不出来退回默认黄，老的键名折算成色值；
   · 整表覆盖是原子的：PUT 之后 GET 读到的就是刚写的那一份；
   · 入参形状不对回 400（items 不是数组 / 超上限 / 不是 JSON 对象）。
 
@@ -110,7 +110,24 @@ class AnnotationsApiTest(unittest.TestCase):
         self.assertAlmostEqual(rect["x"], 0.0)      # -0.4 → 0
         self.assertAlmostEqual(rect["y"], 1.0)      # 1.7 → 1
         self.assertAlmostEqual(rect["w"], 0.5)
-        self.assertEqual(data["items"][0]["color"], "yellow")   # purple → yellow
+        self.assertEqual(data["items"][0]["color"], "#f2c433")   # purple → 默认黄
+
+    def test_02b_colors_accept_hex_and_legacy_keys(self):
+        """调色盘加了自定义颜色：六位 / 三位 hex 都要原样存住，老键名折算成色值。"""
+        status, data = self.put([
+            highlight("hx", color="#12AB34"),
+            highlight("h3", color="#abc"),
+            note("nk", color="green"),
+            highlight("hb", color="nonsense"),
+        ])
+        self.assertEqual(status, 200, data)
+        colors = {i["id"]: i["color"] for i in data["items"]}
+        self.assertEqual(colors, {
+            "hx": "#12ab34",   # 大写规整成小写
+            "h3": "#aabbcc",   # 三位展开成六位
+            "nk": "#3f9e77",   # 老键名 green
+            "hb": "#f2c433",   # 认不出来 → 默认黄
+        })
 
     def test_03_replaces_whole_set(self):
         self.put([highlight("a"), highlight("b")])

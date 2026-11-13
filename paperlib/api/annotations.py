@@ -16,6 +16,9 @@
   存归一化坐标就只需要百分比定位，重排时不用重算，也不会越用越歪。
   旋转页同样成立（矩形是在屏幕上量出来的，量和画用的是同一套页面盒子）。
 
+颜色存 #rrggbb：前端带调色盘，用户可以自己加颜色；老的键名（yellow/green/blue/pink）
+在规整时折算成色值，所以库里只有一种形状。
+
 本层只做「校验入参 → 读写」；几何计算全在前端（public/js/pdfviewer.mjs）。
 """
 from __future__ import annotations
@@ -35,7 +38,16 @@ ID_MAX = 64
 QUOTE_MAX = 600                # 引文：只用于列表里辨认，不存全文
 NOTE_MAX = 4000                # 便签正文
 TYPES = ("highlight", "note")  # 荧光笔 / 便签
-COLORS = ("yellow", "green", "blue", "pink")
+# 颜色：老数据存的是键名（yellow/green/blue/pink），现在也允许任意 #rrggbb
+# （前端有调色盘，用户能自己加颜色）。键名一律折算成色值再存，落库只有一种形状。
+COLOR_KEYS = {
+    "yellow": "#f2c433",
+    "green": "#3f9e77",
+    "blue": "#4f8fd6",
+    "pink": "#dd7a9d",
+}
+DEFAULT_COLOR = COLOR_KEYS["yellow"]
+_HEX_RE = re.compile(r"^#([0-9a-f]{6}|[0-9a-f]{3})$")
 ISO_MAX = 40
 
 _NOT_FOUND = "找不到这条文献"
@@ -60,6 +72,22 @@ def _one_line(value, limit):
     """引文：折叠所有空白成单行，列表里才好显示。"""
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[:limit]
+
+
+def _color(value):
+    """颜色规整成小写 #rrggbb。
+
+    接受三种输入：老的键名（yellow…）、6 位 / 3 位十六进制。认不出来退回默认黄，
+    保证一条脏数据不会让整页批注白掉。
+    """
+    raw = str(value or "").strip().lower()
+    if raw in COLOR_KEYS:
+        return COLOR_KEYS[raw]
+    if _HEX_RE.match(raw):
+        if len(raw) == 4:            # #abc → #aabbcc
+            return "#" + raw[1] * 2 + raw[2] * 2 + raw[3] * 2
+        return raw
+    return DEFAULT_COLOR
 
 
 def _block(value, limit):
@@ -119,9 +147,7 @@ def _norm_item(raw, stamp=False):
     page = int(_finite(raw.get("page"), 1))
     if page < 1:
         page = 1
-    color = str(raw.get("color") or "").strip()
-    if color not in COLORS:
-        color = "yellow"
+    color = _color(raw.get("color"))
 
     created_at = str(raw.get("createdAt") or "")[:ISO_MAX]
     updated_at = now_iso() if stamp else (str(raw.get("updatedAt") or "")[:ISO_MAX] or created_at)

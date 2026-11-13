@@ -66,16 +66,15 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   // pdf.js 的 FindState（viewerMod.FindState 拿不到时的兜底值）
   const FALLBACK_FIND_STATE = { FOUND: 0, NOT_FOUND: 1, WRAPPED: 2, PENDING: 3 }
 
-  // 批注：荧光笔（选区 → 半透明色块）/ 便签（点一下 → 小图标 + 文字）
-  const ANNOT_COLORS = [
-    { key: 'yellow', label: '黄' },
-    { key: 'green', label: '绿' },
-    { key: 'blue', label: '蓝' },
-    { key: 'pink', label: '粉' }
-  ]
-  const ANNOT_COLOR_KEYS = ANNOT_COLORS.map(c => c.key)
-  // 图标 / 笔头要真色值（CSS 变量只覆盖了页内标记，SVG 里直接用字面色更省事）
-  const ANNOT_HEX = { yellow: '#f2c433', green: '#3f9e77', blue: '#4f8fd6', pink: '#dd7a9d' }
+  // 批注颜色一律用 #rrggbb（老数据里的 yellow/green/blue/pink 会在读入时折算）。
+  // 内置 4 色 + 用户自己加的颜色（调色盘，存 localStorage，跨文献/跨会话都在）。
+  const ANNOT_BUILTIN_COLORS = ['#f2c433', '#3f9e77', '#4f8fd6', '#dd7a9d']
+  const ANNOT_LEGACY_COLORS = { yellow: '#f2c433', green: '#3f9e77', blue: '#4f8fd6', pink: '#dd7a9d' }
+  const ANNOT_DEFAULT_COLOR = ANNOT_BUILTIN_COLORS[0]
+  const ANNOT_PALETTE_KEY = 'lv:annot-palette'   // 纯本地偏好（不跟库同步）
+  const ANNOT_CUSTOM_MAX = 12                    // 自定义色上限：再多点起来就累了
+  const ANNOT_HEX_RE = /^#([0-9a-f]{6}|[0-9a-f]{3})$/i
+  const ANNOT_HL_ALPHA = 0.38                    // 高亮填充透明度（便签底色不透明）
   const ANNOT_MAX_RECTS = 120          // 一条高亮最多这么多行矩形（跨页长选区分页后各自成条）
   const ANNOT_MIN_DRAG = 4             // 便签模式：按下到松开的位移小于这个像素数算「点了一下」
   const ANNOT_QUOTE_MAX = 600
@@ -111,6 +110,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 /* ---------- 工具栏 ---------- */
 .lv-pdf-viewer .lv-pdf-toolbar {
   flex: 0 0 auto;
+  position: relative;          /* 调色盘按它定位 */
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -271,18 +271,8 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 }
 
 /* ============================ 批注：荧光笔 / 便签 ============================ */
-/* 颜色定义放在阅读器根节点上；编辑气泡挂在 <body> 下（见下方 .lv-annot-pop），
-   两者不共享作用域，所以气泡里的色块用同值的字面色（只 4+4 个色值，不值得抽变量）。 */
-.lv-pdf-viewer {
-  --lv-hl-yellow: rgba(250, 204, 21, .40);
-  --lv-hl-green: rgba(74, 197, 133, .34);
-  --lv-hl-blue: rgba(96, 165, 250, .34);
-  --lv-hl-pink: rgba(240, 122, 168, .32);
-  --lv-note-yellow: #f2c433;
-  --lv-note-green: #3f9e77;
-  --lv-note-blue: #4f8fd6;
-  --lv-note-pink: #dd7a9d;
-}
+/* 颜色不再写死在 CSS 里：用户可以自定义任意色值，填充 / 底色 / 描边都由脚本按
+   「色值 + 透明度」内联写进去（见 hexToRgba / inkOnColor）。 */
 
 /* 标注层：贴在每一页 .page 里（页面盒子就是坐标系），只画不挡操作 */
 .lv-pdf-viewer .lv-annot-layer {
@@ -293,10 +283,6 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   position: absolute; pointer-events: none;
   border-radius: 2px;
 }
-.lv-pdf-viewer .lv-annot-hl[data-color="yellow"] { background: var(--lv-hl-yellow); }
-.lv-pdf-viewer .lv-annot-hl[data-color="green"] { background: var(--lv-hl-green); }
-.lv-pdf-viewer .lv-annot-hl[data-color="blue"] { background: var(--lv-hl-blue); }
-.lv-pdf-viewer .lv-annot-hl[data-color="pink"] { background: var(--lv-hl-pink); }
 
 /* 定位时的闪烁：只动 box-shadow（背景色各色不同，动它会在结束时闪一下原色） */
 .lv-pdf-viewer .lv-annot-flash { animation: lv-annot-flash .7s ease-out 2; }
@@ -305,12 +291,13 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   100% { box-shadow: 0 0 0 2px rgba(47, 111, 94, 0); }
 }
 
-/* 便签图标：小方块 + 折角，里面只画**一道横线**（单行），不用图标字体 */
+/* 便签图标：小方块 + 折角，里面只画**一道横线**（单行），不用图标字体。
+   底色与横线颜色由脚本按该条批注的颜色内联写入（自定义色也能用）。 */
 .lv-pdf-viewer .lv-annot-note {
   position: absolute; width: 20px; height: 20px; margin: 0; padding: 0;
   display: flex; align-items: center; justify-content: center;
   transform: translate(-50%, -50%);
-  color: #3a2d06; background: var(--lv-note-yellow);
+  color: #3a2d06; background: #f2c433;
   border: 1px solid rgba(60, 45, 5, .30); border-radius: 5px 5px 5px 1px;
   box-shadow: 0 1px 3px rgba(30, 26, 12, .22);
   cursor: pointer; pointer-events: auto;
@@ -320,9 +307,6 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   content: ""; width: 10px; height: 1.5px; border-radius: 1px;
   background: currentColor; opacity: .85;
 }
-.lv-pdf-viewer .lv-annot-note[data-color="green"] { background: var(--lv-note-green); color: #f2fff9; }
-.lv-pdf-viewer .lv-annot-note[data-color="blue"] { background: var(--lv-note-blue); color: #f4f9ff; }
-.lv-pdf-viewer .lv-annot-note[data-color="pink"] { background: var(--lv-note-pink); color: #fff5f8; }
 .lv-pdf-viewer .lv-annot-note:hover {
   transform: translate(-50%, -50%) scale(1.15);
   box-shadow: 0 2px 7px rgba(30, 26, 12, .30);
@@ -359,7 +343,68 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 .lv-pdf-viewer .lv-annot-kind { width: 14px; height: 14px; }
 .lv-pdf-viewer .lv-pdf-icon svg,
 .lv-pdf-viewer .lv-annot-kind svg { display: block; }
-.lv-pdf-viewer .lv-pdf-color { padding: 3px 4px; height: 26px; cursor: pointer; }
+/* 颜色选择：一颗圆形色点按钮 + 弹出调色盘（内置 4 色 + 用户自定义 + 「＋」取色）
+   调色盘挂在工具栏里（position:absolute），所以工具栏本身要 relative。 */
+.lv-pdf-viewer .lv-pdf-color {
+  width: 26px; height: 26px; padding: 0; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface, #fffefb); border: 1px solid var(--border, #e2dfd5);
+  border-radius: 50%; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.lv-pdf-viewer .lv-pdf-color:hover { border-color: var(--border-strong, #cfcabb); }
+.lv-pdf-viewer .lv-pdf-color[aria-expanded="true"] {
+  border-color: var(--accent, #2f6f5e);
+  box-shadow: 0 0 0 2px var(--accent-soft, #e4efea);
+}
+.lv-pdf-viewer .lv-pdf-color-dot {
+  width: 14px; height: 14px; border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .16);
+}
+
+.lv-pdf-viewer .lv-pdf-palette {
+  position: absolute; z-index: 6;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  width: 158px; padding: 9px;
+  background: var(--surface, #fffefb);
+  border: 1px solid var(--border, #e2dfd5);
+  border-radius: 10px;
+  box-shadow: var(--shadow-2, 0 6px 22px rgba(35, 33, 25, .10), 0 2px 6px rgba(35, 33, 25, .06));
+}
+.lv-pdf-viewer .lv-pdf-palette[hidden] { display: none; }
+.lv-pdf-viewer .lv-palette-dot {
+  position: relative; width: 22px; height: 22px; padding: 0;
+  border: 2px solid transparent; border-radius: 50%; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14);
+  transition: transform .12s ease, border-color .12s ease;
+}
+.lv-pdf-viewer .lv-palette-dot:hover { transform: scale(1.12); }
+.lv-pdf-viewer .lv-palette-dot:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
+.lv-pdf-viewer .lv-palette-dot.active {
+  border-color: var(--accent, #2f6f5e);
+  box-shadow: inset 0 0 0 2px var(--surface, #fffefb);
+}
+/* 自定义色右上角的「×」：只在 hover 时露出来，避免误删 */
+.lv-pdf-viewer .lv-palette-del {
+  position: absolute; top: -5px; right: -5px;
+  width: 13px; height: 13px; border-radius: 50%;
+  display: none; align-items: center; justify-content: center;
+  font-size: 9px; line-height: 1; color: #fff;
+  background: var(--danger, #b4453a); border: 1px solid var(--surface, #fffefb);
+}
+.lv-pdf-viewer .lv-palette-dot.custom:hover .lv-palette-del { display: flex; }
+.lv-pdf-viewer .lv-palette-add {
+  width: 22px; height: 22px; padding: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1;
+  color: var(--muted, #75726a); background: transparent;
+  border: 1px dashed var(--border-strong, #cfcabb); cursor: pointer;
+}
+.lv-pdf-viewer .lv-palette-add:hover { color: var(--accent-text, #235648); border-color: var(--accent, #2f6f5e); }
+.lv-pdf-viewer .lv-palette-add[disabled] { opacity: .4; cursor: default; }
+.lv-pdf-viewer .lv-palette-hint {
+  flex: 0 0 100%; font-size: 11px; line-height: 1.4; color: var(--muted, #75726a);
+}
 
 /* 批注列表：贴在阅读区右侧的抽屉（z-index 3，低于框选取景层 4：
    进框选时它被盖住是符合预期的，框选是模态操作） */
@@ -462,17 +507,15 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 .lv-annot-btn.primary:hover { filter: brightness(1.07); background: var(--accent, #2f6f5e); }
 .lv-annot-btn.danger { color: var(--danger, #b4453a); border-color: rgba(180, 69, 58, .45); }
 .lv-annot-btn.danger.armed { color: #fff; background: var(--danger, #b4453a); border-color: var(--danger, #b4453a); }
-.lv-annot-swatches { display: flex; align-items: center; gap: 6px; }
+/* 气泡里的换色点：和调色盘同一份颜色列表，颜色由脚本内联写进 background */
+.lv-annot-swatches { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 148px; }
 .lv-annot-swatch {
   width: 20px; height: 20px; padding: 0; border-radius: 50%;
   border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
   cursor: pointer;
 }
-.lv-annot-swatch[data-color="yellow"] { background: #f2c433; }
-.lv-annot-swatch[data-color="green"] { background: #3f9e77; }
-.lv-annot-swatch[data-color="blue"] { background: #4f8fd6; }
-.lv-annot-swatch[data-color="pink"] { background: #dd7a9d; }
 .lv-annot-swatch.active { border-color: var(--accent, #2f6f5e); }
+.lv-annot-swatch:hover { transform: scale(1.08); }
 `
 
   /* ------------------------------ 小工具 ------------------------------ */
@@ -530,14 +573,83 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   }
 
   /**
+   * 颜色规整：'yellow' / '#ABC' / '#aabbcc' → '#aabbcc'；认不出来返回空串。
+   * 老数据里存的是键名，读入时统一折算，之后全链路只用色值。
+   */
+  function normalizeColor (value) {
+    const raw = String(value || '').trim().toLowerCase()
+    if (raw && ANNOT_LEGACY_COLORS[raw]) return ANNOT_LEGACY_COLORS[raw]
+    if (ANNOT_HEX_RE.test(raw)) {
+      return raw.length === 4
+        ? '#' + raw[1] + raw[1] + raw[2] + raw[2] + raw[3] + raw[3]
+        : raw
+    }
+    return ''
+  }
+
+  /** #rrggbb → rgba(...)：荧光笔的填充是半透明的 */
+  function hexToRgba (hex, alpha) {
+    const value = normalizeColor(hex) || ANNOT_DEFAULT_COLOR
+    return 'rgba(' + parseInt(value.slice(1, 3), 16) + ', ' +
+      parseInt(value.slice(3, 5), 16) + ', ' +
+      parseInt(value.slice(5, 7), 16) + ', ' + alpha + ')'
+  }
+
+  /** 这个底色上该用深字还是白字（便签图标里那道横线 / 笔身对比） */
+  function inkOnColor (hex) {
+    const value = normalizeColor(hex) || ANNOT_DEFAULT_COLOR
+    const luma = (0.299 * parseInt(value.slice(1, 3), 16) +
+      0.587 * parseInt(value.slice(3, 5), 16) +
+      0.114 * parseInt(value.slice(5, 7), 16)) / 255
+    return luma > 0.62 ? '#3a2d06' : '#ffffff'
+  }
+
+  /** 读用户自定义色；坏数据 / 隐私模式一律当空，绝不让阅读器因此起不来 */
+  function readCustomColors () {
+    let raw = null
+    try { raw = window.localStorage.getItem(ANNOT_PALETTE_KEY) } catch (err) { return [] }
+    if (!raw) return []
+    try {
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return []
+      const out = []
+      for (let i = 0; i < parsed.length && out.length < ANNOT_CUSTOM_MAX; i++) {
+        const hex = normalizeColor(parsed[i])
+        if (hex && out.indexOf(hex) < 0) out.push(hex)
+      }
+      return out
+    } catch (err) {
+      return []
+    }
+  }
+
+  function writeCustomColors (list) {
+    try { window.localStorage.setItem(ANNOT_PALETTE_KEY, JSON.stringify(list || [])) } catch (err) {}
+  }
+
+  /** 调色盘 = 内置 4 色 + 自定义色（去重，内置永远在前） */
+  function annotPalette () {
+    const out = ANNOT_BUILTIN_COLORS.slice()
+    const custom = readCustomColors()
+    for (let i = 0; i < custom.length; i++) {
+      if (out.indexOf(custom[i]) < 0) out.push(custom[i])
+    }
+    return out
+  }
+
+  function isBuiltinColor (hex) {
+    return ANNOT_BUILTIN_COLORS.indexOf(normalizeColor(hex)) >= 0
+  }
+
+  /**
    * 批注图标（14×14 内联 SVG，不依赖图标库）：
-   *   highlight → 一支斜放的笔，**笔头是当前颜色**
+   *   highlight → 一支斜放的笔，**笔头是传入的颜色**
    *   note      → 便签纸（带折角）+ 一道横线（单行）
    * @param {'highlight'|'note'} kind
-   * @param {string} colorKey yellow|green|blue|pink
+   * @param {string} color #rrggbb（也接受老的键名，内部会折算）
    */
-  function annotIcon (kind, colorKey) {
-    const hex = ANNOT_HEX[colorKey] || ANNOT_HEX.yellow
+  function annotIcon (kind, color) {
+    const hex = normalizeColor(color) || ANNOT_DEFAULT_COLOR
     const svg = svgNode('svg', {
       width: '14', height: '14', viewBox: '0 0 16 16',
       'aria-hidden': 'true', focusable: 'false'
@@ -768,8 +880,10 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       /* ---- 批注（荧光笔 / 便签）---- */
       annotations: [],        // 当前文献的批注（外部传入，内部只做读写 + 回调）
       annotMode: null,        // null | 'highlight' | 'note'
-      annotColor: 'yellow',   // 当前荧光笔颜色
+      annotColor: ANNOT_DEFAULT_COLOR,  // 当前颜色（#rrggbb）
       annotPress: null,       // 便签模式按下时的记点（起点 + 按下前的选区）
+      paletteOpen: false,     // 调色盘是否展开
+      paletteListeners: [],   // 调色盘展开期间的「点外面就收起」监听
       annotPop: null,         // 打开着的编辑气泡（挂在 body 下，销毁时必须手动摘掉）
       annotPopId: '',         // 气泡正在编辑哪一条（删除别条时用来判断要不要保留未存的改动）
       annotPopFlush: null,    // 气泡的「立刻存」回调：关闭前统一调一次，避免丢最后几个字
@@ -787,8 +901,9 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       searchInput: null, count: null, btnPrevMatch: null, btnNextMatch: null,
       btnInvert: null, linkDownload: null, linkOpen: null,
       btnRegion: null, regionLayer: null, regionBox: null, regionHint: null,
-      btnHighlight: null, btnNote: null, colorSelect: null, btnAnnotList: null,
-      highlightIcon: null, noteIcon: null,
+      btnHighlight: null, btnNote: null, btnColor: null, btnAnnotList: null,
+      highlightIcon: null, noteIcon: null, colorDot: null,
+      palette: null, colorInput: null,
       annotPanel: null, annotList: null, annotHint: null
     }
 
@@ -840,6 +955,9 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         state.annotFlashTimer = 0
       }
       try { closeAnnotPop({ keepChanges: false }) } catch (err) {}
+      try { closePalette() } catch (err) {}
+      state.paletteListeners.length = 0
+      state.paletteOpen = false
       state.annotMode = null
       state.annotPress = null
       state.annotPanelOpen = false
@@ -1736,17 +1854,21 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
     function annotNodes (item) {
       const nodes = []
       const flash = !!state.annotFlashId && state.annotFlashId === item.id
+      const color = normalizeColor(item.color) || ANNOT_DEFAULT_COLOR
       if (item.type === 'note') {
         const pt = item.point || { x: 0, y: 0 }
         const btn = el('button.lv-annot-note', {
           type: 'button',
           'data-annot-id': item.id,
-          'data-color': item.color || 'yellow',
           title: (item.note ? String(item.note).slice(0, 60) : '（空便签）') + ' · 点击查看 / 编辑',
           'aria-label': '便签：' + (item.note || '（空）')
         })
         btn.style.left = pct(pt.x)
         btn.style.top = pct(pt.y)
+        // 底色 / 横线颜色按该条批注自己的颜色来（自定义色也支持）
+        btn.style.background = color
+        btn.style.color = inkOnColor(color)
+        btn.style.borderColor = hexToRgba(color, 0.45)
         if (flash) btn.classList.add('lv-annot-flash')
         btn.onclick = ev => {
           if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation()
@@ -1766,14 +1888,12 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       for (let i = 0; i < rects.length; i++) {
         const r = rects[i]
         if (!r) continue
-        const mark = el('div.lv-annot-mark.lv-annot-hl', {
-          'data-annot-id': item.id,
-          'data-color': item.color || 'yellow'
-        })
+        const mark = el('div.lv-annot-mark.lv-annot-hl', { 'data-annot-id': item.id })
         mark.style.left = pct(r.x)
         mark.style.top = pct(r.y)
         mark.style.width = pct(r.w)
         mark.style.height = pct(r.h)
+        mark.style.background = hexToRgba(color, ANNOT_HL_ALPHA)   // 半透明色块，压字不糊
         if (flash) mark.classList.add('lv-annot-flash')
         nodes.push(mark)
       }
@@ -1848,12 +1968,12 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         : (rects[0] ? { x: rects[0].x, y: rects[0].y } : null)
       if (type === 'highlight' && !rects.length) return null
       if (type === 'note' && !point) return null
-      const color = String(raw.color || '')
       return {
         id: id,
         type: type,
         page: Math.max(1, Math.round(Number(raw.page) || 1)),
-        color: ANNOT_COLOR_KEYS.indexOf(color) >= 0 ? color : 'yellow',
+        // 老数据是 yellow/green/blue/pink，新数据是 #rrggbb，这里统一成色值
+        color: normalizeColor(raw.color) || ANNOT_DEFAULT_COLOR,
         rects: rects,
         point: type === 'note' ? point : null,
         quote: String(raw.quote || '').slice(0, ANNOT_QUOTE_MAX),
@@ -2122,7 +2242,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         id: item.id,
         type: item.type === 'note' ? 'note' : 'highlight',
         page: Math.max(1, Math.round(Number(item.page) || 1)),
-        color: ANNOT_COLOR_KEYS.indexOf(String(item.color)) >= 0 ? String(item.color) : 'yellow',
+        color: normalizeColor(item.color) || ANNOT_DEFAULT_COLOR,
         rects: Array.isArray(item.rects) ? item.rects.slice(0, ANNOT_MAX_RECTS) : [],
         point: item.point || null,
         quote: String(item.quote || '').slice(0, ANNOT_QUOTE_MAX),
@@ -2158,21 +2278,23 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       ta.value = draft.note
       pop.appendChild(ta)
 
+      // 换色：内置 4 色 + 自定义（和工具栏的调色盘是同一份列表），选完立刻落库
       const swatches = el('div.lv-annot-swatches')
-      ANNOT_COLORS.forEach(color => {
+      annotPalette().forEach(hex => {
         const dot = el('button.lv-annot-swatch', {
           type: 'button',
-          'data-color': color.key,
-          title: '用' + color.label + '色',
-          'aria-label': '用' + color.label + '色',
-          'aria-pressed': color.key === draft.color ? 'true' : 'false'
+          'data-color': hex,
+          title: hex,
+          'aria-label': '用颜色 ' + hex,
+          'aria-pressed': hex === draft.color ? 'true' : 'false'
         })
-        if (color.key === draft.color) dot.classList.add('active')
+        dot.style.background = hex
+        if (hex === draft.color) dot.classList.add('active')
         dot.onclick = () => {
-          draft.color = color.key
+          draft.color = hex
           const all = swatches.children || []
           for (let i = 0; i < all.length; i++) {
-            const on = all[i].getAttribute('data-color') === color.key
+            const on = all[i].getAttribute('data-color') === hex
             all[i].classList.toggle('active', on)
             all[i].setAttribute('aria-pressed', on ? 'true' : 'false')
           }
@@ -2365,8 +2487,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
           el('div.meta', null, [
             el('div.lv-annot-page', { text: 'P' + item.page }),
             // 图标按类型区分：荧光笔 = 一支笔（笔头取该条的颜色），便签 = 便签纸 + 单行
-            el('div.lv-annot-kind', { 'data-color': item.color || 'yellow', 'aria-hidden': 'true' },
-              [annotIcon(item.type, item.color)])
+            el('div.lv-annot-kind', { 'aria-hidden': 'true' }, [annotIcon(item.type, item.color)])
           ]),
           el('div.body', null, [
             quote ? el('div.lv-annot-quote-text', { text: quote }) : null,
@@ -2454,8 +2575,153 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       // 选了别的颜色就把两个图标重画一遍（笔头 / 便签线条跟着变），只在真的变了时动 DOM
       syncAnnotIcon(ui.highlightIcon, 'highlight')
       syncAnnotIcon(ui.noteIcon, 'note')
-      if (ui.colorSelect && ui.colorSelect.value !== state.annotColor) ui.colorSelect.value = state.annotColor
       syncAnnotCount()
+    }
+
+    /* ---- 颜色 / 调色盘 ---- */
+
+    /** 选一个颜色（幂等）：圆点、两个图标、之后的批注都用它 */
+    function setAnnotColor (hex) {
+      const next = normalizeColor(hex) || ANNOT_DEFAULT_COLOR
+      state.annotColor = next
+      if (ui.colorDot) ui.colorDot.style.background = next
+      if (ui.btnColor) ui.btnColor.title = '批注颜色 ' + next + '（点开可以选色 / 加自己的颜色）'
+      syncAnnotButtons()
+    }
+
+    /** 把一个色值加进自定义调色盘（重复的不加；满了就顶掉最早的那个） */
+    function addCustomColor (hex) {
+      const value = normalizeColor(hex)
+      if (!value) return false
+      const list = readCustomColors()
+      if (list.indexOf(value) >= 0) return true
+      if (list.length >= ANNOT_CUSTOM_MAX) list.shift()
+      list.push(value)
+      writeCustomColors(list)
+      return true
+    }
+
+    function removeCustomColor (hex) {
+      const value = normalizeColor(hex)
+      writeCustomColors(readCustomColors().filter(item => item !== value))
+      if (state.annotColor === value) setAnnotColor(ANNOT_DEFAULT_COLOR)
+      renderPalette()          // 已经用过这个颜色的批注保持原样，不动历史数据
+    }
+
+    /** 重画调色盘：内置 4 色 + 自定义（hover 出 ×）+ 「＋」取色 */
+    function renderPalette () {
+      if (!ui.palette) return
+      const colors = annotPalette()
+      const customCount = readCustomColors().length
+      const nodes = []
+      colors.forEach(hex => {
+        const custom = !isBuiltinColor(hex)
+        const dot = el('button.lv-palette-dot', {
+          type: 'button',
+          title: custom ? hex + '（自定义，点右上角 × 可删除）' : hex,
+          'aria-label': '颜色 ' + hex,
+          'aria-pressed': hex === state.annotColor ? 'true' : 'false'
+        })
+        dot.style.background = hex
+        if (hex === state.annotColor) dot.classList.add('active')
+        if (custom) {
+          dot.classList.add('custom')
+          const remove = el('span.lv-palette-del', { text: '×', 'aria-hidden': 'true' })
+          remove.onclick = ev => {
+            if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation()
+            removeCustomColor(hex)
+          }
+          dot.appendChild(remove)
+        }
+        dot.onclick = () => {
+          setAnnotColor(hex)
+          closePalette()
+        }
+        nodes.push(dot)
+      })
+      const full = customCount >= ANNOT_CUSTOM_MAX
+      const add = el('button.lv-palette-add', {
+        type: 'button', text: '＋',
+        title: full ? ('自定义颜色最多 ' + ANNOT_CUSTOM_MAX + ' 个，先删一个再加') : '用取色器加一个自己的颜色',
+        disabled: full ? true : null,
+        'aria-label': '添加自定义颜色'
+      })
+      add.onclick = () => {
+        if (full) return
+        try { ui.colorInput.value = state.annotColor } catch (err) {}
+        try { ui.colorInput.click() } catch (err) {}
+      }
+      nodes.push(add)
+      nodes.push(el('div.lv-palette-hint', { text: full ? '已达自定义上限' : '点 ＋ 取色器加颜色' }))
+      ui.palette.replaceChildren.apply(ui.palette, nodes)
+    }
+
+    /** 调色盘贴到颜色按钮下方；右边放不下就往左收，别顶出工具栏 */
+    function placePalette () {
+      if (!ui.palette || !ui.btnColor) return
+      const rect = clientRectOf(ui.btnColor)
+      const base = clientRectOf(ui.toolbar)
+      if (!rect || !base) return
+      const width = ui.palette.offsetWidth || 158
+      const maxLeft = Math.max(4, base.width - width - 4)
+      const left = Math.min(Math.max(4, rect.left - base.left), maxLeft)
+      ui.palette.style.left = Math.round(left) + 'px'
+      ui.palette.style.top = Math.round(rect.top - base.top + rect.height + 6) + 'px'
+    }
+
+    function bindPaletteDoc () {
+      if (typeof document.addEventListener !== 'function') return
+      const onDown = ev => {
+        const target = ev && ev.target
+        if (!target) return
+        if (ui.palette && ui.palette.contains(target)) return
+        if (ui.btnColor && ui.btnColor.contains(target)) return
+        closePalette()
+      }
+      const onKey = ev => {
+        if (ev && (ev.key === 'Escape' || ev.key === 'Esc')) closePalette()
+      }
+      document.addEventListener('mousedown', onDown, true)
+      document.addEventListener('keydown', onKey, true)
+      const items = [
+        { target: document, type: 'mousedown', fn: onDown, capture: true },
+        { target: document, type: 'keydown', fn: onKey, capture: true }
+      ]
+      for (let i = 0; i < items.length; i++) {
+        state.paletteListeners.push(items[i])
+        state.domListeners.push(items[i])
+      }
+    }
+
+    function unbindPaletteDoc () {
+      for (let i = 0; i < state.paletteListeners.length; i++) {
+        const item = state.paletteListeners[i]
+        try { item.target.removeEventListener(item.type, item.fn, true) } catch (err) {}
+        const at = state.domListeners.indexOf(item)
+        if (at >= 0) state.domListeners.splice(at, 1)
+      }
+      state.paletteListeners.length = 0
+    }
+
+    function togglePalette (force) {
+      if (state.destroyed || state.tornDown) return
+      const open = force === undefined ? !state.paletteOpen : !!force
+      if (!open) { closePalette(); return }
+      if (state.paletteOpen) return
+      state.paletteOpen = true
+      renderPalette()
+      if (ui.palette) ui.palette.hidden = false
+      placePalette()
+      if (ui.btnColor) ui.btnColor.setAttribute('aria-expanded', 'true')
+      bindPaletteDoc()
+    }
+
+    function closePalette () {
+      if (!state.paletteOpen) return
+      state.paletteOpen = false
+      if (ui.palette) ui.palette.hidden = true
+      if (ui.btnColor) ui.btnColor.setAttribute('aria-expanded', 'false')
+      unbindPaletteDoc()
     }
 
     /** 图标颜色跟随当前选择；用 data-color 记住上次画的是哪一色，避免每次 sync 都重建节点 */
@@ -2638,10 +2904,19 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         type: 'button', 'aria-pressed': 'false',
         title: '便签：开着的时候在 PDF 上点一下，就贴一张便签'
       }, [ui.noteIcon, '便签'])
-      ui.colorSelect = el('select.lv-pdf-input.lv-pdf-color', {
-        title: '荧光笔 / 便签的颜色', 'aria-label': '批注颜色'
-      }, ANNOT_COLORS.map(color => el('option', { value: color.key, text: color.label + '色' })))
-      ui.colorSelect.value = state.annotColor
+      // 颜色：一颗圆点按钮，点开是调色盘（内置 4 色 + 自定义 + 「＋」自己取色）
+      ui.colorDot = el('span.lv-pdf-color-dot')
+      ui.btnColor = el('button.lv-pdf-color', {
+        type: 'button', 'aria-expanded': 'false', 'aria-haspopup': 'true',
+        title: '批注颜色（点开可以选色 / 加自己的颜色）', 'aria-label': '批注颜色'
+      }, [ui.colorDot])
+      ui.palette = el('div.lv-pdf-palette', { hidden: true, role: 'group', 'aria-label': '批注调色盘' })
+      // 系统取色器：调色盘里的「＋」借它取任意颜色（原生控件省事且一定有）
+      ui.colorInput = el('input', {
+        type: 'color', value: ANNOT_DEFAULT_COLOR,
+        style: 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-10px;top:-10px',
+        'aria-hidden': 'true', tabindex: '-1'
+      })
       ui.btnAnnotList = el('button.lv-pdf-btn', {
         type: 'button', 'aria-pressed': 'false', text: '批注',
         title: '展开批注列表：点一条就跳到它在哪一页'
@@ -2663,10 +2938,13 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
         el('div.lv-pdf-group', null, [ui.btnZoomOut, ui.zoom, ui.btnZoomIn, ui.btnFitWidth, ui.btnFitPage]),
         el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
-        el('div.lv-pdf-group', null, [ui.btnHighlight, ui.btnNote, ui.colorSelect]),
+        el('div.lv-pdf-group', null, [ui.btnHighlight, ui.btnNote, ui.btnColor]),
         el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
         el('div.lv-pdf-group.grow', null, [ui.searchInput, ui.count, ui.btnPrevMatch, ui.btnNextMatch]),
-        el('div.lv-pdf-group.right', null, [ui.btnAnnotList, ui.btnRegion, ui.btnInvert, ui.linkDownload, ui.linkOpen])
+        el('div.lv-pdf-group.right', null, [ui.btnAnnotList, ui.btnRegion, ui.btnInvert, ui.linkDownload, ui.linkOpen]),
+        // 调色盘 + 取色器：挂在工具栏里（工具栏 position:relative），弹出时贴着颜色按钮
+        ui.palette,
+        ui.colorInput
       ])
 
       ui.viewer = el('div.pdfViewer')     // 这个 div 就是 PDFViewer 的 viewer 参数
@@ -2732,17 +3010,21 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       ui.btnRegion.onclick = function () { toggleRegionSelect() }
       syncRegionButton()
 
-      // 批注：三个按钮 + 颜色选择；mousedown/mouseup 挂在滚动容器上（事件从文本层冒上来）
+      // 批注：两个模式按钮 + 颜色圆点（点开调色盘）；mousedown/mouseup 挂在滚动容器上（事件从文本层冒上来）
       ui.btnHighlight.onclick = function () { setAnnotMode('highlight') }
       ui.btnNote.onclick = function () { setAnnotMode('note') }
-      ui.colorSelect.onchange = function () {
-        const next = String(ui.colorSelect.value || '')
-        state.annotColor = ANNOT_COLOR_KEYS.indexOf(next) >= 0 ? next : 'yellow'
-        syncAnnotButtons()          // 让工具栏两个图标的颜色跟着变
+      ui.btnColor.onclick = function () { togglePalette() }
+      ui.colorInput.onchange = function () {
+        const hex = normalizeColor(ui.colorInput.value)
+        if (!hex) return
+        addCustomColor(hex)
+        setAnnotColor(hex)
+        renderPalette()             // 让新颜色立刻出现在调色盘里
       }
       ui.btnAnnotList.onclick = function () { showAnnotPanel(!state.annotPanelOpen) }
       onGlobal(ui.scroll, 'mousedown', onAnnotDown)
       onGlobal(ui.scroll, 'mouseup', onAnnotUp)
+      setAnnotColor(state.annotColor)   // 初始化圆点 / 两个图标的颜色
       renderAnnotPanel()
       syncAnnotButtons()
 
