@@ -22,8 +22,8 @@ import { compareHandler } from './views/compare.mjs'
 import { deepHandler } from './views/deep.mjs'
 // 使用文档（新手手册）：纯静态页，放在侧栏最下方
 import { guideHandler } from './views/guide.mjs'
-// 全库智能问答助手（Copilot）：常驻侧栏底部、使用文档上面（可折叠，不占主区）
-import { mountCopilot } from './copilot.mjs'
+// 全库智能问答助手（Copilot）：入口在侧栏「使用文档」上方，点开是左下角对话框
+import { copilotSideEntry, mountCopilotDock } from './copilot.mjs'
 import { copilotHandler } from './views/copilot.mjs'
 // 文件夹分类：侧栏树、导入选目录、管理器共用的组件
 import * as foldersUi from './folders.mjs'
@@ -398,9 +398,10 @@ const { h, toast, debounce } = util
       // 底部区块：文档入口 + 统计/提示。用 margin-top:auto 整体贴底，
       // 这样入口正好落在「共 N 条 · N 个标签」上方那一块，而不是挤在功能导航里
       h('div.side-bottom',
-        // PaperHub Copilot：常驻、可折叠的问答模块（使用文档上面）。
-        // 放侧栏而不是独立页面：新手提问时不用离开文献列表，主内容区也不被挤占。
-        mountCopilot(),
+        // 智能问答助手：唯一的入口就是这一行（紧贴「使用文档」上方），点开在左下角弹对话框。
+        // 对话不放在侧栏里：侧栏只有 222px，放不下 Markdown 回答的正文宽度。
+        // 窄屏点它是「开抽屉再开面板」，所以顺手把抽屉收起来，别让遮罩挡住对话框。
+        copilotSideEntry({ onOpen: () => closeDrawer({ deferFocus: true }) }),
         h('button.side-doc' + (activePath === '/guide' ? '.active' : ''), {
           type: 'button',
           'data-nav': '/guide',
@@ -764,6 +765,8 @@ const { h, toast, debounce } = util
     app.hidden = false
     // 首屏就把抽屉状态贴上去：宽屏沿用上次的收起/展开，窄屏默认收起
     syncSidebar()
+    // 左下角的问答对话框：挂在 body 上而不是 #app 里，路由重建外壳时不会跟着被换掉
+    mountCopilotDock()
     const bootEl = document.getElementById('boot')
     if (bootEl) bootEl.remove()
     patch({ booted: true })
