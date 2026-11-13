@@ -25,6 +25,7 @@ import * as foldersUi from '../folders.mjs'
     const id = routeParams.id
     // 换一篇文献时先把上一个阅读器释放掉（worker 和 canvas 都不便宜）
     disposePdfViewer()
+    resetAnnotationBridge()
     outlet.replaceChildren(h('div.content', h('div.empty', h('div.big', '正在打开文献…'))))
 
     let data
@@ -41,6 +42,73 @@ import * as foldersUi from '../folders.mjs'
     if (isStale()) return
     const paper = data.paper
     const pdfOk = data.pdfExists
+
+    /* ---------- PDF 批注（荧光笔 / 便签） ---------- */
+    // 阅读器只管画和改，数据从这里读写：打开时先取一次，改完由 savePdfAnnotations 落库。
+    //
+    // 这里有一层「存不下也不丢」的兜底（踩过一次：后台进程还是旧代码，PUT 回
+    // 404「接口不存在：/api/papers/<id>/annotations」，标了一屏，一刷新全没了）：
+    //   ① 读失败不拦页面，当作「这篇还没有批注」；
+    //   ② 写失败先把这一份整表快照 + 期间删掉的 id 记进 localStorage（按文献 id 分键）；
+    //   ③ 下次打开这篇：服务端那份与本地草稿合并 → 静默补写一次 → 成功后清草稿；
+    //   ④ 同样的失败只提示一次，不会每标一笔弹一个红框。
+    let pdfAnnotations = []
+    let annotLoaded = false              // 是否真的读到了服务端那一份（读失败时不能拿空表去覆盖）
+    if (pdfOk) {
+      try {
+        const res = await api.getAnnotations(paper.id)
+        pdfAnnotations = Array.isArray(res && res.items) ? res.items : []
+        annotLoaded = true
+      } catch (err) {
+        pdfAnnotations = []
+      }
+      if (isStale()) return
+    }
+
+    const annotDraft = readAnnotDraft(paper.id)
+    const hasAnnotDraft = annotDraft.items.length > 0 || annotDraft.removed.length > 0
+    if (hasAnnotDraft) {
+      pdfAnnotations = mergeAnnotations(pdfAnnotations, annotDraft.items)
+        .filter(item => annotDraft.removed.indexOf(item.id) < 0)
+    }
+
+    // 串行写：连着标两处时，两个 PUT 按顺序落地，慢的那个不会把新的覆盖掉
+    let annotSaveChain = Promise.resolve()
+    let annotKnownIds = pdfAnnotations.map(item => item.id)   // 上一次「服务端确实存住了」的 id 集合
+    let annotWarned = false                                   // 同类错误只提醒一次
+
+    /**
+     * 保存批注（整表覆盖）。失败先落本地草稿，再给一次「照着做就能修好」的提示。
+     * @param {Array} items
+     * @param {{silent?:boolean}} [options] silent = 补写草稿时不打扰用户
+     */
+    function savePdfAnnotations (items, options) {
+      const opts = options || {}
+      const list = Array.isArray(items) ? items : []
+      const ids = list.map(item => item && item.id).filter(Boolean)
+      const removed = annotKnownIds.filter(id => ids.indexOf(id) < 0)
+      annotSaveChain = annotSaveChain
+        .then(() => api.saveAnnotations(paper.id, list))
+        .then(() => {
+          annotKnownIds = ids
+          annotWarned = false
+          clearAnnotDraft(paper.id)          // 服务端已经存住了，本地草稿可以扔
+        })
+        .catch(err => {
+          writeAnnotDraft(paper.id, list, removed)   // 兜底：先存本机，下次打开自动补
+          if (opts.silent || annotWarned) return
+          annotWarned = true
+          if (err && err.status === 404) {
+            // 404 = 这台服务还没有批注接口：几乎都是「后台进程还是旧代码」（路由表在启动时
+            // 就 import 进内存了，改了 routes.py 也不会热更）。提示要能照着做，别只报错。
+            toast('批注暂存在本机：文献库后台还没这个接口（多半是旧进程）。重启一次文献库，重开这篇会自动补存。', 'warn')
+          } else {
+            toast('批注保存失败：' + err.message + '（已暂存在本机，下次打开会自动重试）', 'error')
+          }
+        })
+    }
+    // 上次留下的草稿：静默补写一次。服务端已支持就当场同步掉；还是旧进程就继续留草稿，不再打扰。
+    if (hasAnnotDraft && annotLoaded) savePdfAnnotations(pdfAnnotations, { silent: true })
 
     /* ---------- 顶部 ---------- */
 
@@ -1441,6 +1509,9 @@ import * as foldersUi from '../folders.mjs'
     currentPaperId = paper.id
     // 阅读器里「框选提问」的回调：框完把图交给这个函数弹窗提问
     currentRegionHandler = openRegionAsk
+    // 批注：把这次读到的批注交给阅读器，改完走 savePdfAnnotations 落库
+    currentAnnotations = pdfAnnotations
+    currentAnnotationsHandler = savePdfAnnotations
     if (pdfOk) mountPdfViewer()
 
     // 右列高度对齐左边 PDF 框：CSS 里两边已经用了同一个 --read-h，
@@ -1511,6 +1582,8 @@ import * as foldersUi from '../folders.mjs'
 
   let activePdfViewer = null
   let currentRegionHandler = null
+  let currentAnnotations = []
+  let currentAnnotationsHandler = null
 
   /** 离开详情页时把 worker / canvas 释放掉，避免来回切换页面越积越多 */
   function disposePdfViewer () {
@@ -1518,6 +1591,94 @@ import * as foldersUi from '../folders.mjs'
       try { activePdfViewer.destroy() } catch (err) { console.warn('[pdf] 释放阅读器失败：', err) }
     }
     activePdfViewer = null
+  }
+
+  /** 断开批注回调（旧实例的回调不能把数据写到下一篇文献上） */
+  function resetAnnotationBridge () {
+    currentAnnotations = []
+    currentAnnotationsHandler = null
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 批注本地草稿：服务端存不下时的兜底（数据不丢，下次打开自动补）        */
+  /* ------------------------------------------------------------------ */
+
+  const ANNOT_DRAFT_PREFIX = 'lv:annot-draft:'
+  const ANNOT_DRAFT_MAX = 1024 * 1024        // 单篇草稿上限 1MB，超了就不写（localStorage 只有 5MB）
+
+  function annotDraftKey (paperId) {
+    return ANNOT_DRAFT_PREFIX + String(paperId || '')
+  }
+
+  /**
+   * 读本地草稿。
+   * @returns {{items:Array, removed:Array<string>}} 没有/坏数据/隐私模式一律返回空草稿
+   */
+  function readAnnotDraft (paperId) {
+    const empty = { items: [], removed: [] }
+    let raw = null
+    try {
+      raw = window.localStorage.getItem(annotDraftKey(paperId))
+    } catch (err) {
+      return empty                          // 隐私模式 / 存储被禁
+    }
+    if (!raw) return empty
+    try {
+      const parsed = JSON.parse(raw)
+      if (!parsed || parsed.v !== 1) return empty
+      return {
+        items: Array.isArray(parsed.items) ? parsed.items.filter(item => item && item.id) : [],
+        removed: Array.isArray(parsed.removed) ? parsed.removed.map(String) : []
+      }
+    } catch (err) {
+      return empty
+    }
+  }
+
+  /** 记一份草稿（整表快照 + 这次删掉的 id）；空草稿等于删键 */
+  function writeAnnotDraft (paperId, items, removed) {
+    const list = Array.isArray(items) ? items : []
+    const gone = Array.isArray(removed) ? removed : []
+    try {
+      if (!list.length && !gone.length) {
+        window.localStorage.removeItem(annotDraftKey(paperId))
+        return
+      }
+      const payload = JSON.stringify({ v: 1, at: new Date().toISOString(), items: list, removed: gone })
+      if (payload.length > ANNOT_DRAFT_MAX) return
+      window.localStorage.setItem(annotDraftKey(paperId), payload)
+    } catch (err) {
+      // 配额满 / 被禁：没有兜底也比把详情页弄崩强
+    }
+  }
+
+  function clearAnnotDraft (paperId) {
+    try {
+      window.localStorage.removeItem(annotDraftKey(paperId))
+    } catch (err) {}
+  }
+
+  /**
+   * 合并两份批注：同一个 id 用 updatedAt 较新的那份（本地草稿通常是后改的，所以多数时候它胜出）。
+   * 注意这是**并集**：服务端独有、草稿里没有的条目会保留（宁可在极少数情况下把离线删掉的
+   * 一条又找回来，也不能把别人新加的批注弄丢）。真正删除靠草稿里的 removed 列表排除。
+   */
+  function mergeAnnotations (base, extra) {
+    const out = []
+    const index = new Map()
+    const list = [].concat(Array.isArray(base) ? base : [], Array.isArray(extra) ? extra : [])
+    for (const item of list) {
+      if (!item || !item.id) continue
+      const at = index.get(item.id)
+      if (at === undefined) {
+        index.set(item.id, out.length)
+        out.push(item)
+        continue
+      }
+      const prev = out[at]
+      if (String(item.updatedAt || '') >= String(prev.updatedAt || '')) out[at] = item
+    }
+    return out
   }
   if (typeof window !== 'undefined' && !window.__lvPdfCleanupBound) {
     window.__lvPdfCleanupBound = true
@@ -1543,6 +1704,12 @@ import * as foldersUi from '../folders.mjs'
         url,
         title: 'PDF 原文',
         downloadUrl: url,
+        // 批注：把这次读到的交给阅读器；它改完（新增/改内容/删除）回调这里落库
+        annotations: currentAnnotations,
+        onAnnotationsChange: items => {
+          currentAnnotations = items
+          if (typeof currentAnnotationsHandler === 'function') currentAnnotationsHandler(items)
+        },
         // 框选提问：阅读器把框出来的高清图交回来，由详情页弹窗提问
         onRegionSelected: (dataUrl, info) => {
           if (typeof currentRegionHandler === 'function') currentRegionHandler(dataUrl, info || {})

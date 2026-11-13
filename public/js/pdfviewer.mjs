@@ -8,6 +8,9 @@
    - 对外导出 mount(container, { url, title, downloadUrl }) + 反色偏好读写 + setPdfjsBase
    - 反色是**独立开关**：只由工具栏「反色」按钮改，选择记在 localStorage（lv:pdf-invert），
      下次打开、换一篇文献都沿用上次的选择；不跟系统/夜间主题联动
+   - 批注（荧光笔 / 便签）只是**渲染 + 交互**：批注数据由调用方经 options.annotations 传进来，
+     改完通过 options.onAnnotationsChange 交回去由调用方落库。阅读器自己不碰网络、不碰存储，
+     坐标存「相对该页的 0~1 归一化值」，所以缩放 / 适宽 / 换屏幕都不用重算。
    - 所有样式自带（注入 <head>，只插一次），不修改 public/styles.css
    --------------------------------------------------------------- */
 import { vendorUrl, getVendorBase, setVendorBase } from './vendor.mjs'
@@ -62,6 +65,21 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 
   // pdf.js 的 FindState（viewerMod.FindState 拿不到时的兜底值）
   const FALLBACK_FIND_STATE = { FOUND: 0, NOT_FOUND: 1, WRAPPED: 2, PENDING: 3 }
+
+  // 批注：荧光笔（选区 → 半透明色块）/ 便签（点一下 → 小图标 + 文字）
+  const ANNOT_COLORS = [
+    { key: 'yellow', label: '黄' },
+    { key: 'green', label: '绿' },
+    { key: 'blue', label: '蓝' },
+    { key: 'pink', label: '粉' }
+  ]
+  const ANNOT_COLOR_KEYS = ANNOT_COLORS.map(c => c.key)
+  const ANNOT_MAX_RECTS = 120          // 一条高亮最多这么多行矩形（跨页长选区分页后各自成条）
+  const ANNOT_MIN_DRAG = 4             // 便签模式：按下到松开的位移小于这个像素数算「点了一下」
+  const ANNOT_QUOTE_MAX = 600
+  const ANNOT_NOTE_MAX = 4000
+  const ANNOT_FLASH_MS = 1400          // 定位后闪烁多久
+  const ANNOT_LAYER_CLASS = 'lv-annot-layer'
 
   /* ------------------------------ 样式表 ------------------------------ */
   /* 全部用项目已有的 CSS 变量 + 兜底值；夜间由 [data-theme="night"] 覆盖变量，这里不用重定义。
@@ -249,6 +267,213 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   pointer-events: none;
 }
+
+/* ============================ 批注：荧光笔 / 便签 ============================ */
+/* 颜色定义放在阅读器根节点上；编辑气泡挂在 <body> 下（见下方 .lv-annot-pop），
+   两者不共享作用域，所以气泡里的色块用同值的字面色（只 4+4 个色值，不值得抽变量）。 */
+.lv-pdf-viewer {
+  --lv-hl-yellow: rgba(250, 204, 21, .40);
+  --lv-hl-green: rgba(74, 197, 133, .34);
+  --lv-hl-blue: rgba(96, 165, 250, .34);
+  --lv-hl-pink: rgba(240, 122, 168, .32);
+  --lv-note-yellow: #f2c433;
+  --lv-note-green: #3f9e77;
+  --lv-note-blue: #4f8fd6;
+  --lv-note-pink: #dd7a9d;
+}
+
+/* 标注层：贴在每一页 .page 里（页面盒子就是坐标系），只画不挡操作 */
+.lv-pdf-viewer .lv-annot-layer {
+  position: absolute; inset: 0; z-index: 2;
+  pointer-events: none;
+}
+.lv-pdf-viewer .lv-annot-mark {
+  position: absolute; pointer-events: none;
+  border-radius: 2px;
+}
+.lv-pdf-viewer .lv-annot-hl[data-color="yellow"] { background: var(--lv-hl-yellow); }
+.lv-pdf-viewer .lv-annot-hl[data-color="green"] { background: var(--lv-hl-green); }
+.lv-pdf-viewer .lv-annot-hl[data-color="blue"] { background: var(--lv-hl-blue); }
+.lv-pdf-viewer .lv-annot-hl[data-color="pink"] { background: var(--lv-hl-pink); }
+
+/* 定位时的闪烁：只动 box-shadow（背景色各色不同，动它会在结束时闪一下原色） */
+.lv-pdf-viewer .lv-annot-flash { animation: lv-annot-flash .7s ease-out 2; }
+@keyframes lv-annot-flash {
+  0%   { box-shadow: 0 0 0 2px rgba(47, 111, 94, .85); }
+  100% { box-shadow: 0 0 0 2px rgba(47, 111, 94, 0); }
+}
+
+/* 便签图标：小方块 + 折角，里面的「三道横线」用 repeating-gradient 画，不用图标字体 */
+.lv-pdf-viewer .lv-annot-note {
+  position: absolute; width: 20px; height: 20px; margin: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  transform: translate(-50%, -50%);
+  color: #3a2d06; background: var(--lv-note-yellow);
+  border: 1px solid rgba(60, 45, 5, .30); border-radius: 5px 5px 5px 1px;
+  box-shadow: 0 1px 3px rgba(30, 26, 12, .22);
+  cursor: pointer; pointer-events: auto;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.lv-pdf-viewer .lv-annot-note::before {
+  content: ""; width: 10px; height: 8px; border-radius: 1px;
+  background: repeating-linear-gradient(to bottom, currentColor 0 1.5px, transparent 1.5px 3.5px);
+  opacity: .8;
+}
+.lv-pdf-viewer .lv-annot-note[data-color="green"] { background: var(--lv-note-green); color: #f2fff9; }
+.lv-pdf-viewer .lv-annot-note[data-color="blue"] { background: var(--lv-note-blue); color: #f4f9ff; }
+.lv-pdf-viewer .lv-annot-note[data-color="pink"] { background: var(--lv-note-pink); color: #fff5f8; }
+.lv-pdf-viewer .lv-annot-note:hover {
+  transform: translate(-50%, -50%) scale(1.15);
+  box-shadow: 0 2px 7px rgba(30, 26, 12, .30);
+  z-index: 1;
+}
+.lv-pdf-viewer .lv-annot-note:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
+
+/* 进入标注模式时的说明条（常驻，不用定时器；退出模式立刻消失） */
+.lv-pdf-viewer .lv-annot-hint {
+  position: absolute; left: 50%; top: 8px; transform: translateX(-50%);
+  z-index: 3; max-width: calc(100% - 24px);
+  padding: 4px 10px; font-size: 12px; line-height: 1.5;
+  color: var(--accent-text, #235648); background: var(--accent-soft, #e4efea);
+  border: 1px solid rgba(47, 111, 94, .28); border-radius: 99px;
+  box-shadow: var(--shadow-1, 0 1px 2px rgba(35, 33, 25, .06));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* 标注模式下的光标提示：荧光笔 = 选文字，便签 = 点位置 */
+.lv-pdf-viewer.lv-annot-picking .lv-pdf-scroll { cursor: text; }
+.lv-pdf-viewer.lv-annot-picking .lv-pdf-scroll .page { cursor: text; }
+.lv-pdf-viewer.lv-annot-pinning .lv-pdf-scroll,
+.lv-pdf-viewer.lv-annot-pinning .lv-pdf-scroll .page { cursor: copy; }
+
+/* 工具栏上的两个小图标：荧光笔 = 一道半透明黄条；便签 = 缺一角的方框（纯 CSS，不用图标库） */
+.lv-pdf-viewer .lv-pdf-icon-hl {
+  display: inline-block; width: 12px; height: 9px; border-radius: 2px;
+  background: rgba(250, 204, 21, .9);
+  box-shadow: inset 0 -3px 0 rgba(120, 92, 0, .18);
+}
+.lv-pdf-viewer .lv-pdf-icon-note {
+  display: inline-block; width: 10px; height: 11px;
+  border: 1.5px solid currentColor; border-radius: 2px 2px 2px 0;
+}
+.lv-pdf-viewer .lv-pdf-color { padding: 3px 4px; height: 26px; cursor: pointer; }
+
+/* 批注列表：贴在阅读区右侧的抽屉（z-index 3，低于框选取景层 4：
+   进框选时它被盖住是符合预期的，框选是模态操作） */
+.lv-pdf-viewer .lv-annot-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 258px; z-index: 3;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--surface, #fffefb);
+  border-left: 1px solid var(--border, #e2dfd5);
+  box-shadow: -8px 0 20px rgba(28, 25, 15, .10);
+}
+.lv-pdf-viewer .lv-annot-panel[hidden] { display: none; }
+.lv-pdf-viewer .lv-annot-panel-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px 7px 10px;
+  font-size: 12.5px; font-weight: 600; color: var(--text, #26251f);
+  border-bottom: 1px solid var(--border, #e2dfd5);
+}
+.lv-pdf-viewer .lv-annot-panel-head .right { margin-left: auto; display: flex; gap: 4px; }
+.lv-pdf-viewer .lv-annot-list {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px;
+  display: flex; flex-direction: column; gap: 4px;
+  scrollbar-width: thin;
+}
+.lv-pdf-viewer .lv-annot-item {
+  display: flex; gap: 6px; padding: 6px 6px 6px 8px;
+  border: 1px solid transparent; border-radius: 6px; cursor: pointer;
+}
+.lv-pdf-viewer .lv-annot-item:hover { background: var(--surface-2, #f8f7f3); border-color: var(--border, #e2dfd5); }
+.lv-pdf-viewer .lv-annot-item.active { background: var(--accent-soft, #e4efea); border-color: var(--accent, #2f6f5e); }
+.lv-pdf-viewer .lv-annot-item .meta {
+  flex: 0 0 auto; width: 30px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.lv-pdf-viewer .lv-annot-page {
+  font-size: 11px; color: var(--muted, #75726a); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.lv-pdf-viewer .lv-annot-tag { width: 12px; height: 12px; border-radius: 3px; }
+.lv-pdf-viewer .lv-annot-tag[data-color="yellow"] { background: #f2c433; }
+.lv-pdf-viewer .lv-annot-tag[data-color="green"] { background: #3f9e77; }
+.lv-pdf-viewer .lv-annot-tag[data-color="blue"] { background: #4f8fd6; }
+.lv-pdf-viewer .lv-annot-tag[data-color="pink"] { background: #dd7a9d; }
+.lv-pdf-viewer .lv-annot-item .body { flex: 1 1 auto; min-width: 0; }
+.lv-pdf-viewer .lv-annot-quote-text,
+.lv-pdf-viewer .lv-annot-note-text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; word-break: break-word;
+}
+.lv-pdf-viewer .lv-annot-quote-text { font-size: 12px; line-height: 1.5; color: var(--text, #26251f); }
+.lv-pdf-viewer .lv-annot-note-text {
+  margin-top: 2px; font-size: 11.5px; line-height: 1.5; color: var(--muted, #75726a);
+  white-space: pre-wrap;
+}
+.lv-pdf-viewer .lv-annot-item .acts { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }
+.lv-pdf-viewer .lv-annot-item .del {
+  flex: 0 0 auto; width: 20px; height: 20px; padding: 0;
+  font-size: 13px; line-height: 1; color: var(--faint, #9c988e);
+  background: transparent; border: 0; border-radius: 4px; cursor: pointer;
+}
+.lv-pdf-viewer .lv-annot-item .del:hover { color: var(--danger, #b4453a); background: var(--danger-soft, #fbeeec); }
+.lv-pdf-viewer .lv-annot-empty {
+  padding: 18px 12px; font-size: 12.5px; line-height: 1.75;
+  color: var(--muted, #75726a); text-align: center; white-space: pre-line;
+}
+
+/* ---------- 批注编辑气泡（挂在 <body> 下，position:fixed，不受阅读区 overflow 裁剪） ---------- */
+.lv-annot-popwrap { position: fixed; inset: 0; z-index: 9999; }
+.lv-annot-pop {
+  position: fixed;
+  display: flex; flex-direction: column; gap: 8px;
+  width: 306px; max-width: calc(100vw - 16px); box-sizing: border-box;
+  padding: 10px;
+  font-family: var(--font-sans, sans-serif); font-size: 13px; line-height: 1.6;
+  color: var(--text, #26251f); background: var(--surface, #fffefb);
+  border: 1px solid var(--border, #e2dfd5); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(28, 25, 15, .20), 0 2px 6px rgba(28, 25, 15, .08);
+}
+.lv-annot-pop-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted, #75726a); }
+.lv-annot-pop-head b { color: var(--text, #26251f); }
+.lv-annot-quote {
+  max-height: 76px; overflow: auto;
+  padding: 5px 8px; font-size: 12px; line-height: 1.55;
+  color: var(--muted, #75726a); background: var(--surface-2, #f8f7f3);
+  border-left: 2px solid var(--accent, #2f6f5e); border-radius: 0 5px 5px 0;
+  white-space: pre-wrap; word-break: break-word;
+}
+.lv-annot-pop textarea {
+  width: 100%; box-sizing: border-box; min-height: 78px; max-height: 40vh; resize: vertical;
+  padding: 6px 8px; font: inherit; font-size: 12.5px; line-height: 1.6;
+  color: inherit; background: var(--surface-2, #f8f7f3);
+  border: 1px solid var(--border, #e2dfd5); border-radius: 6px; outline: none;
+}
+.lv-annot-pop textarea:focus { border-color: var(--accent, #2f6f5e); }
+.lv-annot-pop-foot { display: flex; align-items: center; gap: 6px; }
+.lv-annot-pop-foot .right { margin-left: auto; display: flex; gap: 6px; }
+.lv-annot-tip { font-size: 11.5px; line-height: 1.5; color: var(--danger, #b4453a); }
+.lv-annot-btn {
+  padding: 3px 9px; font: inherit; font-size: 12.5px; line-height: 1.7;
+  color: var(--text, #26251f); background: var(--surface, #fffefb);
+  border: 1px solid var(--border, #e2dfd5); border-radius: 6px; cursor: pointer;
+}
+.lv-annot-btn:hover { background: var(--surface-3, #efeee8); border-color: var(--border-strong, #cfcabb); }
+.lv-annot-btn:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
+.lv-annot-btn.primary { color: #fff; background: var(--accent, #2f6f5e); border-color: var(--accent, #2f6f5e); }
+.lv-annot-btn.primary:hover { filter: brightness(1.07); background: var(--accent, #2f6f5e); }
+.lv-annot-btn.danger { color: var(--danger, #b4453a); border-color: rgba(180, 69, 58, .45); }
+.lv-annot-btn.danger.armed { color: #fff; background: var(--danger, #b4453a); border-color: var(--danger, #b4453a); }
+.lv-annot-swatches { display: flex; align-items: center; gap: 6px; }
+.lv-annot-swatch {
+  width: 20px; height: 20px; padding: 0; border-radius: 50%;
+  border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
+  cursor: pointer;
+}
+.lv-annot-swatch[data-color="yellow"] { background: #f2c433; }
+.lv-annot-swatch[data-color="green"] { background: #3f9e77; }
+.lv-annot-swatch[data-color="blue"] { background: #4f8fd6; }
+.lv-annot-swatch[data-color="pink"] { background: #dd7a9d; }
+.lv-annot-swatch.active { border-color: var(--accent, #2f6f5e); }
 `
 
   /* ------------------------------ 小工具 ------------------------------ */
@@ -452,7 +677,11 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   /**
    * 挂载一个内置 PDF 阅读器。
    * @param {HTMLElement} container 挂载点（调用方保证它有确定的宽高）
-   * @param {{ url:string, title?:string, downloadUrl?:string }} options
+   * @param {{
+   *   url:string, title?:string, downloadUrl?:string,
+   *   onRegionSelected?:(dataUrl:string, info:object)=>void,
+   *   annotations?:Array<object>, onAnnotationsChange?:(items:Array<object>)=>void
+   * }} options 批注（荧光笔 / 便签）由调用方传入并自行落库，阅读器不碰网络
    * @returns {Promise<{ok:true, destroy:() => void} | {ok:false, reason:string}>}
    */
   async function mount (container, options) {
@@ -486,7 +715,17 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       pdfDocument: null,      // PDFDocumentProxy：整页导出时按页码取页用（teardown 里置空）
       regionSelect: false,    // 是否处于「框选提问」模式
       regionDrag: null,       // 框选拖拽中的起点（视口坐标 + 取景层当时的矩形）
-      regionListeners: []     // 框选期间临时挂上的监听（退出框选立刻摘掉；domListeners 里也各有一份）
+      regionListeners: [],    // 框选期间临时挂上的监听（退出框选立刻摘掉；domListeners 里也各有一份）
+      /* ---- 批注（荧光笔 / 便签）---- */
+      annotations: [],        // 当前文献的批注（外部传入，内部只做读写 + 回调）
+      annotMode: null,        // null | 'highlight' | 'note'
+      annotColor: 'yellow',   // 当前荧光笔颜色
+      annotPress: null,       // 便签模式按下时的记点（起点 + 按下前的选区）
+      annotPop: null,         // 打开着的编辑气泡（挂在 body 下，销毁时必须手动摘掉）
+      annotPopDocListeners: [], // 气泡打开期间挂在 document 上的监听
+      annotPanelOpen: false,
+      annotFlashId: '',       // 正在闪烁的批注 id（列表里点「定位」时设）
+      annotFlashTimer: 0
     }
 
     // 界面节点（teardown 时统一置空）
@@ -496,7 +735,9 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       zoom: null, btnZoomOut: null, btnZoomIn: null, btnFitWidth: null, btnFitPage: null,
       searchInput: null, count: null, btnPrevMatch: null, btnNextMatch: null,
       btnInvert: null, linkDownload: null, linkOpen: null,
-      btnRegion: null, regionLayer: null, regionBox: null, regionHint: null
+      btnRegion: null, regionLayer: null, regionBox: null, regionHint: null,
+      btnHighlight: null, btnNote: null, colorSelect: null, btnAnnotList: null,
+      annotPanel: null, annotList: null, annotHint: null
     }
 
     /* ------------------------- 清理（destroy / 失败共用） ------------------------- */
@@ -540,6 +781,17 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       state.regionListeners.length = 0
       state.regionSelect = false
       state.regionDrag = null
+
+      // 4.5) 批注：编辑气泡挂在 <body> 下（不在 root 里），必须手动摘；闪烁定时器也清掉
+      if (state.annotFlashTimer) {
+        try { clearTimeout(state.annotFlashTimer) } catch (err) {}
+        state.annotFlashTimer = 0
+      }
+      try { closeAnnotPop() } catch (err) {}
+      state.annotMode = null
+      state.annotPress = null
+      state.annotPanelOpen = false
+      state.annotations = []
 
       // 5) pdf.js：先摘掉文档（会顺带停渲染、abort 内部监听），再销毁 loadingTask
       const viewer = state.pdfViewer
@@ -822,6 +1074,8 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       applyFit(state.presetScale || 'page-width')   // 默认「适应宽度」
       syncZoom()
       hideStatus()
+      // 批注：页已经排好版，把传进来的批注画上去（之后每页渲染完 pagerendered 会再补一次）
+      paintAllAnnotations()
       // 焦点没在别处时，把焦点交给阅读区，方向键/PageUp 才好用
       try {
         const active = document.activeElement
@@ -858,6 +1112,15 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         }
         return
       }
+      // 标注模式：Esc 先退出标注（比翻页优先，但只吃掉这一个键）
+      if (state.annotMode && (ev.key === 'Escape' || ev.key === 'Esc')) {
+        ev.preventDefault()
+        ev.stopPropagation()
+        setAnnotMode(null)
+        return
+      }
+      if (ev.key === 'h' || ev.key === 'H') { ev.preventDefault(); setAnnotMode('highlight'); return }
+      if (ev.key === 'n' || ev.key === 'N') { ev.preventDefault(); setAnnotMode('note'); return }
       if (ev.ctrlKey || ev.metaKey || ev.altKey) return
       if (isEditableTarget(ev.target)) return     // 输入框里的按键不拦
       switch (ev.key) {
@@ -1248,6 +1511,9 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         if (!ui.regionLayer || !ui.body) return
         const viewer = state.pdfViewer
         if (!viewer || !viewer.pagesCount) return          // 文档还没排好版，先不让框
+        // 框选是模态操作：先把标注模式和编辑气泡收起来，免得两个模式叠在一起
+        closeAnnotPop()
+        setAnnotMode(null)
         state.regionSelect = true
         state.regionDrag = null
         if (ui.regionBox) ui.regionBox.style.display = 'none'
@@ -1283,6 +1549,814 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         if (state.regionSelect) cancelRegionSelect()
         else startRegionSelect()
       } catch (err) {}
+    }
+
+    /* ------------------- 批注：荧光笔 / 便签（渲染 + 交互） ------------------- */
+    /* 数据流：调用方把批注数组传进来（options.annotations）→ 这里只负责画和改；
+       改完通过 options.onAnnotationsChange 交回去，由调用方决定怎么存。
+       本文件不写网络、不写 localStorage，测试/桩环境里也照常能挂起来。
+
+       坐标系：所有矩形与点位都存「相对该页的 0~1」，画的时候用百分比。
+       页面 div 是滚动容器里唯一知道「这一页多大」的东西，缩放/适宽/适页都由它自己变，
+       所以归一化之后我们什么都不用重算，也不会出现「放大后高亮跑偏」。
+
+       交互：
+         · 荧光笔：选中文字 → mouseup 时把选区的每一行矩形按页分组，一条批注一行一个色块；
+           跨页选择就自动拆成「每页一条」，引文各存一份（比一条记录挂多页简单也更好定位）。
+         · 便签：点一下页面 → 在落点放一个 20px 的小图标，气泡里写内容；按下时的选区会
+           被记下来当引文（浏览器紧接着会清掉选区，所以必须在 mousedown 里抢）。 */
+
+    /** 生成一个稳定的批注 id（只含字母数字，方便做属性选择器 / 调试） */
+    function annotId () {
+      return 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+    }
+
+    function nowStamp () {
+      return new Date().toISOString()
+    }
+
+    function clamp01 (value) {
+      const n = Number(value)
+      if (!isFinite(n)) return 0
+      return Math.min(1, Math.max(0, n))
+    }
+
+    /** 0~1 → 百分比字符串（保留两位小数就够了，再多只是字符串更长） */
+    function pct (value) {
+      return (Math.round(clamp01(value) * 10000) / 100) + '%'
+    }
+
+    /** 当前所有「已排版」页的位置信息（页码 + 页面 div + 视口矩形），按页码升序 */
+    function pageInfos () {
+      const out = []
+      const viewer = state.pdfViewer
+      if (!viewer || typeof viewer.getPageView !== 'function') return out
+      const total = Math.min(viewer.pagesCount || 0, 4000)
+      for (let i = 0; i < total; i++) {
+        let pageView = null
+        try { pageView = viewer.getPageView(i) } catch (err) { pageView = null }
+        const div = pageView && pageView.div
+        if (!div) continue
+        const rect = clientRectOf(div)
+        if (!rect || rect.width <= 0 || rect.height <= 0) continue
+        out.push({ pageNumber: i + 1, div: div, rect: rect })
+      }
+      return out
+    }
+
+    function pageInfoOf (pageNumber) {
+      const viewer = state.pdfViewer
+      if (!viewer || typeof viewer.getPageView !== 'function') return null
+      const index = Math.round(Number(pageNumber)) - 1
+      if (!(index >= 0)) return null
+      let pageView = null
+      try { pageView = viewer.getPageView(index) } catch (err) { pageView = null }
+      const div = pageView && pageView.div
+      if (!div) return null
+      const rect = clientRectOf(div)
+      if (!rect || rect.width <= 0 || rect.height <= 0) return null
+      return { pageNumber: index + 1, div: div, rect: rect }
+    }
+
+    /** 点（视口坐标）落在哪一页里 */
+    function pageAtPoint (infos, x, y) {
+      for (let i = 0; i < infos.length; i++) {
+        const r = infos[i].rect
+        if (x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height) return infos[i]
+      }
+      return null
+    }
+
+    /** 矩形（视口坐标）中心点落在哪一页里 —— 跨页选区就是靠这个分页的 */
+    function pageAtRectCenter (infos, rect) {
+      const x = rect.left + rect.width / 2
+      const y = rect.top + rect.height / 2
+      return pageAtPoint(infos, x, y)
+    }
+
+    /** 视口矩形 → 相对该页的 0~1 盒子；整块都在页外就返回 null */
+    function normBox (rect, pageRect) {
+      if (!rect || !pageRect || !(pageRect.width > 0) || !(pageRect.height > 0)) return null
+      const left = Math.max(rect.left, pageRect.left)
+      const top = Math.max(rect.top, pageRect.top)
+      const right = Math.min(rect.left + rect.width, pageRect.left + pageRect.width)
+      const bottom = Math.min(rect.top + rect.height, pageRect.top + pageRect.height)
+      if (right - left < 1 || bottom - top < 1) return null
+      return {
+        x: (left - pageRect.left) / pageRect.width,
+        y: (top - pageRect.top) / pageRect.height,
+        w: (right - left) / pageRect.width,
+        h: (bottom - top) / pageRect.height
+      }
+    }
+
+    /** 视口点 → 相对该页的 0~1 点 */
+    function normPoint (pt, pageRect) {
+      if (!pt || !pageRect || !(pageRect.width > 0) || !(pageRect.height > 0)) return null
+      return {
+        x: clamp01((pt.x - pageRect.left) / pageRect.width),
+        y: clamp01((pt.y - pageRect.top) / pageRect.height)
+      }
+    }
+
+    /** 找到某个已有的标注层（没有就返回 null，不创建） */
+    function findAnnotLayer (pageDiv) {
+      if (!pageDiv) return null
+      const children = pageDiv.children || []
+      for (let i = children.length - 1; i >= 0; i--) {
+        const node = children[i]
+        if (node && node.classList && node.classList.contains(ANNOT_LAYER_CLASS)) return node
+      }
+      return null
+    }
+
+    /** 找到（必要时创建）某一页的标注层。层永远是 .page 的最后一个子节点 + z-index:2 */
+    function ensureAnnotLayer (pageDiv) {
+      if (!pageDiv) return null
+      const exist = findAnnotLayer(pageDiv)
+      if (exist) return exist
+      const layer = el('div.' + ANNOT_LAYER_CLASS, { 'aria-hidden': 'true' })
+      try { pageDiv.appendChild(layer) } catch (err) { return null }
+      return layer
+    }
+
+    /** 一条批注 → 若干 DOM 节点（荧光笔一条会出多个矩形，便签只有一个图标） */
+    function annotNodes (item) {
+      const nodes = []
+      const flash = !!state.annotFlashId && state.annotFlashId === item.id
+      if (item.type === 'note') {
+        const pt = item.point || { x: 0, y: 0 }
+        const btn = el('button.lv-annot-note', {
+          type: 'button',
+          'data-annot-id': item.id,
+          'data-color': item.color || 'yellow',
+          title: (item.note ? String(item.note).slice(0, 60) : '（空便签）') + ' · 点击查看 / 编辑',
+          'aria-label': '便签：' + (item.note || '（空）')
+        })
+        btn.style.left = pct(pt.x)
+        btn.style.top = pct(pt.y)
+        if (flash) btn.classList.add('lv-annot-flash')
+        btn.onclick = ev => {
+          if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation()
+          // 键盘回车 / 脚本触发时 clientX/Y 是 0，退回到图标自己的位置当锚点
+          let anchor = null
+          if (ev && (ev.clientX || ev.clientY)) anchor = { x: ev.clientX, y: ev.clientY }
+          else {
+            const rect = clientRectOf(btn)
+            if (rect) anchor = { x: rect.left + rect.width / 2, y: rect.top + rect.height }
+          }
+          openAnnotPop(item, { anchor: anchor })
+        }
+        nodes.push(btn)
+        return nodes
+      }
+      const rects = Array.isArray(item.rects) ? item.rects : []
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i]
+        if (!r) continue
+        const mark = el('div.lv-annot-mark.lv-annot-hl', {
+          'data-annot-id': item.id,
+          'data-color': item.color || 'yellow'
+        })
+        mark.style.left = pct(r.x)
+        mark.style.top = pct(r.y)
+        mark.style.width = pct(r.w)
+        mark.style.height = pct(r.h)
+        if (flash) mark.classList.add('lv-annot-flash')
+        nodes.push(mark)
+      }
+      return nodes
+    }
+
+    /** 重画某一页的批注（幂等：每次都是整层替换，重复调用不会叠加节点） */
+    function paintPageAnnotations (pageNumber) {
+      if (state.destroyed || state.tornDown) return
+      const info = pageInfoOf(pageNumber)
+      if (!info) return
+      const nodes = []
+      for (let i = 0; i < state.annotations.length; i++) {
+        const item = state.annotations[i]
+        if (Number(item.page) !== Number(pageNumber)) continue
+        const group = annotNodes(item)
+        for (let k = 0; k < group.length; k++) nodes.push(group[k])
+      }
+      // 这页没有批注、也没画过：连层都不用建（省一个 div / 页）
+      let layer = findAnnotLayer(info.div)
+      if (!nodes.length && !layer) return
+      if (!layer) layer = ensureAnnotLayer(info.div)
+      if (!layer) return
+      try { layer.replaceChildren.apply(layer, nodes) } catch (err) { layer.textContent = '' }
+    }
+
+    /** 重画所有已排版的页 */
+    function paintAllAnnotations () {
+      const infos = pageInfos()
+      for (let i = 0; i < infos.length; i++) paintPageAnnotations(infos[i].pageNumber)
+    }
+
+    /** 在屏幕上找某条批注的节点（列表里点「编辑」时用它当锚点） */
+    function findAnnotNode (id) {
+      if (!id || !ui.viewer || typeof ui.viewer.querySelectorAll !== 'function') return null
+      const nodes = ui.viewer.querySelectorAll('[data-annot-id]')
+      for (let i = 0; i < nodes.length; i++) {
+        if (nodes[i].getAttribute('data-annot-id') === id) return nodes[i]
+      }
+      return null
+    }
+
+    /** 把批注变化交回调用方（回调炸了也不能影响阅读器） */
+    function emitAnnotations () {
+      if (state.destroyed || state.tornDown) return
+      const cb = opts.onAnnotationsChange
+      if (typeof cb !== 'function') return
+      try { cb(state.annotations.slice()) } catch (err) {}
+    }
+
+    /** 外部数据 → 内部可信形状；认不出来的丢弃（老数据 / 手改过的 JSON 都走这里） */
+    function sanitizeAnnot (raw) {
+      if (!raw || typeof raw !== 'object') return null
+      const type = raw.type === 'note' ? 'note' : (raw.type === 'highlight' ? 'highlight' : '')
+      if (!type) return null
+      const id = String(raw.id || '').slice(0, 64)
+      if (!id) return null
+      const rects = []
+      const rawRects = Array.isArray(raw.rects) ? raw.rects : []
+      for (let i = 0; i < rawRects.length; i++) {
+        const r = rawRects[i]
+        if (!r) continue
+        const w = Number(r.w)
+        const h = Number(r.h)
+        if (!isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) continue
+        rects.push({ x: clamp01(r.x), y: clamp01(r.y), w: clamp01(w), h: clamp01(h) })
+        if (rects.length >= ANNOT_MAX_RECTS) break
+      }
+      const pointRaw = raw.point && typeof raw.point === 'object' ? raw.point : null
+      const point = pointRaw
+        ? { x: clamp01(pointRaw.x), y: clamp01(pointRaw.y) }
+        : (rects[0] ? { x: rects[0].x, y: rects[0].y } : null)
+      if (type === 'highlight' && !rects.length) return null
+      if (type === 'note' && !point) return null
+      const color = String(raw.color || '')
+      return {
+        id: id,
+        type: type,
+        page: Math.max(1, Math.round(Number(raw.page) || 1)),
+        color: ANNOT_COLOR_KEYS.indexOf(color) >= 0 ? color : 'yellow',
+        rects: rects,
+        point: type === 'note' ? point : null,
+        quote: String(raw.quote || '').slice(0, ANNOT_QUOTE_MAX),
+        note: String(raw.note || '').slice(0, ANNOT_NOTE_MAX),
+        createdAt: String(raw.createdAt || ''),
+        updatedAt: String(raw.updatedAt || '')
+      }
+    }
+
+    /** 整组替换批注（详情页读到服务端数据后调用；也可用于外部刷新） */
+    function setAnnotations (items) {
+      if (state.destroyed || state.tornDown) return
+      const next = []
+      const list = Array.isArray(items) ? items : []
+      for (let i = 0; i < list.length; i++) {
+        const item = sanitizeAnnot(list[i])
+        if (item) next.push(item)
+      }
+      state.annotations = next
+      paintAllAnnotations()
+      renderAnnotPanel()
+      syncAnnotCount()
+    }
+
+    function getAnnotations () {
+      return state.annotations.slice()
+    }
+
+    /** 当前选区 → { text, rects }；没有可见选区返回 null */
+    function selectionSnapshot () {
+      const sel = typeof window.getSelection === 'function' ? window.getSelection() : null
+      if (!sel || !sel.rangeCount || sel.isCollapsed) return null
+      const range = sel.getRangeAt(0)
+      if (!range || typeof range.getClientRects !== 'function') return null
+      const text = String(sel.toString() || '').replace(/\s+/g, ' ').trim()
+      const list = range.getClientRects()
+      const rects = []
+      for (let i = 0; i < list.length && rects.length < ANNOT_MAX_RECTS; i++) {
+        const r = list[i]
+        if (!r || !(r.width > 1) || !(r.height > 1)) continue
+        rects.push({ left: r.left, top: r.top, width: r.width, height: r.height })
+      }
+      if (!rects.length) return null
+      return { text: text.slice(0, ANNOT_QUOTE_MAX), rects: rects }
+    }
+
+    /** 两条高亮是不是「同一处」（同页 + 每行矩形几乎重合）；用来挡住重复标记 */
+    function isSameHighlight (a, b) {
+      if (!a || !b || Number(a.page) !== Number(b.page)) return false
+      const ra = Array.isArray(a.rects) ? a.rects : []
+      const rb = Array.isArray(b.rects) ? b.rects : []
+      if (ra.length !== rb.length) return false
+      for (let i = 0; i < ra.length; i++) {
+        if (Math.abs(ra[i].x - rb[i].x) > 0.004 || Math.abs(ra[i].y - rb[i].y) > 0.004 ||
+          Math.abs(ra[i].w - rb[i].w) > 0.004 || Math.abs(ra[i].h - rb[i].h) > 0.004) return false
+      }
+      return true
+    }
+
+    /** 把当前选区做成高亮（跨页自动拆成每页一条）；成功返回 true */
+    function createHighlightFromSelection () {
+      const snap = selectionSnapshot()
+      if (!snap) return false
+      const infos = pageInfos()
+      if (!infos.length) return false
+      const groups = new Map()      // pageNumber -> rects[]
+      for (let i = 0; i < snap.rects.length; i++) {
+        const target = pageAtRectCenter(infos, snap.rects[i])
+        if (!target) continue
+        const box = normBox(snap.rects[i], target.rect)
+        if (!box) continue
+        if (!groups.has(target.pageNumber)) groups.set(target.pageNumber, [])
+        const bucket = groups.get(target.pageNumber)
+        if (bucket.length < ANNOT_MAX_RECTS) bucket.push(box)
+      }
+      if (!groups.size) return false
+      const stamp = nowStamp()
+      const created = []
+      let added = 0
+      groups.forEach((rects, page) => {
+        const item = {
+          id: annotId(),
+          type: 'highlight',
+          page: page,
+          color: state.annotColor,
+          rects: rects,
+          point: null,
+          quote: snap.text,
+          note: '',
+          createdAt: stamp,
+          updatedAt: stamp
+        }
+        // 已经标过同一处就不要再叠一条：叠起来颜色发闷，列表里也会出好几行一样的。
+        // （点空白处时浏览器会保留上一次的选区，所以「同一处反复触发」是真会发生的）
+        const dup = state.annotations.find(other => other.type === 'highlight' && isSameHighlight(other, item))
+        if (dup) {
+          created.push(dup)
+          return
+        }
+        state.annotations.push(item)
+        added++
+        created.push(item)
+      })
+      // 选完就把浏览器那层临时选中清掉，不然会和刚画的高亮叠在一起
+      try {
+        const sel = window.getSelection()
+        if (sel && typeof sel.removeAllRanges === 'function') sel.removeAllRanges()
+      } catch (err) {}
+      for (let i = 0; i < created.length; i++) paintPageAnnotations(created[i].page)
+      renderAnnotPanel()
+      syncAnnotCount()
+      if (added) emitAnnotations()                 // 全是重复的就不必再写一遍库
+      if (created.length) flashAnnotation(created[0].id, created[0].page)
+      return added > 0
+    }
+
+    /** 让某条批注闪一下（定位的视觉反馈）。只设标记，重画时自然带上动画类 */
+    function flashAnnotation (id, pageNumber) {
+      state.annotFlashId = id
+      if (state.annotFlashTimer) {
+        try { clearTimeout(state.annotFlashTimer) } catch (err) {}
+      }
+      // 立刻重画一次：闪烁类必须和节点一起出现，等下一次重画就已经过点了
+      try { paintPageAnnotations(pageNumber) } catch (err) {}
+      state.annotFlashTimer = setTimeout(() => {
+        state.annotFlashTimer = 0
+        if (state.destroyed || state.tornDown) return
+        state.annotFlashId = ''
+        try { paintPageAnnotations(pageNumber) } catch (err) {}
+      }, ANNOT_FLASH_MS)
+    }
+
+    /** 列表里点一条 → 跳到那一页并闪一下 */
+    function locateAnnotation (id) {
+      const item = state.annotations.find(a => a.id === id)
+      if (!item) return
+      goToPage(item.page)
+      paintPageAnnotations(item.page)      // 已渲染的页立刻生效；没渲染的页由 pagerendered 补上
+      flashAnnotation(item.id, item.page)
+      if (state.annotPanelOpen) renderAnnotPanel()
+    }
+
+    function deleteAnnotation (id) {
+      const index = state.annotations.findIndex(a => a.id === id)
+      if (index < 0) return
+      const removed = state.annotations.splice(index, 1)[0]
+      closeAnnotPop()
+      if (removed) paintPageAnnotations(removed.page)
+      renderAnnotPanel()
+      syncAnnotCount()
+      emitAnnotations()
+    }
+
+    /* ---- 编辑气泡（挂在 <body> 下：不受阅读区 overflow 裁剪，也不会被缩放影响） ---- */
+
+    function bindAnnotDoc (type, fn) {
+      if (typeof document.addEventListener !== 'function') return
+      document.addEventListener(type, fn, true)
+      const item = { target: document, type: type, fn: fn, capture: true }
+      state.annotPopDocListeners.push(item)
+      state.domListeners.push(item)
+    }
+
+    function unbindAnnotDoc () {
+      for (let i = 0; i < state.annotPopDocListeners.length; i++) {
+        const item = state.annotPopDocListeners[i]
+        try { item.target.removeEventListener(item.type, item.fn, true) } catch (err) {}
+        const at = state.domListeners.indexOf(item)
+        if (at >= 0) state.domListeners.splice(at, 1)
+      }
+      state.annotPopDocListeners.length = 0
+    }
+
+    function closeAnnotPop () {
+      unbindAnnotDoc()
+      const wrap = state.annotPop
+      state.annotPop = null
+      try {
+        if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap)
+      } catch (err) {}
+    }
+
+    /** 气泡摆位：优先贴在锚点下方居中，贴边就翻到上方 / 夹进视口 */
+    function placeAnnotPop (pop, anchor) {
+      if (!pop) return
+      const margin = 8
+      const vw = (typeof window !== 'undefined' && window.innerWidth) || 1024
+      const vh = (typeof window !== 'undefined' && window.innerHeight) || 768
+      const width = pop.offsetWidth || 306
+      const height = pop.offsetHeight || 200
+      const baseX = anchor ? anchor.x : vw - width - 28
+      const baseY = anchor ? anchor.y : Math.round(vh / 3)
+      let left = baseX - width / 2
+      let top = baseY + 14
+      left = Math.min(Math.max(margin, left), Math.max(margin, vw - width - margin))
+      if (top + height > vh - margin) top = Math.max(margin, baseY - height - 14)
+      pop.style.left = Math.round(left) + 'px'
+      pop.style.top = Math.round(top) + 'px'
+    }
+
+    /**
+     * 打开批注编辑气泡。
+     * @param {object} item 批注（draft = true 时是还没入库的新批注）
+     * @param {{draft?:boolean, anchor?:{x:number,y:number}}} options
+     */
+    function openAnnotPop (item, options) {
+      if (state.destroyed || state.tornDown || !item) return
+      closeAnnotPop()
+      const o = options || {}
+      const isDraft = !!o.draft
+      const draft = {
+        id: item.id,
+        type: item.type === 'note' ? 'note' : 'highlight',
+        page: Math.max(1, Math.round(Number(item.page) || 1)),
+        color: ANNOT_COLOR_KEYS.indexOf(String(item.color)) >= 0 ? String(item.color) : 'yellow',
+        rects: Array.isArray(item.rects) ? item.rects.slice(0, ANNOT_MAX_RECTS) : [],
+        point: item.point || null,
+        quote: String(item.quote || '').slice(0, ANNOT_QUOTE_MAX),
+        note: String(item.note || '').slice(0, ANNOT_NOTE_MAX),
+        createdAt: item.createdAt || nowStamp(),
+        updatedAt: item.updatedAt || ''
+      }
+      const isNote = draft.type === 'note'
+
+      const wrap = el('div.lv-annot-popwrap')
+      const pop = el('div.lv-annot-pop', {
+        role: 'dialog',
+        'aria-modal': 'false',
+        'aria-label': isDraft ? (isNote ? '新建便签' : '编辑荧光笔') : '编辑批注'
+      })
+
+      const head = el('div.lv-annot-pop-head', null, [
+        el('b', { text: isNote ? '便签' : '荧光笔' }),
+        el('span', { text: '· 第 ' + draft.page + ' 页' }),
+        el('span', { style: 'margin-left:auto', text: isDraft ? '新批注' : '修改后点保存' })
+      ])
+      pop.appendChild(head)
+
+      if (draft.quote) {
+        pop.appendChild(el('div.lv-annot-quote', { text: '“' + draft.quote + '”' }))
+      }
+
+      const ta = el('textarea.lv-annot-input', {
+        rows: '3',
+        placeholder: isNote ? '写点什么…（便签内容会跟这篇文献一起保存）' : '备注（可留空）',
+        'aria-label': isNote ? '便签内容' : '荧光笔备注'
+      })
+      ta.value = draft.note
+      pop.appendChild(ta)
+
+      const tip = el('div.lv-annot-tip', { hidden: true, style: 'display:none' })
+
+      const swatches = el('div.lv-annot-swatches')
+      ANNOT_COLORS.forEach(color => {
+        const dot = el('button.lv-annot-swatch', {
+          type: 'button',
+          'data-color': color.key,
+          title: '用' + color.label + '色',
+          'aria-label': '用' + color.label + '色',
+          'aria-pressed': color.key === draft.color ? 'true' : 'false'
+        })
+        if (color.key === draft.color) dot.classList.add('active')
+        dot.onclick = () => {
+          draft.color = color.key
+          const all = swatches.children || []
+          for (let i = 0; i < all.length; i++) {
+            const on = all[i].getAttribute('data-color') === color.key
+            all[i].classList.toggle('active', on)
+            all[i].setAttribute('aria-pressed', on ? 'true' : 'false')
+          }
+        }
+        swatches.appendChild(dot)
+      })
+
+      const foot = el('div.lv-annot-pop-foot')
+      let armed = false
+      let armTimer = 0
+      if (!isDraft) {
+        const del = el('button.lv-annot-btn.danger', { type: 'button', text: '删除' })
+        del.onclick = () => {
+          if (!armed) {
+            armed = true
+            del.classList.add('armed')
+            del.textContent = '确认删除'
+            if (armTimer) clearTimeout(armTimer)
+            armTimer = setTimeout(() => {
+              armed = false
+              del.classList.remove('armed')
+              del.textContent = '删除'
+            }, 2600)
+            return
+          }
+          deleteAnnotation(draft.id)
+        }
+        foot.appendChild(del)
+      }
+      foot.appendChild(swatches)
+      const actions = el('div.right')
+      const cancel = el('button.lv-annot-btn', { type: 'button', text: '取消' })
+      cancel.onclick = () => closeAnnotPop()
+      const save = el('button.lv-annot-btn.primary', { type: 'button', text: '保存' })
+      const commit = () => {
+        const text = String(ta.value || '').replace(/\r\n/g, '\n').trim().slice(0, ANNOT_NOTE_MAX)
+        if (isNote && !text) {
+          tip.textContent = '便签不能是空的，写一句再保存。'
+          tip.hidden = false
+          tip.style.display = ''
+          try { ta.focus() } catch (err) {}
+          return
+        }
+        const stamp = nowStamp()
+        const next = {
+          id: draft.id,
+          type: draft.type,
+          page: draft.page,
+          color: draft.color,
+          rects: draft.rects,
+          point: draft.type === 'note' ? draft.point : null,
+          quote: draft.quote,
+          note: text,
+          createdAt: draft.createdAt,
+          updatedAt: stamp
+        }
+        if (isDraft) {
+          state.annotations.push(next)
+        } else {
+          const index = state.annotations.findIndex(a => a.id === next.id)
+          if (index >= 0) state.annotations[index] = next
+          else state.annotations.push(next)
+        }
+        closeAnnotPop()
+        paintPageAnnotations(next.page)
+        renderAnnotPanel()
+        syncAnnotCount()
+        emitAnnotations()
+        if (isDraft) flashAnnotation(next.id, next.page)
+      }
+      save.onclick = commit
+      actions.appendChild(cancel)
+      actions.appendChild(save)
+      foot.appendChild(actions)
+
+      pop.appendChild(tip)
+      pop.appendChild(foot)
+      wrap.appendChild(pop)
+      wrap.onclick = ev => { if (ev.target === wrap) closeAnnotPop() }
+
+      // 先隐藏再插入，量完尺寸再摆位，避免出现在左上角闪一下
+      pop.style.visibility = 'hidden'
+      document.body.appendChild(wrap)
+      state.annotPop = wrap
+      placeAnnotPop(pop, o.anchor || null)
+      pop.style.visibility = ''
+
+      ta.onkeydown = ev => {
+        if (ev.key === 'Escape' || ev.key === 'Esc') {
+          ev.preventDefault()
+          ev.stopPropagation()
+          closeAnnotPop()
+          return
+        }
+        if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
+          ev.preventDefault()
+          commit()
+        }
+      }
+      bindAnnotDoc('keydown', ev => {
+        if (ev.key !== 'Escape' && ev.key !== 'Esc') return
+        if (state.annotPop !== wrap) return
+        if (typeof ev.preventDefault === 'function') ev.preventDefault()
+        closeAnnotPop()
+      })
+      try {
+        ta.focus()
+        const end = ta.value.length
+        if (typeof ta.setSelectionRange === 'function') ta.setSelectionRange(end, end)
+      } catch (err) {}
+    }
+
+    /* ---- 批注列表（右侧抽屉：展示 / 定位 / 编辑 / 删除） ---- */
+
+    function syncAnnotCount () {
+      if (!ui.btnAnnotList) return
+      const total = state.annotations.length
+      ui.btnAnnotList.textContent = total ? '批注 ' + total : '批注'
+      ui.btnAnnotList.title = total
+        ? '共 ' + total + ' 条批注（点击展开列表，再点可定位）'
+        : '还没有批注：用「荧光笔」选文字，或用「便签」点页面'
+    }
+
+    function renderAnnotPanel () {
+      if (!ui.annotList) return
+      const list = state.annotations.slice().sort((a, b) => {
+        const byPage = Number(a.page) - Number(b.page)
+        if (byPage) return byPage
+        return String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+      })
+      if (!list.length) {
+        ui.annotList.replaceChildren(el('div.lv-annot-empty', {
+          text: '还没有批注。\n用工具栏的「荧光笔」选中文字，\n或用「便签」在页面上点一下。'
+        }))
+        return
+      }
+      const rows = []
+      list.forEach(item => {
+        const quote = String(item.quote || '')
+        const note = String(item.note || '')
+        const row = el('div.lv-annot-item', {
+          'data-annot-id': item.id,
+          title: '点击定位到第 ' + item.page + ' 页'
+        }, [
+          el('div.meta', null, [
+            el('div.lv-annot-page', { text: 'P' + item.page }),
+            el('div.lv-annot-tag', { 'data-color': item.color || 'yellow' })
+          ]),
+          el('div.body', null, [
+            quote ? el('div.lv-annot-quote-text', { text: quote }) : null,
+            note ? el('div.lv-annot-note-text', { text: note }) : (quote ? null : el('div.lv-annot-note-text', { text: '（空）' }))
+          ]),
+          el('div.acts', null, [
+            el('button.del', { type: 'button', text: '✎', title: '打开这条批注（可改备注 / 换颜色）', 'aria-label': '打开这条批注' }),
+            el('button.del', { type: 'button', text: '✕', title: '删除这条批注', 'aria-label': '删除这条批注' })
+          ])
+        ])
+        if (state.annotFlashId && state.annotFlashId === item.id) row.classList.add('active')
+        row.onclick = () => locateAnnotation(item.id)
+
+        const acts = row.lastChild
+        const editBtn = acts.children[0]
+        const del = acts.children[1]
+        editBtn.onclick = ev => {
+          if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation()
+          const node = findAnnotNode(item.id)
+          const rect = node ? clientRectOf(node) : null
+          openAnnotPop(item, {
+            anchor: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height } : null
+          })
+        }
+        // ✕ 删除：跟气泡里一样的两步确认（列表里误点的代价太高）
+        let armed = false
+        del.onclick = ev => {
+          if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation()
+          if (armed) { deleteAnnotation(item.id); return }
+          armed = true
+          del.textContent = '✕?'
+          del.style.color = 'var(--danger, #b4453a)'
+          setTimeout(() => {
+            if (!del.parentNode) return
+            armed = false
+            del.textContent = '✕'
+            del.style.color = ''
+          }, 2600)
+        }
+        rows.push(row)
+      })
+      ui.annotList.replaceChildren.apply(ui.annotList, rows)
+    }
+
+    function showAnnotPanel (on) {
+      state.annotPanelOpen = !!on
+      if (ui.annotPanel) ui.annotPanel.hidden = !state.annotPanelOpen
+      if (ui.btnAnnotList) {
+        ui.btnAnnotList.classList.toggle('active', state.annotPanelOpen)
+        ui.btnAnnotList.setAttribute('aria-pressed', state.annotPanelOpen ? 'true' : 'false')
+      }
+      if (state.annotPanelOpen) renderAnnotPanel()
+    }
+
+    /* ---- 标注模式（荧光笔 / 便签） ---- */
+
+    function setAnnotMode (mode) {
+      const want = mode === 'highlight' || mode === 'note' ? mode : null
+      state.annotMode = want && want === state.annotMode ? null : want    // 再点一次同一个按钮 = 退出
+      state.annotPress = null
+      if (ui.root) {
+        ui.root.classList.toggle('lv-annot-picking', state.annotMode === 'highlight')
+        ui.root.classList.toggle('lv-annot-pinning', state.annotMode === 'note')
+      }
+      if (ui.annotHint) {
+        ui.annotHint.hidden = !state.annotMode
+        if (state.annotMode === 'highlight') ui.annotHint.textContent = '荧光笔：在 PDF 上选中文字即可高亮（Esc 退出）'
+        else if (state.annotMode === 'note') ui.annotHint.textContent = '便签：在 PDF 上点一下放便签（Esc 退出）'
+      }
+      syncAnnotButtons()
+      if (!state.annotMode) closeAnnotPop()
+    }
+
+    function syncAnnotButtons () {
+      if (ui.btnHighlight) {
+        const on = state.annotMode === 'highlight'
+        ui.btnHighlight.classList.toggle('active', on)
+        ui.btnHighlight.setAttribute('aria-pressed', on ? 'true' : 'false')
+      }
+      if (ui.btnNote) {
+        const on = state.annotMode === 'note'
+        ui.btnNote.classList.toggle('active', on)
+        ui.btnNote.setAttribute('aria-pressed', on ? 'true' : 'false')
+      }
+      if (ui.colorSelect && ui.colorSelect.value !== state.annotColor) ui.colorSelect.value = state.annotColor
+      syncAnnotCount()
+    }
+
+    /** 按下：便签模式要把「按下之前的选区」抢下来（浏览器随后会清掉它） */
+    function onAnnotDown (ev) {
+      if (state.destroyed || !state.annotMode) return
+      if (ev.button !== undefined && ev.button !== 0) return
+      if (state.annotMode !== 'note') { state.annotPress = null; return }
+      const pt = eventPoint(ev)
+      state.annotPress = pt ? { x: pt.x, y: pt.y, snap: selectionSnapshot() } : null
+    }
+
+    /** 松开：荧光笔 → 把选区做成高亮；便签 → 在落点开一个新便签 */
+    function onAnnotUp (ev) {
+      if (state.destroyed || !state.annotMode) return
+      const target = ev && ev.target
+      // 点在已有便签图标上时交给图标自己的 click，不再叠一个新的
+      if (target && typeof target.closest === 'function' && target.closest('.lv-annot-note')) {
+        state.annotPress = null
+        return
+      }
+      if (state.annotMode === 'highlight') {
+        createHighlightFromSelection()
+        return
+      }
+      const press = state.annotPress
+      state.annotPress = null
+      const pt = eventPoint(ev)
+      if (!pt) return
+      // 明显拖动 = 用户在选文字（想给便签配引文），不要弹出气泡
+      if (press && (Math.abs(pt.x - press.x) > ANNOT_MIN_DRAG || Math.abs(pt.y - press.y) > ANNOT_MIN_DRAG)) return
+      const infos = pageInfos()
+      const page = pageAtPoint(infos, pt.x, pt.y)
+      if (!page) return
+      const point = normPoint(pt, page.rect)
+      if (!point) return
+      openAnnotPop({
+        id: annotId(),
+        type: 'note',
+        page: page.pageNumber,
+        color: state.annotColor,
+        rects: [],
+        point: point,
+        quote: press && press.snap ? press.snap.text : '',
+        note: '',
+        createdAt: nowStamp(),
+        updatedAt: ''
+      }, { draft: true, anchor: pt })
+    }
+
+    /** 某一页渲染完成 → 把那页的批注补画上去（缩放/重排后 pdf.js 会重发这个事件） */
+    function onPageRendered (evt) {
+      if (state.destroyed || state.tornDown || !evt) return
+      const pageNumber = Math.round(Number(evt.pageNumber))
+      if (!(pageNumber > 0)) return
+      paintPageAnnotations(pageNumber)
     }
 
     /* ---- 对外 API（全部保证不抛异常） ---- */
@@ -1389,6 +2463,25 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         type: 'button', 'aria-pressed': 'false',
         title: '在 PDF 上拖一个框，把这一块发给模型识别'
       }, [el('span.lv-pdf-icon-frame', { 'aria-hidden': 'true' }), '框选'])
+
+      // 批注：荧光笔（选文字）/ 便签（点位置）/ 颜色 / 批注列表
+      ui.btnHighlight = el('button.lv-pdf-btn', {
+        type: 'button', 'aria-pressed': 'false',
+        title: '荧光笔：开着的时候在 PDF 上选中文字，就会画上高亮'
+      }, [el('span.lv-pdf-icon-hl', { 'aria-hidden': 'true' }), '荧光笔'])
+      ui.btnNote = el('button.lv-pdf-btn', {
+        type: 'button', 'aria-pressed': 'false',
+        title: '便签：开着的时候在 PDF 上点一下，就贴一张便签'
+      }, [el('span.lv-pdf-icon-note', { 'aria-hidden': 'true' }), '便签'])
+      ui.colorSelect = el('select.lv-pdf-input.lv-pdf-color', {
+        title: '荧光笔 / 便签的颜色', 'aria-label': '批注颜色'
+      }, ANNOT_COLORS.map(color => el('option', { value: color.key, text: color.label + '色' })))
+      ui.colorSelect.value = state.annotColor
+      ui.btnAnnotList = el('button.lv-pdf-btn', {
+        type: 'button', 'aria-pressed': 'false', text: '批注',
+        title: '展开批注列表：点一条就跳到它在哪一页'
+      })
+
       ui.linkDownload = el('a.lv-pdf-btn', {
         href: downloadHref, title: '下载这个 PDF 文件', text: '下载',
         download: downloadName(opts.title)
@@ -1405,8 +2498,10 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
         el('div.lv-pdf-group', null, [ui.btnZoomOut, ui.zoom, ui.btnZoomIn, ui.btnFitWidth, ui.btnFitPage]),
         el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
+        el('div.lv-pdf-group', null, [ui.btnHighlight, ui.btnNote, ui.colorSelect]),
+        el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
         el('div.lv-pdf-group.grow', null, [ui.searchInput, ui.count, ui.btnPrevMatch, ui.btnNextMatch]),
-        el('div.lv-pdf-group.right', null, [ui.btnRegion, ui.btnInvert, ui.linkDownload, ui.linkOpen])
+        el('div.lv-pdf-group.right', null, [ui.btnAnnotList, ui.btnRegion, ui.btnInvert, ui.linkDownload, ui.linkOpen])
       ])
 
       ui.viewer = el('div.pdfViewer')     // 这个 div 就是 PDFViewer 的 viewer 参数
@@ -1426,8 +2521,24 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       }, [ui.regionHint, ui.regionBox])
       ui.statusText = el('span', { text: '正在加载 PDF…' })
       ui.status = el('div.lv-pdf-status', { role: 'status' }, [el('span.lv-pdf-spinner'), ui.statusText])
+
+      // 批注列表抽屉 + 模式提示条（都在 body 里，不参与滚动）
+      ui.annotList = el('div.lv-annot-list')
+      ui.annotPanel = el('div.lv-annot-panel', { hidden: true }, [
+        el('div.lv-annot-panel-head', null, [
+          el('span', { text: '批注' }),
+          el('div.right', null, [el('button.lv-pdf-btn', {
+            type: 'button', text: '关闭',
+            title: '收起批注列表',
+            onclick: () => showAnnotPanel(false)
+          })])
+        ]),
+        ui.annotList
+      ])
+      ui.annotHint = el('div.lv-annot-hint', { hidden: true })
+
       ui.body = el('div.lv-pdf-body', { style: 'position:relative;flex:1 1 auto;min-height:0' },
-        [ui.scroll, ui.regionLayer, ui.status])
+        [ui.scroll, ui.annotPanel, ui.annotHint, ui.regionLayer, ui.status])
       ui.root = el('div.lv-pdf-viewer', {
         style: 'position:relative;display:flex;flex-direction:column;width:100%;height:100%;overflow:hidden'
       }, [ui.toolbar, ui.body])
@@ -1456,6 +2567,19 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       ui.btnRegion.onclick = function () { toggleRegionSelect() }
       syncRegionButton()
 
+      // 批注：三个按钮 + 颜色选择；mousedown/mouseup 挂在滚动容器上（事件从文本层冒上来）
+      ui.btnHighlight.onclick = function () { setAnnotMode('highlight') }
+      ui.btnNote.onclick = function () { setAnnotMode('note') }
+      ui.colorSelect.onchange = function () {
+        const next = String(ui.colorSelect.value || '')
+        state.annotColor = ANNOT_COLOR_KEYS.indexOf(next) >= 0 ? next : 'yellow'
+      }
+      ui.btnAnnotList.onclick = function () { showAnnotPanel(!state.annotPanelOpen) }
+      onGlobal(ui.scroll, 'mousedown', onAnnotDown)
+      onGlobal(ui.scroll, 'mouseup', onAnnotUp)
+      renderAnnotPanel()
+      syncAnnotButtons()
+
       syncPageButtons()
       syncMatchButtons()
       syncZoom()
@@ -1475,6 +2599,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       container.appendChild(ui.root)
       applyTheme()
       restoreInvertPref()          // 反色 = 用户上一次的选择，和系统主题无关
+      setAnnotations(opts.annotations || [])   // 批注数据由调用方给（可能还没加载完，为空也照常）
 
       // 主题变化实时响应
       if (typeof window.MutationObserver === 'function' && document.documentElement) {
@@ -1537,6 +2662,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
           pagesinit: onPagesInit,
           pagechanging: onPageChanging,
           scalechanging: onScaleChanging,
+          pagerendered: onPageRendered,
           updatefindmatchescount: onMatchesCount,
           updatefindcontrolstate: onFindControlState
         }
@@ -1584,7 +2710,11 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         startRegionSelect: startRegionSelect,
         cancelRegionSelect: cancelRegionSelect,
         goToPage: goToPage,
-        isInverted: isInverted
+        isInverted: isInverted,
+        // 批注：读写整组 / 跳到某一条（数据本身仍由调用方落库）
+        getAnnotations: getAnnotations,
+        setAnnotations: setAnnotations,
+        goToAnnotation: locateAnnotation
       }
     } catch (err) {
       return fail('内置阅读器初始化失败：' + errText(err))

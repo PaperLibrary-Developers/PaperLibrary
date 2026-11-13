@@ -205,6 +205,12 @@
     // PDF 全文
     extractFulltext: id => request('POST', '/api/papers/' + encodeURIComponent(id) + '/fulltext'),
 
+    // PDF 批注（荧光笔 / 便签）：整表读写。坐标是「相对该页的 0~1 归一化值」，
+    // 缩放 / 适宽 / 换屏幕都不用重算，前端只管按百分比画。
+    getAnnotations: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/annotations'),
+    saveAnnotations: (id, items) => request('PUT', '/api/papers/' + encodeURIComponent(id) + '/annotations',
+      { body: { items: Array.isArray(items) ? items : [] } }),
+
     // 「更多信息」补充材料
     listAttachments: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/attachments'),
     deleteAttachment: (id, file) => request('DELETE', '/api/papers/' + encodeURIComponent(id) + '/attachments/' + encodeURIComponent(file)),

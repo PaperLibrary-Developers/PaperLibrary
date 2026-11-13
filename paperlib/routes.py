@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from paperlib.api import (
     ai,
+    annotations,
     chat,
     copilot,
     folders,
@@ -136,6 +137,10 @@ ROUTES = [
     {"name": "papers-chat-post", "methods": ("POST",), "pattern": "/api/papers/:id/chat", "handler": chat.chat_post},
     {"name": "papers-vision", "methods": ("POST",), "pattern": "/api/papers/:id/vision", "handler": chat.vision},
     {"name": "papers-transcribe", "methods": ("POST",), "pattern": "/api/papers/:id/transcribe", "handler": chat.transcribe},
+
+    # PDF 批注（荧光笔 / 便签）：整表读写，坐标是每页 0~1 的归一化值
+    {"name": "papers-annotations-get", "methods": ("GET",), "pattern": "/api/papers/:id/annotations", "handler": annotations.get_annotations},
+    {"name": "papers-annotations-put", "methods": ("PUT",), "pattern": "/api/papers/:id/annotations", "handler": annotations.put_annotations},
 
     {"name": "papers-cite", "methods": ("GET",), "pattern": "/api/papers/:id/cite", "handler": files.cite},
     {"name": "papers-pdf", "methods": ("GET", "HEAD"), "pattern": "/api/papers/:id/pdf", "handler": files.pdf},
