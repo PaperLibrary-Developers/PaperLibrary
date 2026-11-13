@@ -230,6 +230,152 @@ import * as foldersUi from '../folders.mjs'
       return wrap
     }
 
+    /* 图表按钮：分成两块各自独立的按钮，点哪儿干什么不靠猜——
+       · 左侧主体（🖼 图表）：跳「图表画廊」，并按这篇筛选，行为和改造前完全一致；
+       · 右侧 ▾：只管开/关菜单，菜单里只有一个「重拉图表」。
+       菜单打开后点外面、按 Esc、或再点 ▾ 都会收起；Esc 会把焦点还给 ▾，
+       且这一下 Esc 不会顺带触发详情页原本的「Esc 返回首页」。
+       重拉期间两块都禁用，▾ 换成转圈、主体文字变「重拉中…」；完成后先回读服务端
+       图表列表确认刷新结果，再在按钮右边冒一枚状态胶囊（「已更新 N 张图表 · 查看 →」，
+       8 秒后自动消失，点它直达刷新后的画廊），并配一条 toast。 */
+    function buildFigureButton () {
+      const status = h('button.fig-status', {
+        type: 'button', hidden: true, 'aria-live': 'polite',
+        title: '看刷新后的图表',
+        onclick: () => go('figures', { paperId: paper.id })
+      })
+      let statusTimer = 0
+      let busy = false
+      let outside = null
+
+      const menuItem = h('button.more-item', {
+        type: 'button',
+        role: 'menuitem',
+        onclick: () => reextract()
+      }, '⟳ 重拉图表')
+
+      const menu = h('div.more-menu.split-menu', {
+        id: 'fig-menu',
+        role: 'menu',
+        'aria-label': '图表操作',
+        hidden: true
+      }, menuItem)
+
+      const caret = h('button.split-caret', {
+        type: 'button',
+        'aria-haspopup': 'menu',
+        'aria-expanded': 'false',
+        'aria-controls': 'fig-menu',
+        title: '更多图表操作：从 PDF 重拉图表',
+        'aria-label': '更多图表操作',
+        onclick: ev => { ev.stopPropagation(); setMenu(menu.hidden) },
+        onkeydown: ev => {
+          if (ev.key === 'ArrowDown') { ev.preventDefault(); setMenu(true) }
+        }
+      }, '▾')
+
+      const label = h('span.split-label', '图表')
+      const main = h('button.btn.sm.split-main', {
+        type: 'button',
+        title: '看这篇的图表；也可以从图库进入跨文献的图表画廊',
+        onclick: () => go('figures', { paperId: paper.id })
+      }, h('span', '🖼'), label)
+
+      const wrap = h('div.split', main, caret, menu)
+      const unit = h('span.split-unit', wrap, status)
+
+      menuItem.title = paper.pdfFile
+        ? '用 PyMuPDF 重新渲染这篇的 PDF，按图注重新匹配图表（会覆盖已有记录）'
+        : '这篇还没有关联 PDF，先关联 PDF 再重拉'
+
+      function setMenu (open) {
+        const next = !!open && !busy
+        menu.hidden = !next
+        caret.setAttribute('aria-expanded', next ? 'true' : 'false')
+        wrap.classList.toggle('is-open', next)
+        if (outside) {
+          document.removeEventListener('click', outside)
+          document.removeEventListener('keydown', onEsc, true)
+          outside = null
+        }
+        if (!next) return
+        outside = ev => {
+          // 视图已被换掉（例如点了主体跳走）：自清理，别把野监听留在 document 上
+          if (!unit.isConnected) { setMenu(false); return }
+          if (!wrap.contains(ev.target)) setMenu(false)
+        }
+        document.addEventListener('click', outside)
+        document.addEventListener('keydown', onEsc, true)
+        try { menuItem.focus({ preventScroll: true }) } catch (err) { /* 老浏览器忽略 */ }
+      }
+
+      function onEsc (ev) {
+        if (ev.key !== 'Escape') return
+        // 捕获阶段先于详情页 document.onkeydown 的「Esc 返回首页」执行：
+        // 菜单开着时 Esc 只收菜单，不把人送回首页。
+        ev.stopImmediatePropagation()
+        setMenu(false)
+        try { caret.focus({ preventScroll: true }) } catch (err) { /* 同上 */ }
+      }
+
+      function showStatus (text, warn) {
+        status.textContent = text
+        status.classList.toggle('is-warn', !!warn)
+        status.hidden = false
+        if (statusTimer) clearTimeout(statusTimer)
+        statusTimer = setTimeout(() => { status.hidden = true }, 8000)
+      }
+
+      async function reextract () {
+        setMenu(false)
+        if (busy) return
+        if (!paper.pdfFile) {
+          toast('这篇还没有关联 PDF，先关联 PDF 再重拉图表', 'warn')
+          return
+        }
+        busy = true
+        wrap.classList.add('is-busy')
+        wrap.setAttribute('aria-busy', 'true')
+        main.disabled = true
+        caret.disabled = true
+        caret.replaceChildren(h('span.spin'))
+        label.textContent = '重拉中…'
+        status.hidden = true
+        try {
+          const res = await api.extractFigures(paper.id, { force: true })
+          let n = res && typeof res.extracted === 'number'
+            ? res.extracted
+            : (res && Array.isArray(res.figures) ? res.figures.length : 0)
+          // 回读一次服务端列表：以「刷新后实际存下的张数」为准，也确认覆盖写入已落库。
+          // 画廊本身没有前端缓存，每次打开都重新拉，点胶囊过去看到的就是这批新数据。
+          try {
+            const fresh = await api.paperFigures(paper.id)
+            if (fresh && Array.isArray(fresh.figures)) n = fresh.figures.length
+          } catch (err) { /* 回读失败就退回提取接口给的 extracted */ }
+          if (n) {
+            toast('已从 PDF 重新提取 ' + n + ' 张图表')
+            showStatus('已更新 ' + n + ' 张图表 · 查看 →')
+          } else {
+            toast('没识别到图表，可以检查这篇的 PDF 是否带图注', 'warn')
+            showStatus('没识别到图表', true)
+          }
+        } catch (err) {
+          toast(err.message || '重拉图表失败', 'error')
+          showStatus('重拉失败 · 查看 →', true)
+        } finally {
+          busy = false
+          wrap.classList.remove('is-busy')
+          wrap.removeAttribute('aria-busy')
+          main.disabled = false
+          caret.disabled = false
+          caret.textContent = '▾'
+          label.textContent = '图表'
+        }
+      }
+
+      return unit
+    }
+
     const header = h('section.detail-head',
       h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
         h('button.btn.sm.ghost', { type: 'button', onclick: () => history.length > 1 ? history.back() : go('#/') }, '← 返回'),
@@ -272,11 +418,8 @@ import * as foldersUi from '../folders.mjs'
           }
         }, '📄 查看 PDF') : null,
         // 合并后新增的三项能力入口：图表画廊（单篇筛选）/ 横向对比（带上这篇）/ 深度分析
-        h('button.btn.sm', {
-          type: 'button',
-          title: '看这篇的图表；也可以从图库进入跨文献的图表画廊',
-          onclick: () => go('figures', { paperId: paper.id })
-        }, '🖼 图表'),
+        // 图表按钮带 ▾ 菜单（重拉图表），主体点击仍是跳画廊，行为不变
+        buildFigureButton(),
         h('button.btn.sm', {
           type: 'button',
           title: '把这篇带进横向对比，再挑其它文献一起比',

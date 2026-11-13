@@ -1160,6 +1160,42 @@ a.external-title:hover { color: var(--accent-text); }
 .more-item.danger:hover { background: var(--danger-soft); }
 .more-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 
+/* ---------- 分体按钮（主体 + ▾）：目前只有详情页的「图表」在用 ----------
+   主体与 ▾ 是两个独立按钮，各自的点击区互不重叠：
+   点主体 = 跳图表画廊，点 ▾ = 开菜单（重拉图表）。中间那条竖线只画一次（▾ 不设左描边）。 */
+.split-unit { display: inline-flex; align-items: center; gap: 6px; }
+.split { position: relative; display: inline-flex; }
+.split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split-caret {
+  min-width: 22px; padding: 0 6px;
+  border: 1px solid var(--border); border-left: 0;
+  border-top-right-radius: var(--radius-sm); border-bottom-right-radius: var(--radius-sm);
+  background: var(--surface); color: var(--muted);
+  font-size: 10px; line-height: 1;
+  display: grid; place-items: center; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.split-caret:hover { background: var(--surface-3); color: var(--text); }
+.split-caret[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent-text); }
+.split-caret[disabled] { opacity: .5; cursor: default; }
+.split-menu { left: 0; right: auto; min-width: 168px; }
+/* 重拉中：▾ 位置换成转圈，两块按钮一起禁用（.btn[disabled] 已有半透明 + 不接收点击） */
+.split .spin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.6px solid currentColor; border-top-color: transparent;
+  animation: split-spin .7s linear infinite;
+}
+@keyframes split-spin { to { transform: rotate(360deg); } }
+/* 完成后的状态胶囊：可点，直达刷新后的画廊；成功用强调色，失败/无结果用灰底 */
+.fig-status {
+  font: inherit; font-size: 12px; line-height: 1.6; white-space: nowrap;
+  padding: 2px 8px; border-radius: 999px; border: 0; cursor: pointer;
+  background: var(--accent-soft); color: var(--accent-text);
+}
+.fig-status[hidden] { display: none; }
+.fig-status:hover { filter: brightness(.95); }
+.fig-status.is-warn { background: var(--surface-3); color: var(--muted); }
+
 /* 引用弹窗 */
 .modal .cite-text { max-height: 220px; }
 
