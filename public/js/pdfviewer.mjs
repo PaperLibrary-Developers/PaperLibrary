@@ -74,6 +74,8 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
     { key: 'pink', label: '粉' }
   ]
   const ANNOT_COLOR_KEYS = ANNOT_COLORS.map(c => c.key)
+  // 图标 / 笔头要真色值（CSS 变量只覆盖了页内标记，SVG 里直接用字面色更省事）
+  const ANNOT_HEX = { yellow: '#f2c433', green: '#3f9e77', blue: '#4f8fd6', pink: '#dd7a9d' }
   const ANNOT_MAX_RECTS = 120          // 一条高亮最多这么多行矩形（跨页长选区分页后各自成条）
   const ANNOT_MIN_DRAG = 4             // 便签模式：按下到松开的位移小于这个像素数算「点了一下」
   const ANNOT_QUOTE_MAX = 600
@@ -303,7 +305,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   100% { box-shadow: 0 0 0 2px rgba(47, 111, 94, 0); }
 }
 
-/* 便签图标：小方块 + 折角，里面的「三道横线」用 repeating-gradient 画，不用图标字体 */
+/* 便签图标：小方块 + 折角，里面只画**一道横线**（单行），不用图标字体 */
 .lv-pdf-viewer .lv-annot-note {
   position: absolute; width: 20px; height: 20px; margin: 0; padding: 0;
   display: flex; align-items: center; justify-content: center;
@@ -315,9 +317,8 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
   transition: transform .12s ease, box-shadow .12s ease;
 }
 .lv-pdf-viewer .lv-annot-note::before {
-  content: ""; width: 10px; height: 8px; border-radius: 1px;
-  background: repeating-linear-gradient(to bottom, currentColor 0 1.5px, transparent 1.5px 3.5px);
-  opacity: .8;
+  content: ""; width: 10px; height: 1.5px; border-radius: 1px;
+  background: currentColor; opacity: .85;
 }
 .lv-pdf-viewer .lv-annot-note[data-color="green"] { background: var(--lv-note-green); color: #f2fff9; }
 .lv-pdf-viewer .lv-annot-note[data-color="blue"] { background: var(--lv-note-blue); color: #f4f9ff; }
@@ -347,16 +348,17 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 .lv-pdf-viewer.lv-annot-pinning .lv-pdf-scroll,
 .lv-pdf-viewer.lv-annot-pinning .lv-pdf-scroll .page { cursor: copy; }
 
-/* 工具栏上的两个小图标：荧光笔 = 一道半透明黄条；便签 = 缺一角的方框（纯 CSS，不用图标库） */
-.lv-pdf-viewer .lv-pdf-icon-hl {
-  display: inline-block; width: 12px; height: 9px; border-radius: 2px;
-  background: rgba(250, 204, 21, .9);
-  box-shadow: inset 0 -3px 0 rgba(120, 92, 0, .18);
+/* 工具栏 / 列表共用的批注图标（内联 SVG）：
+   荧光笔 = 一支斜放的笔（笔头用所选颜色），便签 = 便签纸 + 一道横线（单行）。 */
+.lv-pdf-viewer .lv-pdf-icon,
+.lv-pdf-viewer .lv-annot-kind {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; line-height: 0;
 }
-.lv-pdf-viewer .lv-pdf-icon-note {
-  display: inline-block; width: 10px; height: 11px;
-  border: 1.5px solid currentColor; border-radius: 2px 2px 2px 0;
-}
+.lv-pdf-viewer .lv-pdf-icon { width: 14px; height: 14px; }
+.lv-pdf-viewer .lv-annot-kind { width: 14px; height: 14px; }
+.lv-pdf-viewer .lv-pdf-icon svg,
+.lv-pdf-viewer .lv-annot-kind svg { display: block; }
 .lv-pdf-viewer .lv-pdf-color { padding: 3px 4px; height: 26px; cursor: pointer; }
 
 /* 批注列表：贴在阅读区右侧的抽屉（z-index 3，低于框选取景层 4：
@@ -393,11 +395,6 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 .lv-pdf-viewer .lv-annot-page {
   font-size: 11px; color: var(--muted, #75726a); font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.lv-pdf-viewer .lv-annot-tag { width: 12px; height: 12px; border-radius: 3px; }
-.lv-pdf-viewer .lv-annot-tag[data-color="yellow"] { background: #f2c433; }
-.lv-pdf-viewer .lv-annot-tag[data-color="green"] { background: #3f9e77; }
-.lv-pdf-viewer .lv-annot-tag[data-color="blue"] { background: #4f8fd6; }
-.lv-pdf-viewer .lv-annot-tag[data-color="pink"] { background: #dd7a9d; }
 .lv-pdf-viewer .lv-annot-item .body { flex: 1 1 auto; min-width: 0; }
 .lv-pdf-viewer .lv-annot-quote-text,
 .lv-pdf-viewer .lv-annot-note-text {
@@ -450,8 +447,10 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 }
 .lv-annot-pop textarea:focus { border-color: var(--accent, #2f6f5e); }
 .lv-annot-pop-foot { display: flex; align-items: center; gap: 6px; }
-.lv-annot-pop-foot .right { margin-left: auto; display: flex; gap: 6px; }
-.lv-annot-tip { font-size: 11.5px; line-height: 1.5; color: var(--danger, #b4453a); }
+.lv-annot-pop-foot .right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+/* 自动保存状态：平时灰字，存完变绿（accent），不需要用户再点按钮 */
+.lv-annot-status { font-size: 11.5px; line-height: 1.4; color: var(--muted, #75726a); white-space: nowrap; }
+.lv-annot-status.saved { color: var(--accent-text, #235648); }
 .lv-annot-btn {
   padding: 3px 9px; font: inherit; font-size: 12.5px; line-height: 1.7;
   color: var(--text, #26251f); background: var(--surface, #fffefb);
@@ -518,6 +517,56 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
     if (children.nodeType === 1 || children.nodeType === 3) parent.appendChild(children)
     else parent.appendChild(document.createTextNode(String(children)))
     return parent
+  }
+
+  /** 创建 SVG 子节点（普通 el() 只能建 HTML 元素） */
+  function svgNode (tag, attrs) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag)
+    if (attrs) {
+      const keys = Object.keys(attrs)
+      for (let i = 0; i < keys.length; i++) node.setAttribute(keys[i], String(attrs[keys[i]]))
+    }
+    return node
+  }
+
+  /**
+   * 批注图标（14×14 内联 SVG，不依赖图标库）：
+   *   highlight → 一支斜放的笔，**笔头是当前颜色**
+   *   note      → 便签纸（带折角）+ 一道横线（单行）
+   * @param {'highlight'|'note'} kind
+   * @param {string} colorKey yellow|green|blue|pink
+   */
+  function annotIcon (kind, colorKey) {
+    const hex = ANNOT_HEX[colorKey] || ANNOT_HEX.yellow
+    const svg = svgNode('svg', {
+      width: '14', height: '14', viewBox: '0 0 16 16',
+      'aria-hidden': 'true', focusable: 'false'
+    })
+    if (kind === 'note') {
+      // 纸面：淡色填充 + 同色描边；右下角折一下；中间一道横线
+      svg.appendChild(svgNode('path', {
+        d: 'M3 2.5h10v8.2l-3.3 3.3H3z',
+        fill: hex, 'fill-opacity': '0.22', stroke: hex, 'stroke-width': '1.1', 'stroke-linejoin': 'round'
+      }))
+      svg.appendChild(svgNode('path', {
+        d: 'M9.7 14v-3.3h3.3', fill: 'none', stroke: hex, 'stroke-width': '1.1', 'stroke-linejoin': 'round'
+      }))
+      svg.appendChild(svgNode('path', {
+        d: 'M5.2 7.6h5.6', fill: 'none', stroke: hex, 'stroke-width': '1.4', 'stroke-linecap': 'round'
+      }))
+      return svg
+    }
+    // 笔身用 currentColor（跟着按钮文字在明暗主题下都清楚），只有笔头取色
+    svg.appendChild(svgNode('path', {
+      d: 'M4.6 9.4 10.9 3.1a1.7 1.7 0 0 1 2.4 2.4L7 11.8z',
+      fill: 'currentColor', 'fill-opacity': '0.14',
+      stroke: 'currentColor', 'stroke-width': '1.1', 'stroke-linejoin': 'round'
+    }))
+    svg.appendChild(svgNode('path', {
+      d: 'M6.9 11.7 4.7 9.5 2.3 13.7z',
+      fill: hex, stroke: hex, 'stroke-width': '0.6', 'stroke-linejoin': 'round'
+    }))
+    return svg
   }
 
   /** 只插一次总样式表；失败也不影响功能 */
@@ -722,6 +771,8 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       annotColor: 'yellow',   // 当前荧光笔颜色
       annotPress: null,       // 便签模式按下时的记点（起点 + 按下前的选区）
       annotPop: null,         // 打开着的编辑气泡（挂在 body 下，销毁时必须手动摘掉）
+      annotPopId: '',         // 气泡正在编辑哪一条（删除别条时用来判断要不要保留未存的改动）
+      annotPopFlush: null,    // 气泡的「立刻存」回调：关闭前统一调一次，避免丢最后几个字
       annotPopDocListeners: [], // 气泡打开期间挂在 document 上的监听
       annotPanelOpen: false,
       annotFlashId: '',       // 正在闪烁的批注 id（列表里点「定位」时设）
@@ -737,6 +788,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       btnInvert: null, linkDownload: null, linkOpen: null,
       btnRegion: null, regionLayer: null, regionBox: null, regionHint: null,
       btnHighlight: null, btnNote: null, colorSelect: null, btnAnnotList: null,
+      highlightIcon: null, noteIcon: null,
       annotPanel: null, annotList: null, annotHint: null
     }
 
@@ -787,7 +839,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         try { clearTimeout(state.annotFlashTimer) } catch (err) {}
         state.annotFlashTimer = 0
       }
-      try { closeAnnotPop() } catch (err) {}
+      try { closeAnnotPop({ keepChanges: false }) } catch (err) {}
       state.annotMode = null
       state.annotPress = null
       state.annotPanelOpen = false
@@ -1934,13 +1986,54 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       }, ANNOT_FLASH_MS)
     }
 
-    /** 列表里点一条 → 跳到那一页并闪一下 */
+    /** 批注在页面里的纵向锚点（0~1）：便签取落点，荧光笔取最上面那一行 */
+    function annotationAnchorY (item) {
+      if (!item) return 0
+      if (item.type === 'note') return clamp01(item.point ? item.point.y : 0)
+      const rects = Array.isArray(item.rects) ? item.rects : []
+      let y = 1
+      for (let i = 0; i < rects.length; i++) {
+        const value = Number(rects[i] && rects[i].y)
+        if (isFinite(value) && value < y) y = value
+      }
+      return y === 1 ? 0 : clamp01(y)
+    }
+
+    /**
+     * 把某条批注滚到视口里：不是「跳到某一页」，而是按它在页面内的相对位置**精确对位**
+     * （落在视口从上往下 30% 处，上面留一点上下文）。
+     * 页面 div 在 pagesinit 之后就有确定尺寸，所以绝大多数情况不用等这一页渲染完。
+     * @returns {boolean} 对位成功 true；页还没排出来 false（调用方退回按页跳）
+     */
+    function scrollAnnotationIntoView (item) {
+      if (!item || !ui.scroll) return false
+      const info = pageInfoOf(item.page)
+      if (!info) return false
+      const box = clientRectOf(ui.scroll)
+      if (!box || !box.height) return false
+      const offsetInPage = annotationAnchorY(item) * info.rect.height
+      // 视口坐标 → 滚动内容坐标：这一页在视口里的位置 + 已滚过的距离 + 页内偏移
+      const contentTop = (info.rect.top - box.top) + (ui.scroll.scrollTop || 0) + offsetInPage
+      const target = contentTop - box.height * 0.3
+      const maxTop = Math.max(0, (ui.scroll.scrollHeight || 0) - (ui.scroll.clientHeight || 0))
+      const top = Math.max(0, maxTop > 0 ? Math.min(maxTop, target) : target)
+      try {
+        if (typeof ui.scroll.scrollTo === 'function') ui.scroll.scrollTo({ top: top, behavior: 'smooth' })
+        else ui.scroll.scrollTop = top
+      } catch (err) {
+        try { ui.scroll.scrollTop = top } catch (err2) {}
+      }
+      return true
+    }
+
+    /** 列表里点一条 → 滚到它在页面里的具体位置并闪一下 */
     function locateAnnotation (id) {
       const item = state.annotations.find(a => a.id === id)
       if (!item) return
-      goToPage(item.page)
-      paintPageAnnotations(item.page)      // 已渲染的页立刻生效；没渲染的页由 pagerendered 补上
-      flashAnnotation(item.id, item.page)
+      // 精确对位优先；页 div 还没建出来（极早期 / 文档还没排版）才退回「按页跳」
+      if (!scrollAnnotationIntoView(item)) goToPage(item.page)
+      paintPageAnnotations(item.page)
+      flashAnnotation(item.id, item.page)      // flash 内部会再按当前滚动位置重画一次
       if (state.annotPanelOpen) renderAnnotPanel()
     }
 
@@ -1948,7 +2041,8 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       const index = state.annotations.findIndex(a => a.id === id)
       if (index < 0) return
       const removed = state.annotations.splice(index, 1)[0]
-      closeAnnotPop()
+      // 删的正是气泡里那条 → 丢掉未存的改动；删的是别的条目 → 先把它正在编辑的内容存掉
+      closeAnnotPop({ keepChanges: state.annotPopId !== id })
       if (removed) paintPageAnnotations(removed.page)
       renderAnnotPanel()
       syncAnnotCount()
@@ -1975,10 +2069,22 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       state.annotPopDocListeners.length = 0
     }
 
-    function closeAnnotPop () {
+    /**
+     * 关掉编辑气泡。
+     * 默认会先 flush：用户在气泡里改了字、还没到防抖时间就点外面 / 按 Esc，也不能丢。
+     * @param {{keepChanges?:boolean}} [options] keepChanges === false 时丢弃未保存的改动（删除时用）
+     */
+    function closeAnnotPop (options) {
+      const opts = options || {}
+      const flush = state.annotPopFlush
+      state.annotPopFlush = null          // 先摘掉，避免 flush 过程中又触发关闭
+      if (flush && opts.keepChanges !== false) {
+        try { flush() } catch (err) {}
+      }
       unbindAnnotDoc()
       const wrap = state.annotPop
       state.annotPop = null
+      state.annotPopId = ''
       try {
         if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap)
       } catch (err) {}
@@ -2036,7 +2142,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       const head = el('div.lv-annot-pop-head', null, [
         el('b', { text: isNote ? '便签' : '荧光笔' }),
         el('span', { text: '· 第 ' + draft.page + ' 页' }),
-        el('span', { style: 'margin-left:auto', text: isDraft ? '新批注' : '修改后点保存' })
+        el('span', { style: 'margin-left:auto', text: isDraft ? '新批注' : '自动保存' })
       ])
       pop.appendChild(head)
 
@@ -2046,13 +2152,11 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
 
       const ta = el('textarea.lv-annot-input', {
         rows: '3',
-        placeholder: isNote ? '写点什么…（便签内容会跟这篇文献一起保存）' : '备注（可留空）',
+        placeholder: isNote ? '写点什么…（边写边自动保存）' : '备注（可留空，边写边自动保存）',
         'aria-label': isNote ? '便签内容' : '荧光笔备注'
       })
       ta.value = draft.note
       pop.appendChild(ta)
-
-      const tip = el('div.lv-annot-tip', { hidden: true, style: 'display:none' })
 
       const swatches = el('div.lv-annot-swatches')
       ANNOT_COLORS.forEach(color => {
@@ -2072,6 +2176,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
             all[i].classList.toggle('active', on)
             all[i].setAttribute('aria-pressed', on ? 'true' : 'false')
           }
+          applyChanges()          // 换色也立刻落库，不用等关闭
         }
         swatches.appendChild(dot)
       })
@@ -2079,40 +2184,62 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       const foot = el('div.lv-annot-pop-foot')
       let armed = false
       let armTimer = 0
-      if (!isDraft) {
-        const del = el('button.lv-annot-btn.danger', { type: 'button', text: '删除' })
-        del.onclick = () => {
-          if (!armed) {
-            armed = true
-            del.classList.add('armed')
-            del.textContent = '确认删除'
-            if (armTimer) clearTimeout(armTimer)
-            armTimer = setTimeout(() => {
-              armed = false
-              del.classList.remove('armed')
-              del.textContent = '删除'
-            }, 2600)
-            return
-          }
-          deleteAnnotation(draft.id)
-        }
-        foot.appendChild(del)
-      }
-      foot.appendChild(swatches)
-      const actions = el('div.right')
-      const cancel = el('button.lv-annot-btn', { type: 'button', text: '取消' })
-      cancel.onclick = () => closeAnnotPop()
-      const save = el('button.lv-annot-btn.primary', { type: 'button', text: '保存' })
-      const commit = () => {
-        const text = String(ta.value || '').replace(/\r\n/g, '\n').trim().slice(0, ANNOT_NOTE_MAX)
-        if (isNote && !text) {
-          tip.textContent = '便签不能是空的，写一句再保存。'
-          tip.hidden = false
-          tip.style.display = ''
-          try { ta.focus() } catch (err) {}
+      // 删除按钮一直有：新便签如果还没落库（没写字），两步确认后就是「关掉这张空便签」
+      const del = el('button.lv-annot-btn.danger', { type: 'button', text: '删除' })
+      del.onclick = () => {
+        if (!armed) {
+          armed = true
+          del.classList.add('armed')
+          del.textContent = '确认删除'
+          if (armTimer) clearTimeout(armTimer)
+          armTimer = setTimeout(() => {
+            armed = false
+            del.classList.remove('armed')
+            del.textContent = '删除'
+          }, 2600)
           return
         }
-        const stamp = nowStamp()
+        if (!persisted) { closeAnnotPop({ keepChanges: false }); return }
+        deleteAnnotation(draft.id)
+      }
+      foot.appendChild(del)
+      foot.appendChild(swatches)
+
+      /* ---- 自动保存 ---- */
+      /* 规则：
+           · 输入停下 500ms 就存一次（不用点按钮）；
+           · 关掉气泡（点外面 / Esc / 「完成」/ 切到别的批注）时立刻补存，绝不丢最后几个字；
+           · 新便签还没写内容就不建记录，免得留下一堆空便签；
+           · 换颜色也立刻存。 */
+      const status = el('span.lv-annot-status', { text: isDraft ? '输入即自动保存' : '已自动保存' })
+      if (!isDraft) status.classList.add('saved')
+      const actions = el('div.right')
+      actions.appendChild(status)
+      const done = el('button.lv-annot-btn', { type: 'button', text: '完成', title: '关闭（内容已自动保存）' })
+      done.onclick = () => closeAnnotPop()
+      actions.appendChild(done)
+      foot.appendChild(actions)
+
+      let savedText = draft.note        // 上一次真正落库的正文
+      let savedColor = draft.color
+      let persisted = !isDraft          // 是否已在内存数组里（新便签第一次落库后变 true）
+      let saveTimer = 0
+
+      /** 把当前编辑结果写进内存 + 通知调用方落库；返回是否真的改了东西 */
+      function applyChanges () {
+        if (state.destroyed || state.tornDown) return false
+        const raw = String(ta.value || '').replace(/\r\n/g, '\n').slice(0, ANNOT_NOTE_MAX)
+        const text = raw.trim()
+        if (!persisted && !text) {                 // 空便签：等真的写了再建记录
+          status.textContent = '输入即自动保存'
+          status.classList.remove('saved')
+          return false
+        }
+        if (persisted && text === savedText && draft.color === savedColor) {
+          status.textContent = '已自动保存'
+          status.classList.add('saved')
+          return false
+        }
         const next = {
           id: draft.id,
           type: draft.type,
@@ -2123,28 +2250,47 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
           quote: draft.quote,
           note: text,
           createdAt: draft.createdAt,
-          updatedAt: stamp
+          updatedAt: nowStamp()
         }
-        if (isDraft) {
-          state.annotations.push(next)
-        } else {
-          const index = state.annotations.findIndex(a => a.id === next.id)
-          if (index >= 0) state.annotations[index] = next
-          else state.annotations.push(next)
-        }
-        closeAnnotPop()
+        const index = state.annotations.findIndex(a => a.id === next.id)
+        if (index >= 0) state.annotations[index] = next
+        else state.annotations.push(next)
+        const firstSave = !persisted
+        persisted = true
+        savedText = text
+        savedColor = next.color
         paintPageAnnotations(next.page)
         renderAnnotPanel()
         syncAnnotCount()
-        emitAnnotations()
-        if (isDraft) flashAnnotation(next.id, next.page)
+        emitAnnotations()                          // detail 那边负责真正的 PUT
+        status.textContent = '已自动保存'
+        status.classList.add('saved')
+        if (firstSave) flashAnnotation(next.id, next.page)
+        return true
       }
-      save.onclick = commit
-      actions.appendChild(cancel)
-      actions.appendChild(save)
-      foot.appendChild(actions)
 
-      pop.appendChild(tip)
+      /** 立刻把待存的改动写掉（防抖计时器还在排队时用） */
+      function flushNow () {
+        if (saveTimer) {
+          try { clearTimeout(saveTimer) } catch (err) {}
+          saveTimer = 0
+        }
+        try { applyChanges() } catch (err) {}
+      }
+      state.annotPopFlush = flushNow               // closeAnnotPop 会先调它
+
+      ta.oninput = () => {
+        status.textContent = '保存中…'
+        status.classList.remove('saved')
+        if (saveTimer) {
+          try { clearTimeout(saveTimer) } catch (err) {}
+        }
+        saveTimer = setTimeout(() => {
+          saveTimer = 0
+          try { applyChanges() } catch (err) {}
+        }, 500)
+      }
+
       pop.appendChild(foot)
       wrap.appendChild(pop)
       wrap.onclick = ev => { if (ev.target === wrap) closeAnnotPop() }
@@ -2153,6 +2299,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       pop.style.visibility = 'hidden'
       document.body.appendChild(wrap)
       state.annotPop = wrap
+      state.annotPopId = draft.id
       placeAnnotPop(pop, o.anchor || null)
       pop.style.visibility = ''
 
@@ -2160,12 +2307,12 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         if (ev.key === 'Escape' || ev.key === 'Esc') {
           ev.preventDefault()
           ev.stopPropagation()
-          closeAnnotPop()
+          closeAnnotPop()          // 关闭前会 flush，不用另存
           return
         }
         if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
           ev.preventDefault()
-          commit()
+          closeAnnotPop()
         }
       }
       bindAnnotDoc('keydown', ev => {
@@ -2209,13 +2356,17 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       list.forEach(item => {
         const quote = String(item.quote || '')
         const note = String(item.note || '')
+        const kindLabel = item.type === 'note' ? '便签' : '荧光笔'
         const row = el('div.lv-annot-item', {
           'data-annot-id': item.id,
-          title: '点击定位到第 ' + item.page + ' 页'
+          'data-kind': item.type,
+          title: '点击定位到第 ' + item.page + ' 页的这一处（' + kindLabel + '）'
         }, [
           el('div.meta', null, [
             el('div.lv-annot-page', { text: 'P' + item.page }),
-            el('div.lv-annot-tag', { 'data-color': item.color || 'yellow' })
+            // 图标按类型区分：荧光笔 = 一支笔（笔头取该条的颜色），便签 = 便签纸 + 单行
+            el('div.lv-annot-kind', { 'data-color': item.color || 'yellow', 'aria-hidden': 'true' },
+              [annotIcon(item.type, item.color)])
           ]),
           el('div.body', null, [
             quote ? el('div.lv-annot-quote-text', { text: quote }) : null,
@@ -2300,8 +2451,19 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         ui.btnNote.classList.toggle('active', on)
         ui.btnNote.setAttribute('aria-pressed', on ? 'true' : 'false')
       }
+      // 选了别的颜色就把两个图标重画一遍（笔头 / 便签线条跟着变），只在真的变了时动 DOM
+      syncAnnotIcon(ui.highlightIcon, 'highlight')
+      syncAnnotIcon(ui.noteIcon, 'note')
       if (ui.colorSelect && ui.colorSelect.value !== state.annotColor) ui.colorSelect.value = state.annotColor
       syncAnnotCount()
+    }
+
+    /** 图标颜色跟随当前选择；用 data-color 记住上次画的是哪一色，避免每次 sync 都重建节点 */
+    function syncAnnotIcon (host, kind) {
+      if (!host) return
+      if (host.getAttribute('data-color') === state.annotColor && host.firstChild) return
+      host.setAttribute('data-color', state.annotColor)
+      try { host.replaceChildren(annotIcon(kind, state.annotColor)) } catch (err) {}
     }
 
     /** 按下：便签模式要把「按下之前的选区」抢下来（浏览器随后会清掉它） */
@@ -2465,14 +2627,17 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       }, [el('span.lv-pdf-icon-frame', { 'aria-hidden': 'true' }), '框选'])
 
       // 批注：荧光笔（选文字）/ 便签（点位置）/ 颜色 / 批注列表
+      // 图标：荧光笔 = 一支笔（笔头随所选颜色），便签 = 便签纸 + 一道横线（单行）
+      ui.highlightIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('highlight', state.annotColor)])
+      ui.noteIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('note', state.annotColor)])
       ui.btnHighlight = el('button.lv-pdf-btn', {
         type: 'button', 'aria-pressed': 'false',
         title: '荧光笔：开着的时候在 PDF 上选中文字，就会画上高亮'
-      }, [el('span.lv-pdf-icon-hl', { 'aria-hidden': 'true' }), '荧光笔'])
+      }, [ui.highlightIcon, '荧光笔'])
       ui.btnNote = el('button.lv-pdf-btn', {
         type: 'button', 'aria-pressed': 'false',
         title: '便签：开着的时候在 PDF 上点一下，就贴一张便签'
-      }, [el('span.lv-pdf-icon-note', { 'aria-hidden': 'true' }), '便签'])
+      }, [ui.noteIcon, '便签'])
       ui.colorSelect = el('select.lv-pdf-input.lv-pdf-color', {
         title: '荧光笔 / 便签的颜色', 'aria-label': '批注颜色'
       }, ANNOT_COLORS.map(color => el('option', { value: color.key, text: color.label + '色' })))
@@ -2573,6 +2738,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       ui.colorSelect.onchange = function () {
         const next = String(ui.colorSelect.value || '')
         state.annotColor = ANNOT_COLOR_KEYS.indexOf(next) >= 0 ? next : 'yellow'
+        syncAnnotButtons()          // 让工具栏两个图标的颜色跟着变
       }
       ui.btnAnnotList.onclick = function () { showAnnotPanel(!state.annotPanelOpen) }
       onGlobal(ui.scroll, 'mousedown', onAnnotDown)
