@@ -1,4 +1,4 @@
-# PaperLibrary v1.2 Nexus（Nexus 文献库）
+# PaperLibrary v1.3 Nexus（Nexus 文献库）
 
 PaperLibrary（Python 分析引擎）与 Sci-lib（Web 壳）合并后的单产品：
 一个入口、一份 SQLite 数据、一套功能，单 Python runtime、离线可用、≤120MB。

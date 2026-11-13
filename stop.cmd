@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title PaperLibrary v1.2 Nexus - Stop
+title PaperLibrary v1.3 Nexus - Stop
 setlocal
 cd /d "%~dp0"
 set PYTHONUTF8=1

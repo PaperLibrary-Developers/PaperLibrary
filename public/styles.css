@@ -225,7 +225,7 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .brand-name .brand-navy { color: var(--brand-navy, #1b2d56); }
 .brand-name .brand-teal { color: var(--brand-teal, #0e9aab); }
 .brand-name .brand-word { display: flex; align-items: baseline; white-space: nowrap; }
-/* 版本号：字标下方的小字（跟改造前同一个位置，只把「v1.0 Nexus」收成「v1.2」）。
+/* 版本号：字标下方的小字（跟改造前同一个位置，只把「v1.0 Nexus」收成「v1.3」）。
    字号/字重/颜色都单独压住，避免被 .brand-name 的 17.5px/800 继承成第二个标题 */
 .brand-name .brand-ver {
   font-size: 10.5px; font-weight: 600; letter-spacing: .06em; line-height: 1.2;
