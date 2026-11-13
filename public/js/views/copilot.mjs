@@ -169,7 +169,7 @@ import { QUICK_START, FAQ_GROUPS, matchFaq } from '../faq.mjs'
       title: item.q,
       onclick: () => submit(item.q)
     },
-      h('span', item.icon),
+      h('span.btn-ico', item.icon),
       h('span', item.label)
     )))
 

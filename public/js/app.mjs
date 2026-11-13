@@ -255,6 +255,36 @@ const { h, toast, debounce } = util
 
   /* ---------------- 侧栏 + 顶栏 ---------------- */
 
+  /* 「分类文件夹」表头右侧两个小按钮的图标。
+     原来是＋（全角字符）和 ⚙（emoji）：都靠字体度量排版，在 24px 按钮里并不居中——
+     实测 ⚙ 的墨迹比按钮中心偏右 4.75px、＋ 偏右 1.75px，各系统还不一样。
+     换成内联 SVG 后按 viewBox 居中，位置与大小都确定，也不再受 emoji 字体影响。 */
+  const ICON_PLUS =
+    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">' +
+    '<path d="M12 4.4v15.2M4.4 12h15.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>' +
+    '</svg>'
+  const ICON_GEAR =
+    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">' +
+    '<circle cx="12" cy="12" r="5.6" fill="none" stroke="currentColor" stroke-width="2.2"/>' +
+    '<circle cx="12" cy="12" r="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/>' +
+    '<path d="M17.7 12h2.3M16.03 7.97 17.66 6.34M12 6.3V4M7.97 7.97 6.34 6.34M6.3 12H4M7.97 16.03 6.34 17.66M12 17.7V20M16.03 16.03 17.66 17.66"' +
+    ' fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>' +
+    '</svg>'
+  /* 折叠三角：▾ 这个字形只有 0.36em 宽，11px 时墨迹才 4px——靠字号放大要 30px 才够看，
+     线框也会被撑开。改用 SVG 三角，尺寸和旋转都自己说了算（收起时 CSS 转 -90°）。 */
+  const ICON_CARET =
+    '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">' +
+    '<path d="M4.5 9h15l-7.5 9.2z" fill="currentColor"/>' +
+    '</svg>'
+
+  /* 导航图标混着两类字形：彩色 emoji（🖼 🔬 📖）和文字符号（▤ ★ ⌕ ⇄ ⚙）。
+     符号是细线框，同样字号下墨迹比 emoji 小一截，所以打上 is-sym 让 CSS 单独提一档字号，
+     两类图标看起来才一样重——不这么做，Windows 上「搜索 ⌕」会明显比「图表 🖼」小一号。 */
+  const SYMBOL_ICONS = '▤★☆⌕⇄'
+  function icoSpan (ch) {
+    return h('span.nav-ico' + (SYMBOL_ICONS.includes(ch) ? '.is-sym' : ''), ch)
+  }
+
   function navItem (label, hash, icon, count, active, countKey, onNavigate) {
     // 计数元素存进 registry：refreshMeta 之后可以就地更新，不用整块重画侧栏
     const countEl = h('span.count', count == null ? '' : String(count))
@@ -274,7 +304,7 @@ const { h, toast, debounce } = util
         closeDrawer({ deferFocus: true })
       }
     },
-      h('span.nav-ico', icon),
+      icoSpan(icon),
       h('span', label),
       countEl
     )
@@ -381,17 +411,19 @@ const { h, toast, debounce } = util
             title: foldersCollapsed ? '展开分类文件夹' : '收起分类文件夹',
             onclick: ev => toggleFolders(ev.currentTarget)
           },
-            h('span.side-folders-caret', '▾'),
+            h('span.side-folders-caret', { html: ICON_CARET }),
             h('span.side-folders-title', '分类文件夹')
           ),
           h('button.side-folders-btn', {
-            type: 'button', title: '新建文件夹',
+            type: 'button', title: '新建文件夹', 'aria-label': '新建文件夹',
+            html: ICON_PLUS,
             onclick: () => createFolderPrompt(folderTree)
-          }, '＋'),
+          }),
           h('button.side-folders-btn', {
-            type: 'button', title: '管理文件夹（重命名 / 删除）',
+            type: 'button', title: '管理文件夹（重命名 / 删除）', 'aria-label': '管理文件夹',
+            html: ICON_GEAR,
             onclick: () => foldersUi.openFolderManager()
-          }, '⚙')
+          })
         ),
         h('div.side-folders-body', { id: 'side-folders-body' }, folderTree.el)
       ),
@@ -411,7 +443,7 @@ const { h, toast, debounce } = util
             closeDrawer({ deferFocus: true })
           }
         },
-          h('span.nav-ico', '📖'),
+          icoSpan('📖'),
           h('span', '使用文档')
         ),
         h('div.side-foot',

@@ -38,6 +38,12 @@ const ICON_SEND =
   '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">' +
   '<path d="M12 19.2V6.6M6.6 11.8 12 6.4l5.4 5.4" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>' +
   '</svg>'
+/* 清空对话：垃圾桶也用 SVG。🗑 在 Windows 上是灰蓝色 emoji，套不进红色的危险色，
+   而且各系统字面大小差一截；描边图标能直接吃 currentColor。 */
+const ICON_TRASH =
+  '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">' +
+  '<path d="M4.8 6.7h14.4M9.5 6.7V5.4c0-.8.7-1.5 1.5-1.5h2c.8 0 1.5.7 1.5 1.5v1.3M7.1 6.7l.8 11.3c.1.9.8 1.6 1.7 1.6h4.8c.9 0 1.6-.7 1.7-1.6l.8-11.3M10.4 10.2v5.4M13.6 10.2v5.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '</svg>'
 
 /** 会话：跨页保留，刷新清空 */
 const session = {
@@ -397,12 +403,14 @@ function buildDock () {
     onclick: () => submit()
   })
 
-  const clear = h('button.cw-ico-btn', {
+  // 清空对话：红底的危险操作按钮，图标走 SVG（emoji 没法染色，也不跟字号一起缩放）
+  const clear = h('button.cw-ico-btn.is-danger', {
     type: 'button',
+    html: ICON_TRASH,
     title: '清空对话记录（不影响文献库）',
     'aria-label': '清空对话',
     onclick: clearChat
-  }, '🗑')
+  })
 
   const close = h('button.cw-ico-btn', {
     type: 'button',

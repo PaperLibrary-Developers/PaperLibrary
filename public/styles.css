@@ -37,6 +37,8 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Source Han Sans SC", "Noto Sans CJK SC", sans-serif;
   --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", "SimSun", Georgia, serif;
   --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  /* 图标专用：PL Emoji 是下面的 @font-face（size-adjust 过的一层），其余是系统 emoji 兜底 */
+  --font-emoji: "PL Emoji", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif;
 }
 
 html[data-theme="night"] {
@@ -243,13 +245,45 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 
 .nav { display: flex; flex-direction: column; gap: 2px; margin-top: 16px; }
 .nav-item {
-  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm);
   color: var(--muted); font-size: 14px; border: 0; background: transparent; width: 100%; text-align: left;
 }
 .nav-item:hover { background: var(--surface-3); color: var(--text); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .nav-item .count { margin-left: auto; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.nav-ico { width: 18px; text-align: center; opacity: .85; }
+
+/* ---------- 小图标统一（导航行、按钮前的 emoji / 符号） ----------
+   emoji 的墨迹只占字号的 ~0.8，而且各系统不一：Segoe UI Emoji 明显偏小、
+   Apple 与 Noto 偏大——同一个 14px 在 Windows 上看着像 11px，就是「图标偏小」的来源。
+   两层处理：
+   1) @font-face 给 emoji 单独一个 size-adjust 过的字族，只接管 unicode-range 里的 emoji 码位；
+      文字与符号（⌕ ⚙ ⇄ ▾ ★ ＋）不在 emoji 字体里，会落到后面的系统字体，仍是原大小，
+      于是 emoji 与符号凑到同一档视觉重量。
+   2) 统一 20px 方框 + 居中 + line-height:1：占位稳定，不随字体基线上下浮动。
+   图标列 20px + gap 8px 与原来的 18px + 10px 等宽，标签文字仍对齐在同一条竖线上。 */
+@font-face {
+  font-family: "PL Emoji";
+  src: local("Segoe UI Emoji"), local("Apple Color Emoji"), local("Noto Color Emoji");
+  size-adjust: 112%;
+  unicode-range: U+2190-21FF, U+2300-23FF, U+2600-27BF, U+2B00-2BFF, U+1F000-1FAFF, U+FE0F;
+}
+.nav-ico, .cw-quick-ico, .btn-ico {
+  flex: none;
+  display: inline-grid; place-items: center;
+  width: 1.45em; height: 1.45em;
+  font-family: var(--font-emoji);
+  font-size: 1.08em; line-height: 1;
+  font-variant-emoji: emoji;
+  opacity: .92;
+}
+/* 侧栏图标列锁死 20px：加上 gap 8px 正好等于原来的 18+10，
+   「分类文件夹」与各个导航项的标签文字仍然对齐在同一条竖线上 */
+.nav-ico { width: 20px; height: 20px; }
+/* ⌕ ⇄ ⚙ ★ ▾ ＋ 这类是「文字符号」不是彩色 emoji：字形本身就是细小的线框，
+   同样字号下墨迹比 emoji 小一截，单独提一档字号才和旁边的 emoji 一样重 */
+.nav-ico.is-sym { font-size: 1.34em; opacity: .78; }
+/* 快捷提问行的图标要比图标列更大一号，行高才不显空 */
+.cw-quick-ico { width: 1.55em; height: 1.55em; font-size: 1.2em; }
 
 .side-block { display: flex; flex-direction: column; gap: 8px; }
 .side-title {
@@ -272,18 +306,19 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .side-folders { display: grid; gap: 2px; min-height: 0; }   /* 与 .nav 的 2px 一致 */
 .side-folders-head { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
 /* 表头 = 开关，但排版与导航项完全相同：
-   同样的 14px / 38px 行高 / 10px 内边距，▾ 占 18px 图标列，
+   同样的 14px / 38px 行高 / 10px 内边距，▾ 占 20px 图标列（gap 8px），
    于是「分类文件夹」四个字和「全部文献」这些文字落在同一条竖线（x=52）上。 */
 .side-folders-toggle {
-  flex: 1 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0;
+  flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0;
   padding: 8px 10px; border: 0; border-radius: var(--radius-sm);
   background: none; color: var(--muted); font-size: 14px; letter-spacing: normal;
 }
 .side-folders-toggle:hover { background: var(--surface-3); color: var(--text); }
 .side-folders-caret {
-  flex: none; width: 18px; display: grid; place-items: center;
-  font-size: 10px; line-height: 1; transition: transform .16s;
+  flex: none; width: 20px; height: 20px; display: grid; place-items: center;
+  transition: transform .16s;
 }
+.side-folders-caret svg { display: block; }
 .is-collapsed .side-folders-caret { transform: rotate(-90deg); }
 .side-folders-title {
   flex: 1 1 auto; min-width: 0; text-align: left;
@@ -293,9 +328,10 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 /* 收起时整块树消失，不留空白；展开后把 gap 补回来 */
 .is-collapsed .side-folders-body { display: none; }
 .side-folders-btn {
-  width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px;
-  border: 1px solid transparent; background: none; color: var(--faint); font-size: 13px; line-height: 1;
+  width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 6px;
+  border: 1px solid transparent; background: none; color: var(--faint);
 }
+.side-folders-btn svg { display: block; }
 .side-folders-btn:hover { background: var(--surface-3); color: var(--accent-text); border-color: var(--border); }
 
 .fld-tree { display: grid; gap: 1px; min-width: 0; }
@@ -441,7 +477,7 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .side-bottom { margin-top: auto; display: grid; gap: 9px; }
 /* 使用文档入口：位置在底部、样式沿用导航项（含激活态），但不占功能导航那条主线 */
 .side-doc {
-  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   padding: 8px 10px; border: 0; border-radius: var(--radius-sm);
   background: none; color: var(--muted); font-size: 13.5px;
 }
@@ -496,7 +532,8 @@ body.side-collapsed .cw { left: 18px; }
 }
 .cw-head-ico {
   flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-  background: var(--accent-soft); color: var(--accent-text); font-size: 14px;
+  background: var(--accent-soft); color: var(--accent-text);
+  font-family: var(--font-emoji); font-size: 17px; line-height: 1;
 }
 .cw-head-text { min-width: 0; display: grid; gap: 2px; }
 .cw-title { display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 650; color: var(--text); }
@@ -508,12 +545,30 @@ body.side-collapsed .cw { left: 18px; }
 .cw-sub-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-sub-dot { flex: none; }
 .cw-sub { flex: none; font-variant-numeric: tabular-nums; }
-.cw-head-actions { margin-left: auto; flex: none; display: flex; gap: 2px; }
+.cw-head-actions { margin-left: auto; flex: none; display: flex; gap: 4px; }
 .cw-ico-btn {
-  width: 28px; height: 28px; border-radius: 8px; border: 0; background: none;
-  color: var(--muted); font-size: 12.5px; line-height: 1; display: grid; place-items: center;
+  width: 30px; height: 30px; border-radius: 9px; border: 0; background: none;
+  color: var(--muted); font-size: 14px; line-height: 1; display: grid; place-items: center;
 }
 .cw-ico-btn:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+/* 清空对话 = 删数据，给红底做提示；禁用（没对话）时退回灰底，免得一直挂着一块红 */
+.cw-ico-btn.is-danger {
+  background: var(--danger-soft); color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+}
+.cw-ico-btn.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 14%, var(--danger-soft));
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  color: var(--danger);
+}
+/* 禁用（还没有对话）时也别退回灰底：淡一档的红仍在提示「这里是清空」。
+   opacity: 1 是有意的——下面通用的 :disabled 会把透明度压到 .35，红底就看不见了。 */
+.cw-ico-btn.is-danger:disabled {
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  color: color-mix(in srgb, var(--danger) 55%, transparent);
+  border-color: transparent;
+  opacity: 1;
+}
 .cw-ico-btn:disabled { opacity: .35; cursor: default; }
 
 .cw-log {
@@ -536,7 +591,7 @@ body.side-collapsed .cw { left: 18px; }
   border-color: color-mix(in srgb, var(--accent) 34%, transparent); background: var(--accent-soft);
 }
 .cw-quick:hover .cw-quick-t { color: var(--accent-text); }
-.cw-quick-ico { flex: none; font-size: 14px; line-height: 1; }
+/* 图标尺寸/字体统一在文件开头的「小图标统一」一节，这里只管间距 */
 .cw-quick-text { flex: 1 1 auto; min-width: 0; display: grid; gap: 1px; }
 .cw-quick-t { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-quick-d { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
