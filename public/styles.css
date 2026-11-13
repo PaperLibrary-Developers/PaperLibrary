@@ -2184,6 +2184,9 @@ a.external-title:hover { color: var(--accent-text); }
 .fig-text { font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
 .fig-block { display: grid; gap: 4px; }
 .fig-block-k { font-size: 12.5px; color: var(--faint); }
+/* 删除是危险操作：放在灯箱底部最左侧，与右侧的查看 / 重提 / 关闭拉开距离 */
+.fig-modal .actions { flex-wrap: wrap; }
+.fig-modal .actions .btn.danger { margin-right: auto; }
 
 /* ---------- 横向对比（views/compare.mjs） ---------- */
 .cmp-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }

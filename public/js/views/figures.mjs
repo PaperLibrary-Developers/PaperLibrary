@@ -5,13 +5,14 @@
         §2 GET|HEAD /api/figures/:id/image（图片流，可直接当 <img src>）
         §3 GET /api/papers/:id/figures
         §4 POST /api/papers/:id/figures/extract（force 覆盖已有记录）
+        §11 DELETE /api/figures/:id（删除画廊里的一条图表记录，不碰文献 / PDF）
    依赖：util.mjs / api.mjs / shell/app-api.mjs —— 不 import app.mjs，保持 0 环 import。 */
 import * as util from '../util.mjs'
 import * as components from '../components.mjs'
 import { api } from '../api.mjs'
 import { go, setHash } from '../shell/app-api.mjs'
 
-const { h, toast, replace, truncate } = util
+const { h, toast, replace, truncate, confirmDialog } = util
 
 /** 契约默认值：pageSize 1-100，默认 48；画廊按 48 张一页排（缩略图网格） */
 const PAGE_SIZE = 48
@@ -43,6 +44,10 @@ function readState (params) {
 function figuresHandler (ctx) {
   const { outlet, params, isStale } = ctx
   const st = readState(params)
+
+  // 详情页把「Esc 返回首页」写在 document.onkeydown 上，切到画廊后可能残留：
+  // 那样灯箱 / 删除确认框按 Esc 会被顺带导航走。与 timeline.mjs 一样进视图时清掉。
+  if (document.onkeydown) document.onkeydown = null
 
   const bar = h('div', { id: 'figures-bar', style: { marginBottom: '14px', display: 'grid', gap: '10px' } })
   const grid = h('div', { id: 'figures-grid' })
@@ -273,6 +278,52 @@ function figuresHandler (ctx) {
       bodyBits.push(h('div.hint', '这条图表还没有图注上下文与 AI 描述（可在单篇文献里重新提取，或让模型读图后补充）。'))
     }
 
+    /* 删除入口只放在大图详情里（画廊专用），沿用现成的 confirmDialog / toast / .btn.danger。 */
+    let confirming = false  // 确认框开着时 Esc 只归确认框，灯箱不跟着关
+    let removing = false    // 防重复提交
+    const deleteBtn = h('button.btn.danger.fig-del', {
+      type: 'button',
+      title: '只从图表画廊移除这一张，不影响文献、PDF 与其它图表',
+      onclick: () => removeCurrent()
+    }, '删除这张图表')
+
+    async function removeCurrent () {
+      if (removing) return
+      confirming = true
+      const ok = await confirmDialog({
+        title: '删除这张图表？',
+        body: '将从图表画廊移除「' + truncate(caption, 60) + '」。文献、PDF 与其它图表不受影响，此操作不可撤销。',
+        okText: '删除',
+        cancelText: '取消',
+        danger: true
+      })
+      confirming = false
+      if (!ok) return  // 取消：不发请求、不改列表、不关灯箱
+
+      removing = true
+      const label = deleteBtn.textContent
+      deleteBtn.disabled = true
+      deleteBtn.textContent = '正在删除…'
+      const lastOnPage = st.page > 1 && items.length === 1
+      try {
+        await api.deleteFigure(item.id)
+        closeLightbox(overlay, onKey)  // 详情展示：这张已不存在，收起灯箱
+        toast('已删除「' + truncate(caption, 30) + '」')
+        if (isStale()) return
+        if (lastOnPage) apply({ page: st.page - 1 })  // 本页删空了就退回上一页
+        else await load()                              // 同步刷新画廊列表 / 概要 / 分页
+      } catch (err) {
+        toast('删除失败：' + (err.message || '未知错误'), 'error')
+        // 失败：灯箱保持打开、列表原样，方便用户重试
+      } finally {
+        removing = false
+        if (deleteBtn.isConnected) {
+          deleteBtn.disabled = false
+          deleteBtn.textContent = label
+        }
+      }
+    }
+
     const overlay = h('div.modal-back', {
       onclick: ev => { if (ev.target === overlay) closeLightbox(overlay, onKey) }
     },
@@ -286,6 +337,7 @@ function figuresHandler (ctx) {
         h('div.fig-modal-img', img),
         ...bodyBits,
         h('div.actions',
+          deleteBtn,
           item.paperId
             ? h('button.btn', {
               type: 'button',
@@ -303,7 +355,7 @@ function figuresHandler (ctx) {
         )
       )
     )
-    const onKey = ev => { if (ev.key === 'Escape') closeLightbox(overlay, onKey) }
+    const onKey = ev => { if (ev.key === 'Escape' && !confirming) closeLightbox(overlay, onKey) }
     document.addEventListener('keydown', onKey)
     document.body.appendChild(overlay)
   }

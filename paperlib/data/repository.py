@@ -371,6 +371,18 @@ class Repository:
                 )
             self.conn.commit()
 
+    def delete_figure(self, figure_id):
+        """删一条图表记录，返回被删的行（找不到返回 None）。"""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM figures WHERE id = ?", (figure_id,)).fetchone()
+            if row is None:
+                return None
+            deleted = dict(row)
+            self.conn.execute("DELETE FROM figures WHERE id = ?", (figure_id,))
+            self.conn.commit()
+        return deleted
+
     def figures_for_export(self):
         return self.list_figures()
 

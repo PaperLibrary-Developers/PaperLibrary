@@ -2,6 +2,7 @@
 
   GET  /api/figures                      图表画廊（q / paperId / type / page / pageSize）
   GET  /api/figures/:id/image            图表图片流（Range/ETag，复用 ctx.send_file）
+  DELETE /api/figures/:id                删除画廊里的一条图表记录
   GET  /api/papers/:id/figures           某篇文献的图表
   POST /api/papers/:id/figures/extract   从 PDF 重新提取（PyMuPDF 渲染 + 图注 bbox 匹配）
 
@@ -222,3 +223,35 @@ def extract_figures(ctx):
         saved = existing
     items = [figure_item(row, data_dir) for row in saved]
     ctx.json(200, {"ok": True, "extracted": len(items), "figures": items})
+
+
+def delete_figure(ctx):
+    """DELETE /api/figures/:id —— 只删画廊里的一条图表记录，不碰文献与 PDF（契约 §11）。"""
+    try:
+        figure_id = int(str((ctx.params or {}).get("id") or "").strip())
+    except (TypeError, ValueError):
+        return ctx.fail(404, "图表不存在")
+    store = ctx.services.db
+    row = store.repo.delete_figure(figure_id)
+    if row is None:
+        return ctx.fail(404, "图表不存在")
+
+    # 图片文件只在没有任何其它图表记录引用时才删：既有记录可能共用同一张图，
+    # 也不能把从 PDF 重新提取时还要复用的原图误删。
+    image_path = str(row.get("image_path") or "")
+    abs_path = legacy_figures.resolve_image_path(store.data_dir, image_path)
+    if abs_path:
+        target = os.path.normcase(os.path.abspath(abs_path))
+        in_use = False
+        for other in store.repo.list_figures():
+            other_abs = legacy_figures.resolve_image_path(
+                store.data_dir, str(other.get("image_path") or ""))
+            if other_abs and os.path.normcase(os.path.abspath(other_abs)) == target:
+                in_use = True
+                break
+        if not in_use:
+            try:
+                os.unlink(abs_path)
+            except OSError:
+                pass  # 文件删不掉不影响记录已删除的结果
+    return ctx.json(200, {"ok": True, "deletedId": figure_id})

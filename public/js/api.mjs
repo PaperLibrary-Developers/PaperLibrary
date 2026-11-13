@@ -305,6 +305,8 @@
     listFigures: params => request('GET', '/api/figures' + qs(params)),
     /** 图表图片流（支持 Range/ETag，直接当 <img src> 用） */
     figureImageUrl: id => '/api/figures/' + encodeURIComponent(id) + '/image',
+    /** 删除画廊里的一条图表记录（不影响文献 / PDF / 其它图表） */
+    deleteFigure: id => request('DELETE', '/api/figures/' + encodeURIComponent(id)),
     /** 某篇文献的图表列表 */
     paperFigures: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/figures'),
     /** 从该文献的 PDF 重新提取图表（force=true 覆盖已有记录） */

@@ -76,6 +76,7 @@ ROUTES = [
 
     # ---------------- 图表（合并后新增） ----------------
     {"name": "figures-list", "methods": ("GET",), "pattern": "/api/figures", "handler": figures.list_figures},
+    {"name": "figure-delete", "methods": ("DELETE",), "pattern": "/api/figures/:id", "handler": figures.delete_figure},
     {"name": "figure-image", "methods": ("GET", "HEAD"), "pattern": "/api/figures/:id/image", "handler": figures.figure_image},
     {"name": "compare-templates", "methods": ("GET",), "pattern": "/api/compare/templates", "handler": compare.templates},
     {"name": "compare-run", "methods": ("POST",), "pattern": "/api/compare", "handler": compare.run},
