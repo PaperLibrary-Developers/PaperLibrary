@@ -42,7 +42,7 @@ const ICON_SEND =
    而且各系统字面大小差一截；描边图标能直接吃 currentColor。 */
 const ICON_TRASH =
   '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">' +
-  '<path d="M4.8 6.7h14.4M9.5 6.7V5.4c0-.8.7-1.5 1.5-1.5h2c.8 0 1.5.7 1.5 1.5v1.3M7.1 6.7l.8 11.3c.1.9.8 1.6 1.7 1.6h4.8c.9 0 1.6-.7 1.7-1.6l.8-11.3M10.4 10.2v5.4M13.6 10.2v5.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<path d="M4.8 6.7h14.4M9.5 6.7V5.4c0-.8.7-1.5 1.5-1.5h2c.8 0 1.5.7 1.5 1.5v 1.3M7.1 6.7l.8 11.3c.1.9.8 1.6 1.7 1.6h4.8c.9 0 1.6-.7 1.7-1.6l.8-11.3M10.4 10.2v5.4M13.6 10.2v5.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
   '</svg>'
 
 /** 会话：跨页保留，刷新清空 */

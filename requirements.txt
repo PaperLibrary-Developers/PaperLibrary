@@ -1,4 +1,4 @@
-# PaperLibrary v1.3 Nexus —— 开发环境依赖
+# PaperLibrary v1.4 Nexus —— 开发环境依赖
 #
 # 只用发布包（runtime/portable/ 已内置，离线可用）时不需要装任何东西；
 # 只有在自己机器上用系统 Python 跑源码/跑测试时才需要：

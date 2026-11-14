@@ -38,7 +38,7 @@ class Launcher
     static string LogFile = Path.Combine(BaseDir, "data", "logs", "launcher.log");
     const int Port = 4321;
     const string Url = "http://127.0.0.1:4321/";
-    const string Title = "PaperLibrary v1.3 Nexus";
+    const string Title = "PaperLibrary v1.4 Nexus";
 
     static void Log(string message)
     {

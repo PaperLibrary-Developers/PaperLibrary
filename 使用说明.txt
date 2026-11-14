@@ -1,4 +1,4 @@
-PaperLibrary v1.3 Nexus（Nexus 文献库）
+PaperLibrary v1.4 Nexus（Nexus 文献库）
 ========================================
 
 一、启动（双击 PaperLibrary.exe）
