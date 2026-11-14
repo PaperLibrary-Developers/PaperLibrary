@@ -2,10 +2,14 @@ PaperLibrary v1.4 Nexus（Nexus 文献库）
 ========================================
 
 一、启动（双击 PaperLibrary.exe）
-  双击后：稍等片刻（首次启动约几秒）→ 浏览器自动打开 http://127.0.0.1:4321/
-  服务在后台运行（pythonw，无控制台窗口）。
-  自动停止：关掉网页（所有标签页）后 30 秒没有页面连着，服务会自己保存数据并退出、释放端口，
-            一般不需要手动停。（想改时间：启动参数 --idle-exit 秒数，0 = 不自动停）
+  双击后：稍等片刻（首次启动约几秒）→ 打开自带的「PaperLibrary v1.4 Nexus」窗口，
+          界面就在这个窗口里（内置 Microsoft Edge WebView2，不再打开外部浏览器标签页）。
+  服务在后台运行（pythonw，无控制台窗口）；关闭窗口时会保存数据、停止服务并释放端口。
+  自动停止：如果没有窗口/网页连着，30 秒后服务会自己保存数据并退出
+            （想改时间：启动参数 --idle-exit 秒数，0 = 不自动停）。
+  仍想用浏览器：在命令行运行
+            runtime\portable\python.exe -m paperlib --port 4321
+          会像以前一样用默认浏览器打开 http://127.0.0.1:4321/ 。
 
   整理文献：左侧栏「分类文件夹」里，点标题可折叠/展开，＋ 新建目录、⚙ 管理（改名/删除）；
             改单篇的分类：列表里每篇最左边（星标右边）的文件夹按钮，或卡片/详情页里的分类胶囊；
@@ -18,9 +22,10 @@ PaperLibrary v1.4 Nexus（Nexus 文献库）
   不会用的时候：点左侧栏最下方的「📖 使用文档」，里面有完整的新手手册
                 （环境准备 → 逐步操作 → 参数解释 → 排错 → 示例）。
 
-  如果浏览器没有自动打开：
-    · 手动访问 http://127.0.0.1:4321/
+  如果窗口没有出现：
     · 看 data\logs\launcher.log 里的原因
+    · 确认系统装有 Microsoft Edge WebView2 运行时（Windows 11 自带；Win10 装了新版 Edge 一般也有）
+    · 启动失败或 4321 被占用时会弹窗说明，不会静默退出
     · 或在命令行里直接运行（窗口里会显示错误）
         runtime\portable\python.exe -m paperlib --port 4321 --no-open
 
@@ -45,6 +50,7 @@ PaperLibrary v1.4 Nexus（Nexus 文献库）
   data\websearch.json      网络检索配置（Exa）
   data\sources.json        外部题录源配置（OpenAlex）
   data\backups\            自动备份
+  data\webview2\           内置窗口的缓存与窗口内偏好（可删，删了会重置）
   data\logs\               启动/运行日志
 
   迁移旧库：把旧的 data\library.json（Sci-lib）或 data\papers.db（PaperLibrary）
@@ -58,7 +64,7 @@ PaperLibrary v1.4 Nexus（Nexus 文献库）
   data\ 目录只在本机，不会上传。分享或发布时不要包含 data\ 与 runtime\（如有 API Key）。
 
 六、常见问题
-  打不开页面：先看 data\logs\launcher.log；确认 4321 没有被别的程序占用；
+  打不开页面/窗口空白：先看 data\logs\launcher.log；确认已装 WebView2 运行时；确认 4321 没有被别的程序占用；
              需要换端口时在命令行运行：
                runtime\portable\python.exe -m paperlib --port 4322 --no-open
   公式不显示：vendor\katex 缺失时会降级为原文显示，不影响文献功能。

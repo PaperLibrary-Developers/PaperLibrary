@@ -9,16 +9,17 @@ PaperLibrary（Python 分析引擎）与 Sci-lib（Web 壳）合并后的单产�
 
     python -m pip install -r requirements.txt
 
-Windows 发布包的唯一入口是双击 `PaperLibrary.exe`（无控制台窗口，服务就绪后自动打开浏览器）；
-关掉网页 30 秒会自动停止，一般不需要手动停。
+Windows 发布包的唯一入口是双击 `PaperLibrary.exe`：后台启动 Python 服务后，打开一个自带的
+桌面窗口（WinForms + Microsoft Edge WebView2）载入现有 `public/` 界面，不再打开外部浏览器；
+关闭窗口时保存数据并停止服务。需要系统装有 WebView2 运行时（Windows 11 自带，Win10 装了新版 Edge 一般也有）。
 
-    python -m paperlib --port 4321            # 源码运行：启动并自动打开浏览器
-    python -m paperlib --port 4321 --no-open  # 源码运行：不自动开浏览器
+    python -m paperlib --port 4321            # 源码运行：启动并用默认浏览器打开
+    python -m paperlib --port 4321 --no-open  # 源码运行：只起服务，不自动开浏览器
     python -m paperlib --stop                 # 命令行停止（开发 / 排错用）
 
 数据目录默认 ./data（可用 --data-dir 指定）。首次运行会播种 1 条示例文献（data/.seeded 标记）。
 
-服务会盯着有没有网页连着（前端每个页面一条 `/api/presence` SSE）：**关掉所有网页 30 秒后自动保存并退出、释放端口**，
+服务会盯着有没有网页连着（前端每个页面一条 `/api/presence` SSE；发布包的内置窗口也算一个页面）：**关掉所有页面 30 秒后自动保存并退出、释放端口**，
 不用再手动 stop。时间可用 `--idle-exit 秒数` 调整（0 = 不自动停），启动宽限用 `--idle-grace 秒数`（默认 8）。
 自动化脚本（contract/e2e/bench）启动服务时都显式传了 `--idle-exit 0`，不会被自动停机打断。
 
