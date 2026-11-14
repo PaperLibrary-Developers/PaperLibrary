@@ -1718,8 +1718,8 @@ import * as foldersUi from '../folders.mjs'
     if (typeof document === 'undefined') return
     const side = document.querySelector('.read-side')
     if (!side) return
-    // 窄屏是上下排列，不锁高度
-    if (typeof window !== 'undefined' && window.innerWidth && window.innerWidth <= 900) {
+    // 窄屏是上下排列，不锁高度（断点与 CSS 的 .read-grid 保持一致：1200）
+    if (typeof window !== 'undefined' && window.innerWidth && window.innerWidth <= 1200) {
       side.style.height = ''
       return
     }

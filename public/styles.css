@@ -848,8 +848,12 @@ a.external-title:hover { color: var(--accent-text); }
   display: grid;
   /* 没有 JS 时的兜底高度；有 JS 时会按左边 PDF 面板的实测高度精确设一遍 */
   --read-h: clamp(560px, 84vh, 1500px);
-  /* --read-ratio 由拖动条控制（0.35 ~ 0.78），默认 PDF 占 66% */
-  grid-template-columns: minmax(0, calc(var(--read-ratio, 0.66) * 100%)) 14px minmax(320px, 1fr);
+  /* --read-ratio 由拖动条控制（0.35 ~ 0.78），默认 PDF 占 66%。
+     右侧「AI 总结 / 与文献对话」列最少 472px：这是让标题栏里两个 tab 与
+     「识图识别全文 / 模型设置 / 生成总结」四个动作保持一行的实测下限；
+     当前窗口若不足以同时满足 PDF 比例和该下限，左列用 min() 让出宽度，
+     极端窄的窗口由下面的断点改成上下堆叠，避免面板头部换行/横向溢出。 */
+  grid-template-columns: minmax(0, min(calc(var(--read-ratio, 0.66) * 100%), calc(100% - 14px - 472px))) 14px minmax(472px, 1fr);
   gap: 0;
   /* 注意：这里**不能**靠 stretch 拉伸——右列内容（总结正文）会把整行撑高，
      结果右列比 PDF 面板还长。改成两列各自独立：右列用一个确定的高度（见下），
@@ -900,13 +904,21 @@ a.external-title:hover { color: var(--accent-text); }
 .read-resizer:hover::after, .read-resizer.dragging::after {
   background: var(--accent); transform: scaleY(1.15);
 }
-/* 窄屏（真正放不下两栏时才上下堆叠，此时解除等高限制） */
-@media (max-width: 900px) {
-  .read-grid { grid-template-columns: 1fr; gap: 14px; }
+/* 窄屏（真正放不下两栏时才上下堆叠，此时解除等高限制）。
+   断点从 900 提到 1200：右侧列有了 472px 下限后，窗口再窄两栏里的 PDF
+   会被压得过窄；1200 以下改成上下堆叠，两块都用整宽。 */
+@media (max-width: 1200px) {
+  /* minmax(0, 1fr)：允许列宽小于内容的 min-content，窄手机不会被
+     PDF 工具栏/面板标题栏撑出横向滚动条。 */
+  .read-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .read-resizer { display: none; }
   .read-side { height: auto; }
   .read-side > #read-panel { flex: 0 0 auto; }
   .ai-scroll, .chat-scroll { max-height: 46vh; }
+  /* 上下堆叠时右栏拿到整宽，但手机宽度下标题栏的 tab + 四个动作仍可能
+     超过一行：允许换行，并让两组各自保持完整宽度再换行，避免把面板撑出屏幕。 */
+  #read-panel .panel-head, #pdf-panel .panel-head { flex-wrap: wrap; row-gap: 8px; }
+  #read-panel .read-tabs, #read-actions-summary { flex: 0 0 auto; }
 }
 /* PDF 阅读区给足高度（内置阅读器的挂载点与回退 iframe 都按这个高度，跟右列同一个变量） */
 .pdf-viewer-host { height: var(--read-h, clamp(560px, 84vh, 1500px)); background: var(--surface-3); overflow: hidden; border-radius: 0 0 var(--radius) var(--radius); }
@@ -1238,7 +1250,9 @@ a.external-title:hover { color: var(--accent-text); }
 /* 浏览型页面（书库、搜索、时间线）尽量用满宽屏 */
 .content { padding: 22px 24px 64px; width: 100%; max-width: 2400px; }
 /* 阅读型页面（详情页、设置页）限制行宽，正文太长反而不好读 */
-.content.detail { max-width: 2000px; }
+/* min-width: 0：详情页在窄屏是 flex 列里的子项，默认 min-width:auto 会被
+   PDF 面板/工具栏的 min-content 撑出横向滚动条，这里允许它跟着视口收缩。 */
+.content.detail { max-width: 2000px; min-width: 0; }
 @media (min-width: 2200px) {
   .content { max-width: 2600px; }
   /* 阅读区即使超宽屏也不放太宽，正文行长要可控 */
