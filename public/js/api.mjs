@@ -88,6 +88,8 @@
               if (handlers.onDelta) handlers.onDelta(payload.text || '')
             } else if (payload.type === 'start') {
               if (handlers.onStart) handlers.onStart(payload)
+            } else if (payload.type === 'progress') {
+              if (handlers.onProgress) handlers.onProgress(payload)
             } else if (payload.type === 'done') {
               if (handlers.onDone) handlers.onDone(payload)
               resolve(payload.text || full)
@@ -184,6 +186,8 @@
                 if (hooks.onDelta) hooks.onDelta(payload.text || '')
               } else if (payload.type === 'start' && hooks.onStart) {
                 hooks.onStart(payload)
+              } else if (payload.type === 'progress' && hooks.onProgress) {
+                hooks.onProgress(payload)
               } else if (payload.type === 'done') {
                 if (hooks.onDone) hooks.onDone(payload)
                 resolve(payload.text || full)

@@ -1026,19 +1026,16 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
           }, '保存并测试连接'),
           testResult
         ),
-        h('div.hint', '隐私提示：点「生成总结」时，这篇文献的题录与正文节选会发送给你选择的模型服务商；密钥与总结结果都只存在本机。')
+        h('div.hint', '隐私提示：点「生成总结」或提问时，这篇文献的题录、正文与全部补充材料（SI）会发送给你选择的模型服务商（超长会分段发送）；密钥与总结结果都只存在本机。')
       ),
       h('a.btn.sm.ghost', { href: 'https://platform.deepseek.com/api_keys', target: '_blank', rel: 'noopener' }, '申请 DeepSeek 密钥 ↗')
     )
 
-    /* ---------- 导入与资料上限（可调，防止电脑太卡） ---------- */
+    /* ---------- 导入上限（可调，防止电脑太卡） ---------- */
 
-    let limits = { importMaxFiles: 20, chatBodyChars: 14000, chatAttachChars: 12000, chatAttachTotalChars: 24000 }
+    let limits = { importMaxFiles: 20 }
     const limitRanges = {
-      importMaxFiles: [1, 200, 10],
-      chatBodyChars: [2000, 60000, 2000],
-      chatAttachChars: [2000, 80000, 2000],
-      chatAttachTotalChars: [2000, 200000, 2000]
+      importMaxFiles: [1, 200, 10]
     }
     try {
       const res = await api.getPrefs()
@@ -1077,18 +1074,15 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       )
     }
 
-    const limitsPanel = panel('导入与资料上限', h('div', { style: { display: 'grid', gap: '13px' } },
+    const limitsPanel = panel('导入上限', h('div', { style: { display: 'grid', gap: '13px' } },
       h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
-        '一次导入太多 PDF 会占内存、让电脑发卡；每次对话送给模型的资料越长，模型越慢也越贵。' +
-        '这几个上限都可以按你的机器和网络调——改完立刻生效，不用重启。'),
+        '一次导入太多 PDF 会占内存、让电脑发卡；这个上限可以按你的机器调，改完立刻生效，不用重启。'),
       h('div.form-grid',
-        limitInput('importMaxFiles', '一次最多导入几个 PDF', '范围 1–200，默认 20。超过会提示分批导入。'),
-        limitInput('chatAttachChars', '每个补充材料（SI）的字符数', '范围 2000–80000，默认 12000。SI 会按你的问题检索相关片段，不是只取开头。')
+        limitInput('importMaxFiles', '一次最多导入几个 PDF', '范围 1–200，默认 20。超过会提示分批导入。')
       ),
-      h('div.form-grid',
-        limitInput('chatBodyChars', '正文送给模型的字符数', '范围 2000–60000，默认 14000。'),
-        limitInput('chatAttachTotalChars', '所有补充材料合计上限', '范围 2000–200000，默认 24000。')
-      ),
+      h('div.hint',
+        'AI 总结与「与文献对话」已改为完整读取正文和全部补充材料（SI）：超过单次上下文的全文会自动分段处理并汇总，' +
+        '不再按字符数截断。原来的「正文 / SI 字符上限」已不再生效。'),
       limitStatus
     ))
 

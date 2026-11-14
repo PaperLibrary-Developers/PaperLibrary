@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 
+from paperlib.domain import fullread
 from paperlib.domain.ai import build_excerpt, read_attachment_text, safe_extract
 from paperlib.util import CJK_RE, now_iso, tokenize
 
@@ -24,7 +25,7 @@ except Exception:  # noqa: BLE001 - 未交付时退到本地实现
     _shared_report = None
 
 CHAT_SYSTEM_PROMPT = "\n".join([
-    "你是这位研究者的文献助手。你可以看到一个固定的资料包：某篇文献的题录、它的正文节选、它的补充材料（SI）节选，",
+    "你是这位研究者的文献助手。你可以看到一个固定的资料包：某篇文献的题录、它的正文、它的补充材料（SI）；",
     "以及可选的「本库相关文献」「网络资料（Exa 检索到的网页正文片段）」「网络深度检索（带引用的答案）」。",
     "",
     "回答要求：",
@@ -223,6 +224,7 @@ def pick_passages(services, text, question, budget, head_chars, tail_chars):
 def build_chat_context(services, paper, question, options=None):
     """把「题录 + 正文 + SI + 本库相关 + 联网」拼成资料包；返回 {context, sources, hasBody}。"""
     opts = options or {}
+    include_paper = opts.get("includePaper") is not False
     paper_id = paper.get("id")
     parts = []
     used = []
@@ -240,36 +242,37 @@ def build_chat_context(services, paper, question, options=None):
     ]
     parts.append("\n".join([line for line in meta if line]))
 
-    # 2. 正文：按问题挑片段（开头 + 命中处 + 结尾），而不是无脑取头尾
-    body_budget = services.prefs.limit("chatBodyChars")
+    # 2. 正文 / 3. 补充材料（SI）：默认按旧版「按问题挑片段」；全文模式由 chat_stream
+    #    调用 fullread 单独组装（includePaper=False），避免这里再截一次。
     body_text = services.fulltext.read(paper_id) or ""
-    if body_text:
-        body_material = pick_passages(services, body_text, question, body_budget, 3000, 1200)["text"]
-    else:
-        body_material = build_excerpt(services, paper_id, body_budget)
-    if body_material:
-        parts.append("===== 这篇文献的正文节选 =====\n" + body_material)
-        used.append("正文")
+    if include_paper:
+        body_budget = services.prefs.limit("chatBodyChars")
+        if body_text:
+            body_material = pick_passages(services, body_text, question, body_budget, 3000, 1200)["text"]
+        else:
+            body_material = build_excerpt(services, paper_id, body_budget)
+        if body_material:
+            parts.append("===== 这篇文献的正文节选 =====\n" + body_material)
+            used.append("正文")
 
-    # 3. 补充材料（SI）：同样按问题检索（问「S55 那一页」时不能只给开头）
-    att_budget = services.prefs.limit("chatAttachChars")
-    att_total = services.prefs.limit("chatAttachTotalChars")
-    att_chars = 0
-    for attachment in (paper.get("attachments") or []):
-        if att_chars >= att_total:
-            break
-        text = read_attachment_text(services, paper_id, attachment.get("file"))
-        if not text:
-            continue
-        budget = min(att_budget, att_total - att_chars)
-        picked = pick_passages(services, text, question, budget, 2500, 800)
-        if not picked["text"]:
-            continue
-        name = str(attachment.get("originalName") or "")
-        parts.append("===== 补充材料：" + name + " =====\n" + picked["text"])
-        att_chars += picked["used"]
-        used.append("SI:" + name + ("（按问题检索到 %d 个片段）" % picked["passages"]
-                                    if picked["passages"] else ""))
+        att_budget = services.prefs.limit("chatAttachChars")
+        att_total = services.prefs.limit("chatAttachTotalChars")
+        att_chars = 0
+        for attachment in (paper.get("attachments") or []):
+            if att_chars >= att_total:
+                break
+            text = read_attachment_text(services, paper_id, attachment.get("file"))
+            if not text:
+                continue
+            budget = min(att_budget, att_total - att_chars)
+            picked = pick_passages(services, text, question, budget, 2500, 800)
+            if not picked["text"]:
+                continue
+            name = str(attachment.get("originalName") or "")
+            parts.append("===== 补充材料：" + name + " =====\n" + picked["text"])
+            att_chars += picked["used"]
+            used.append("SI:" + name + ("（按问题检索到 %d 个片段）" % picked["passages"]
+                                        if picked["passages"] else ""))
 
     # 4. 本库相关文献
     if opts.get("useLocal") is not False and question:
@@ -354,8 +357,62 @@ def _append_chat(services, paper, messages):
     return list(fresh.get("chat") or [])
 
 
+CHAT_MAP_SYSTEM = (
+    "你是文献信息检索助手。下面给你论文全文（正文或补充材料 SI）的一个片段，以及用户的问题。"
+    "请只摘录本片段中与问题相关的原文事实：数字、单位、实验条件、结论、术语；"
+    "逐条简短列出并标明依据；若本片段与问题无关，只输出「无相关内容」。"
+    "不要回答完整问题，不要推测，不要编造。"
+)
+
+
+def _chat_map_user(paper, question, chunk, index, total):
+    return (
+        "论文标题：" + str(paper.get("title") or "（无）")
+        + "\n片段来源：" + str(chunk.get("label") or "")
+        + "（第 %d/%d 段）" % (index, total)
+        + "\n\n" + str(chunk.get("text") or "")
+        + "\n\n用户问题：" + str(question or "")
+    )
+
+
+def _chat_material_section(services, paper, question, prepared, emit=None):
+    """返回 (section, sources, coverage)：全文直接送入，超长时分段提炼后汇总。"""
+    coverage = prepared["coverage"]
+    if not prepared["totalChars"]:
+        return "", [], coverage
+    sources = []
+    for material in prepared["materials"]:
+        label = "正文" if material["kind"] == "body" else ("SI:" + str(material["name"]))
+        if label not in sources:
+            sources.append(label)
+    if prepared["mode"] == "direct":
+        section = ("===== 文献全文（正文 + 全部 SI，未截断）=====\n"
+                   + fullread.coverage_text(coverage) + "\n\n"
+                   + fullread.direct_text(prepared))
+        return section, sources, coverage
+
+    def progress(index, count, chunk):
+        if emit:
+            emit({"type": "progress", "stage": "map", "done": index - 1,
+                  "total": count, "label": chunk.get("label")})
+
+    notes = fullread.map_chunks(
+        services.llm, prepared["chunks"], CHAT_MAP_SYSTEM,
+        lambda chunk, index, count: _chat_map_user(paper, question, chunk, index, count),
+        on_progress=progress,
+    )
+    coverage["processedChunks"] = len(notes)
+    section = ("===== 全文分段证据（覆盖正文与全部 SI）=====\n"
+               + fullread.coverage_text(coverage) + "\n\n"
+               + "\n\n".join("[" + str(n["label"]) + "]\n" + n["text"] for n in notes))
+    if emit:
+        emit({"type": "progress", "stage": "map", "done": len(notes),
+              "total": len(notes), "label": ""})
+    return section, sources, coverage
+
+
 def chat_stream(services, paper, body, stream):
-    """POST /api/papers/:id/chat：资料包 → 模型 → 问答都写进这篇文献的对话历史。"""
+    """POST /api/papers/:id/chat：完整读入正文 + 全部 SI → 模型 → 写回对话历史。"""
     options = body or {}
     question = str(options.get("question") or "").strip()
     if not question:
@@ -365,11 +422,15 @@ def chat_stream(services, paper, body, stream):
         return failed
 
     auto_extract = _auto_extract(services, paper)
+    prepared = fullread.prepare(services, paper)
+    coverage = prepared["coverage"]
     built = build_chat_context(services, paper, question, {
         "useLocal": options.get("useLocal") is not False,
         "useExternal": options.get("useExternal") is not False,
         # 只有用户勾了「联网搜索」才走 Exa（付费）；否则用免费学术检索
         "web": options.get("web") is True,
+        # 正文/SI 由 fullread 完整组装，这里只要题录/本库/联网
+        "includePaper": False,
     })
 
     fresh = services.library.get(paper.get("id")) or paper
@@ -380,13 +441,20 @@ def chat_stream(services, paper, body, stream):
     ])
 
     llm = services.llm
+    sources = list(built["sources"])
+    for material in prepared["materials"]:
+        label = "正文" if material["kind"] == "body" else ("SI:" + str(material["name"]))
+        if label not in sources:
+            sources.append(label)
+
     send = stream.open()
     send({
         "type": "start",
         "model": str(llm.settings.get("model") or ""),
-        "sources": built["sources"],
-        "hasBody": built["hasBody"],
+        "sources": sources,
+        "hasBody": bool(prepared["totalChars"]),
         "autoExtract": auto_extract,
+        "fullRead": coverage,
     })
     collected = []
 
@@ -395,9 +463,14 @@ def chat_stream(services, paper, body, stream):
         send({"type": "delta", "text": chunk})
 
     try:
+        section, _paper_sources, coverage = _chat_material_section(
+            services, paper, question, prepared, emit=send)
+        context = built["context"]
+        if section:
+            context = context + "\n\n" + section
         messages = [
             {"role": "system", "content": CHAT_SYSTEM_PROMPT},
-            {"role": "system", "content": "资料包如下：\n\n" + built["context"]},
+            {"role": "system", "content": "资料包如下：\n\n" + context},
         ]
         for message in history:
             messages.append({"role": message.get("role") or "user",
@@ -413,10 +486,10 @@ def chat_stream(services, paper, body, stream):
                 "content": answer,
                 "at": now_iso(),
                 "model": str(llm.settings.get("model") or ""),
-                "sources": built["sources"],
+                "sources": sources,
             }])
-        send({"type": "done", "text": answer, "sources": built["sources"],
-              "usage": (result or {}).get("usage") or None})
+        send({"type": "done", "text": answer, "sources": sources,
+              "usage": (result or {}).get("usage") or None, "fullRead": coverage})
     except Exception as exc:  # noqa: BLE001
         send({"type": "error", "message": str(exc)})
     return {"ok": True}

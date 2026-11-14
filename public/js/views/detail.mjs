@@ -853,7 +853,7 @@ import * as foldersUi from '../folders.mjs'
         aiBody.replaceChildren(h('div', { style: { color: 'var(--muted)' } },
           h('p', '还没有生成总结。'),
           h('p', { text: paper.pdfFile
-            ? '点下面的按钮，模型会读这篇的题录与正文节选，生成结构化中文总结并保存在本地。'
+            ? '点下面的按钮，模型会完整读取这篇的正文与全部补充材料（SI），生成结构化中文总结并保存在本地。'
             : '先在右侧上传 PDF 原文，总结质量会好很多；也可以只用题录与摘要生成。' })))
         return
       }
@@ -968,11 +968,13 @@ import * as foldersUi from '../folders.mjs'
       aiStatus.textContent = '正在请求模型…'
       aiStatus.style.color = ''
       let acc = ''
+      let coverage = null
       aiBody.replaceChildren(h('div', { style: { color: 'var(--muted)' } }, '…'))
       try {
         await api.aiSummarizeStream(paper.id, {
           save: true,
           onStart: info => {
+            coverage = info.fullRead || null
             if (info.autoExtract && info.autoExtract.ok) {
               ftReady = true
               toast('已自动提取 PDF 正文 ' + info.autoExtract.chars + ' 字')
@@ -980,9 +982,20 @@ import * as foldersUi from '../folders.mjs'
             } else if (info.autoExtract && info.autoExtract.ok === false) {
               toast('自动提取正文失败：' + info.autoExtract.error, 'warn')
             }
-            aiStatus.textContent = info.usedFulltext
-              ? `已读入 ${info.chars} 字正文节选，模型 ${info.model} 正在生成…`
-              : `未找到 PDF 正文（${(info.autoExtract && info.autoExtract.error) || '没有关联 PDF'}），仅依据题录与摘要；模型 ${info.model} 正在生成…`
+            const fr = coverage
+            if (fr && fr.totalChars) {
+              const miss = fr.missing && fr.missing.length ? `；⚠ ${fr.missing.length} 个 SI 未提取到文字` : ''
+              aiStatus.textContent = `已读入全文：正文 ${fr.bodyChars} 字 + SI ${fr.siChars} 字（${fr.attachCount} 个文件）${fr.mode === 'map-reduce' ? `，分 ${fr.chunks} 段处理` : '，单次完整送入'}${miss}；模型 ${info.model} 正在生成…`
+            } else if (info.usedFulltext) {
+              aiStatus.textContent = `已读入 ${info.chars} 字正文，模型 ${info.model} 正在生成…`
+            } else {
+              aiStatus.textContent = `未找到 PDF 正文（${(info.autoExtract && info.autoExtract.error) || '没有关联 PDF'}），仅依据题录与摘要；模型 ${info.model} 正在生成…`
+            }
+          },
+          onProgress: info => {
+            if (coverage && coverage.mode === 'map-reduce') {
+              aiStatus.textContent = `正在读取全文（${info.done || 0}/${info.total || coverage.chunks} 段）…`
+            }
           },
           onDelta: chunk => {
             acc += chunk
@@ -991,7 +1004,11 @@ import * as foldersUi from '../folders.mjs'
         })
         aiStatus.textContent = '已生成并保存 ✓'
         aiStatus.style.color = 'var(--accent-text)'
-        aiMeta.textContent = '刚刚生成 · ' + (paper.aiSummaryModel || '')
+        const miss = coverage && coverage.missing && coverage.missing.length
+          ? `；⚠ ${coverage.missing.length} 个 SI 未提取到文字` : ''
+        aiMeta.textContent = coverage && coverage.totalChars
+          ? `已完整读入正文 ${coverage.bodyChars} 字 + SI ${coverage.siChars} 字（${coverage.attachCount} 个文件${coverage.mode === 'map-reduce' ? `，分 ${coverage.chunks} 段` : ''}）${miss}· 刚刚生成`
+          : '刚刚生成'
         toast('AI 总结已保存')
         paper.aiSummary = acc
         renderFtState()
@@ -1251,7 +1268,7 @@ import * as foldersUi from '../folders.mjs'
     /**
      * 统一的提问入口：
      *  - 只有文字 → 走原来的「对话」接口（正文 + 补充材料 + 本库/联网检索）
-     *  - 带图片   → 走「识图」接口（图 + 题录/摘要/正文节选），同样存进对话历史
+     *  - 带图片   → 走「识图」接口（图 + 题录/摘要/全文），同样存进对话历史
      * regionInfo 用于「框选提问」：把「第 N 页框选」记在这条提问上。
      */
     async function askPaper (question, images, options) {
@@ -1272,15 +1289,25 @@ import * as foldersUi from '../folders.mjs'
       chatBody.replaceChildren(...optimistic.map((msg, idx) => chatBubble(msg, idx, idx)), readinessNote)
       chatBody.scrollTop = chatBody.scrollHeight
       let acc = ''
+      let coverage = null
       try {
         const hooks = {
           onStart: info => {
+            coverage = info.fullRead || null
+            const fr = coverage
             chatStatus.textContent = pics.length
               ? ('已发送 ' + pics.length + ' 张图，模型 ' + (info.model || '') + ' 正在回答…')
-              : ('资料来源：' + ((info.sources || []).join('、') || '题录'))
+              : (fr && fr.totalChars
+                  ? `已读入全文：正文 ${fr.bodyChars} 字 + SI ${fr.siChars} 字（${fr.attachCount} 个文件）${fr.mode === 'map-reduce' ? `，分 ${fr.chunks} 段检索` : ''}${fr.missing && fr.missing.length ? `；⚠ ${fr.missing.length} 个 SI 未提取到文字` : ''}；模型 ${info.model || ''} 正在回答…`
+                  : ('资料来源：' + ((info.sources || []).join('、') || '题录')))
             if (info.autoExtract && info.autoExtract.ok) {
               ftReady = true
               renderFtState()
+            }
+          },
+          onProgress: info => {
+            if (!pics.length && coverage && coverage.mode === 'map-reduce') {
+              chatStatus.textContent = `正在读取全文（${info.done || 0}/${info.total || coverage.chunks} 段）…`
             }
           },
           onDelta: chunk => {
@@ -1300,7 +1327,9 @@ import * as foldersUi from '../folders.mjs'
           // 不带图时走对话接口：勾了「联网搜索」才用 Exa（花钱），否则和以前一样用免费的学术检索
           await api.paperChatStream(paper.id, q, Object.assign({ web: !!(webToggle && webToggle.checked) }, hooks))
         }
-        chatStatus.textContent = '已保存到这篇文献的对话历史'
+        chatStatus.textContent = coverage && coverage.totalChars
+          ? '已基于正文与 SI 全文回答，并保存到对话历史'
+          : '已保存到这篇文献的对话历史'
         chatStatus.style.color = 'var(--accent-text)'
         await refreshChat()
       } catch (err) {

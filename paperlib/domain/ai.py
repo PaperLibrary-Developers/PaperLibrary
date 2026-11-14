@@ -15,10 +15,10 @@
 """
 from __future__ import annotations
 
-import os
 import re
 
 from paperlib.adapters.llm import strip_echoed_material
+from paperlib.domain import fullread
 from paperlib.util import now_iso
 
 PROMPT_CHARS = 12000          # 送给大模型的正文上限
@@ -53,29 +53,7 @@ def build_excerpt(services, paper_id, limit=PROMPT_CHARS):
     return head + "\n\n……（中间略）……\n\n" + tail
 
 
-def read_attachment_text(services, paper_id, file):
-    """读补充材料（SI）的文本：优先 fulltext.read_attachment，退到 store 的 att-<文件名> 键。"""
-    fulltext = services.fulltext
-    fn = getattr(fulltext, "read_attachment", None)
-    if callable(fn):
-        try:
-            text = fn(paper_id, file) or ""
-            if text:
-                return text
-        except Exception:  # noqa: BLE001
-            pass
-    base = os.path.basename(str(file or ""))
-    if not base:
-        return ""
-    store = services.db
-    for key in ("att-" + base, "att-" + base + ".txt", "att-" + str(file)):
-        try:
-            text = store.get_text(key) or ""
-        except Exception:  # noqa: BLE001
-            text = ""
-        if text:
-            return text
-    return ""
+read_attachment_text = fullread.read_attachment_text
 
 
 def attachment_parts(services, paper, per_part=ATT_PART_CHARS, total=ATT_TOTAL_CHARS):
@@ -121,6 +99,97 @@ def _meta_line(paper):
         + "\n年份：" + str(paper.get("year") or "（未填）")
         + "\n期刊/会议：" + str(paper.get("venue") or "（未填）")
     )
+
+
+# ---------------------------------------------------------------- 全文总结
+SUMMARY_MAP_SYSTEM = (
+    "你是严谨的学术助手。下面给你同一篇论文（正文或补充材料 SI）的一个片段。"
+    "请提炼这个片段中可用于撰写中文总结的事实：研究问题、方法、关键实验条件与数据"
+    "（数字与单位照抄）、结论、局限。只依据本片段，不要编造；"
+    "本片段没有有用信息时只输出「本段无有效信息」。"
+)
+
+SUMMARY_FULL_NOTE = (
+    "【本次输入】下面不是节选：正文与全部补充材料（SI）已完整读入；"
+    "超过单次上下文的部分已按段提炼并汇总，覆盖全文。不要声称内容被截断。"
+)
+
+
+def _summary_map_user(paper, chunk, index, total):
+    return (
+        "论文标题：" + str(paper.get("title") or "（无）")
+        + "\n片段来源：" + str(chunk.get("label") or "")
+        + "（第 %d/%d 段）" % (index, total)
+        + "\n\n" + str(chunk.get("text") or "")
+    )
+
+
+def _summary_prepare(services, paper, use_fulltext):
+    if not use_fulltext:
+        coverage = {
+            "mode": "none", "bodyChars": 0, "siChars": 0, "totalChars": 0,
+            "attachCount": 0, "attachments": [], "missing": [], "chunks": 0,
+            "processedChunks": 0, "chunkChars": 0, "directLimit": fullread.DIRECT_LIMIT,
+        }
+        return {"mode": "none", "materials": [], "chunks": [], "totalChars": 0,
+                "coverage": coverage}
+    return fullread.prepare(services, paper)
+
+
+def _run_summary(services, paper, options, emit=None, on_delta=None, auto_extract=None):
+    """完整读入正文 + 全部 SI 后总结；返回 {"text","usage","coverage"}。"""
+    llm = services.llm
+    use_fulltext = options.get("useFulltext") is not False
+    prepared = _summary_prepare(services, paper, use_fulltext)
+    coverage = prepared["coverage"]
+    total = prepared["totalChars"]
+
+    if emit:
+        emit({"type": "start", "model": _model_name(services),
+              "usedFulltext": bool(total), "chars": total,
+              "autoExtract": auto_extract, "fullRead": coverage})
+
+    if total:
+        if prepared["mode"] == "direct":
+            material = fullread.direct_text(prepared)
+            label = "全文（正文 + 全部补充材料 SI，未截断）"
+        else:
+            def progress(index, count, chunk):
+                if emit:
+                    emit({"type": "progress", "stage": "map", "done": index - 1,
+                          "total": count, "label": chunk.get("label")})
+
+            notes = fullread.map_chunks(
+                llm, prepared["chunks"], SUMMARY_MAP_SYSTEM,
+                lambda chunk, index, count: _summary_map_user(paper, chunk, index, count),
+                on_progress=progress,
+            )
+            coverage["processedChunks"] = len(notes)
+            material = ("【全文分段提炼，覆盖正文与全部 SI】\n\n"
+                        + "\n\n".join("[" + str(n["label"]) + "]\n" + n["text"] for n in notes))
+            label = "全文分段提炼（覆盖正文与全部补充材料 SI）"
+            if emit:
+                emit({"type": "progress", "stage": "map", "done": len(notes),
+                      "total": len(notes), "label": ""})
+    else:
+        material = ""
+        label = ""
+
+    system = str(llm.settings.get("promptTemplate") or "")
+    if material:
+        note = SUMMARY_FULL_NOTE
+        missing = coverage.get("missing") or []
+        if missing:
+            note += "\n注意：以下 SI 没有提取到文字，无法阅读：" + "、".join(missing)
+        system = system + ("\n\n" if system else "") + note
+    user = (llm.build_user_message(paper, material, label=label) if material
+            else llm.build_user_message(paper, ""))
+    result = llm.stream(on_delta, {"messages": [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]})
+    text = strip_echoed_material(str((result or {}).get("text") or ""))
+    return {"text": text, "usage": (result or {}).get("usage") or None, "coverage": coverage}
 
 
 def summary_zh(services, paper, options=None):
@@ -234,7 +303,7 @@ def summary_zh_batch(services):
 
 
 def summarize_stream(services, paper, body, stream):
-    """AI 总结（SSE）：start → delta* → done / error。"""
+    """AI 总结（SSE）：完整读入正文 + 全部 SI 后总结；start → delta* → done / error。"""
     options = body or {}
     llm = services.llm
     library = services.library
@@ -249,21 +318,7 @@ def summarize_stream(services, paper, body, stream):
     if options.get("useFulltext") is not False and not services.fulltext.has(paper_id) and paper.get("pdfFile"):
         auto_extract = safe_extract(services, paper)
 
-    use_fulltext = options.get("useFulltext") is not False
-    excerpt = build_excerpt(services, paper_id) if use_fulltext else ""
-    if use_fulltext:
-        extra = attachment_parts(services, paper)
-        if extra:
-            excerpt = excerpt + "\n\n" + "\n\n".join(extra) if excerpt else "\n\n".join(extra)
-
     send = stream.open()
-    send({
-        "type": "start",
-        "model": _model_name(services),
-        "usedFulltext": bool(excerpt),
-        "chars": len(excerpt),
-        "autoExtract": auto_extract,
-    })
     collected = []
 
     def on_delta(chunk):
@@ -271,13 +326,9 @@ def summarize_stream(services, paper, body, stream):
         send({"type": "delta", "text": chunk})
 
     try:
-        result = llm.stream(on_delta, {
-            "messages": [
-                {"role": "system", "content": str(llm.settings.get("promptTemplate") or "")},
-                {"role": "user", "content": llm.build_user_message(paper, excerpt)},
-            ],
-        })
-        text = strip_echoed_material(str((result or {}).get("text") or "".join(collected)))
+        result = _run_summary(services, paper, options, emit=send,
+                              on_delta=on_delta, auto_extract=auto_extract)
+        text = result["text"]
         saved = bool(text) and options.get("save") is not False
         if saved:
             library.update(paper_id, {
@@ -286,14 +337,14 @@ def summarize_stream(services, paper, body, stream):
                 "aiSummaryModel": _model_name(services),
             })
         send({"type": "done", "text": text, "saved": saved,
-              "usage": (result or {}).get("usage") or None})
+              "usage": result.get("usage"), "fullRead": result["coverage"]})
     except Exception as exc:  # noqa: BLE001
         send({"type": "error", "message": str(exc)})
     return {"ok": True}
 
 
 def summarize_sync(services, paper, body):
-    """AI 总结（同步）：{"ok", "text", "usedFulltext", "usage"}。"""
+    """AI 总结（同步）：完整读入正文 + 全部 SI；{"ok","text","usedFulltext","usage","fullRead"}。"""
     options = body or {}
     llm = services.llm
     paper_id = paper.get("id")
@@ -302,26 +353,21 @@ def summarize_sync(services, paper, body):
         return {"ok": False, "status": 400,
                 "error": "还没有配置大模型：" + str(readiness.get("reason") or "")}
 
-    excerpt = build_excerpt(services, paper_id)
-    extra = attachment_parts(services, paper)
-    if extra:
-        excerpt = excerpt + "\n\n" + "\n\n".join(extra) if excerpt else "\n\n".join(extra)
+    auto_extract = None
+    if options.get("useFulltext") is not False and not services.fulltext.has(paper_id) and paper.get("pdfFile"):
+        auto_extract = safe_extract(services, paper)
     try:
-        result = llm.stream(None, {
-            "messages": [
-                {"role": "system", "content": str(llm.settings.get("promptTemplate") or "")},
-                {"role": "user", "content": llm.build_user_message(paper, excerpt)},
-            ],
-        })
+        result = _run_summary(services, paper, options, emit=None,
+                              on_delta=None, auto_extract=auto_extract)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "status": 502, "error": str(exc)}
 
-    text = strip_echoed_material(str((result or {}).get("text") or ""))
+    text = result["text"]
     if options.get("save") is not False and text:
         services.library.update(paper_id, {
             "aiSummary": text,
             "aiSummaryAt": now_iso(),
             "aiSummaryModel": _model_name(services),
         })
-    return {"ok": True, "text": text, "usedFulltext": bool(excerpt),
-            "usage": (result or {}).get("usage") or None}
+    return {"ok": True, "text": text, "usedFulltext": bool(result["coverage"]["totalChars"]),
+            "usage": result.get("usage"), "fullRead": result["coverage"]}
