@@ -1,7 +1,7 @@
 """组装发布包 dist/PaperLibrary-<date>/ 并实测体积（目标 ≤120MB）。
 
-包含：public/ shared/ paperlib/ vendor/ tools/ PaperLibrary.cmd stop.cmd 使用说明.txt runtime/portable/
-      （启动器 exe 由 make_launcher.ps1 现场编译：PaperLibrary.exe / PaperLibrary-stop.exe）
+包含：public/ shared/ paperlib/ vendor/ tools/ 使用说明.txt runtime/portable/
+      （唯一用户入口 PaperLibrary.exe 由 make_launcher.ps1 现场编译，并嵌入 public/paperlibrary.ico）
 排除：data/ docs/ test/ .git/ __pycache__/ dist/ runtime/build runtime/*.exe
 用法：python tools/release.py [--out dist] [--skip-portable]
 """
@@ -18,7 +18,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INCLUDE = ["public", "shared", "paperlib", "vendor", "tools",
-           "PaperLibrary.cmd", "stop.cmd",
            "使用说明.txt", "README.md", "requirements.txt"]
 SKIP_DIRS = {"__pycache__", ".git", "node_modules"}
 LIMIT_KB = 120 * 1024
@@ -69,22 +68,26 @@ def main(argv=None):
         shutil.copytree(portable_src, target / "runtime" / "portable")
         # 便携运行时里的项目根路径：release/runtime/portable/../.. = release 根，与 _pth 一致
 
-    # 启动器 exe（无控制台；C# 由 PowerShell Add-Type 编译，失败则回退 .cmd）
+    # 唯一用户入口：无控制台启动器 PaperLibrary.exe（csc 现场编译，图标取 public/paperlibrary.ico）。
+    # 不再保留 .cmd 回退：编译失败必须让打包失败，否则包里会没有任何用户入口。
     launcher_ps = target / "tools" / "make_launcher.ps1"
-    if launcher_ps.is_file():
-        try:
-            proc = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                 "-File", str(launcher_ps), "-OutDir", str(target)],
-                cwd=str(target), capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=180,
-            )
-            if proc.returncode == 0 and (target / "PaperLibrary.exe").is_file():
-                print("[release] 启动器已生成：PaperLibrary.exe / PaperLibrary-stop.exe")
-            else:
-                print("[release] 启动器编译失败（将只用 .cmd）：" + ((proc.stderr or proc.stdout or "")[-200:]))
-        except Exception as exc:  # noqa: BLE001
-            print("[release] 启动器编译异常（将只用 .cmd）：" + str(exc))
+    if not launcher_ps.is_file():
+        print("[release] 缺少启动器脚本：tools/make_launcher.ps1")
+        return 1
+    try:
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(launcher_ps), "-OutDir", str(target)],
+            cwd=str(target), capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=180,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print("[release] 启动器编译异常：" + str(exc))
+        return 1
+    if proc.returncode != 0 or not (target / "PaperLibrary.exe").is_file():
+        print("[release] 启动器编译失败：" + ((proc.stderr or proc.stdout or "")[-400:]))
+        return 1
+    print("[release] 启动器已生成：PaperLibrary.exe（唯一入口，已嵌入图标）")
 
     size = tree_size(target)
     breakdown = {
@@ -102,7 +105,7 @@ def main(argv=None):
         "files": sum(len(files) for _, _, files in os.walk(target)),
         "sha256": {},
     }
-    for key in ("paperlib/routes.py", "paperlib/app.py", "public/index.html", "PaperLibrary.cmd"):
+    for key in ("paperlib/routes.py", "paperlib/app.py", "public/index.html", "PaperLibrary.exe"):
         path = target / key
         if path.is_file():
             manifest["sha256"][key] = hashlib.sha256(path.read_bytes()).hexdigest()

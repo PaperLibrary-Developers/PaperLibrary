@@ -9,12 +9,12 @@ PaperLibrary（Python 分析引擎）与 Sci-lib（Web 壳）合并后的单产�
 
     python -m pip install -r requirements.txt
 
-Windows 上也可以直接双击 `PaperLibrary.cmd` 启动（有 `runtime/portable` 时优先用它）；
-`stop.cmd` 一般用不上——关掉网页 30 秒会自动停，它留给「立刻停」和「进程卡死时兜底」。
+Windows 发布包的唯一入口是双击 `PaperLibrary.exe`（无控制台窗口，服务就绪后自动打开浏览器）；
+关掉网页 30 秒会自动停止，一般不需要手动停。
 
-    python -m paperlib --port 4321            # 启动，自动打开浏览器
-    python -m paperlib --port 4321 --no-open  # 不自动开浏览器
-    python -m paperlib --stop                 # 停止正在运行的服务
+    python -m paperlib --port 4321            # 源码运行：启动并自动打开浏览器
+    python -m paperlib --port 4321 --no-open  # 源码运行：不自动开浏览器
+    python -m paperlib --stop                 # 命令行停止（开发 / 排错用）
 
 数据目录默认 ./data（可用 --data-dir 指定）。首次运行会播种 1 条示例文献（data/.seeded 标记）。
 

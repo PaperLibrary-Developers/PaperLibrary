@@ -152,13 +152,13 @@ export const FAQ_GROUPS = [
     items: [
       {
         q: '页面打不开、一直转圈怎么办？',
-        a: '先确认服务在跑：双击 PaperLibrary.cmd（或 python -m paperlib）。地址应是 http://127.0.0.1:4321/ 。能打开但界面是旧的，按 Ctrl+Shift+R 强刷。仍不行就看 data/logs/launcher.log 里的报错。',
+        a: '先确认服务在跑：双击 PaperLibrary.exe。地址应是 http://127.0.0.1:4321/ 。能打开但界面是旧的，按 Ctrl+Shift+R 强刷。仍不行就看 data/logs/launcher.log 里的报错。',
         keywords: ['打不开', '转圈', '白屏', '启动', '报错', '旧', '缓存'],
         links: [{ label: '看手册第 4 章', hash: '#/guide' }]
       },
       {
         q: '端口被占用 / 想换一个端口？',
-        a: '换端口启动：python -m paperlib --port 4322（然后访问 127.0.0.1:4322）；如果是旧实例没退干净，先双击 stop.cmd 或 python -m paperlib --stop，再重新启动。',
+        a: '换端口启动：python -m paperlib --port 4322（然后访问 127.0.0.1:4322）；如果是旧实例没退干净，先关掉所有页面等 30 秒让它自动退出，再重新启动。',
         keywords: ['端口', '占用', '4321', '换端口', 'stop', '冲突'],
         links: [{ label: '看手册 2.3', hash: '#/guide' }]
       }

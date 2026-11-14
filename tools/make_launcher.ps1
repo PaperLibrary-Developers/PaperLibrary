@@ -2,7 +2,28 @@ param(
   [string]$OutDir = "dist"
 )
 $ErrorActionPreference = "Stop"
+
+# Keep this file ASCII-only: Windows PowerShell 5.1 reads BOM-less scripts as ANSI,
+# so CJK comments/messages here would corrupt parsing on non-UTF8 code pages.
+
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
+
+# Icon: public/paperlibrary.ico inside the package (release.py copies public/ first)
+$root = Split-Path -Parent $PSScriptRoot
+$icon = Join-Path $root "public\paperlibrary.ico"
+if (-not (Test-Path -LiteralPath $icon)) {
+  throw "Missing launcher icon: $icon (the package must include public/paperlibrary.ico)"
+}
+
+# Compile with .NET Framework 4.x csc.exe: Add-Type cannot embed a Win32 icon into an exe.
+$csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+if (-not (Test-Path -LiteralPath $csc)) {
+  $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe"
+}
+if (-not (Test-Path -LiteralPath $csc)) {
+  throw "csc.exe (.NET Framework 4.x) not found; cannot build the launcher"
+}
+
 $src = @'
 using System;
 using System.Diagnostics;
@@ -17,6 +38,7 @@ class Launcher
     static string LogFile = Path.Combine(BaseDir, "data", "logs", "launcher.log");
     const int Port = 4321;
     const string Url = "http://127.0.0.1:4321/";
+    const string Title = "PaperLibrary v1.3 Nexus";
 
     static void Log(string message)
     {
@@ -85,20 +107,14 @@ class Launcher
     [STAThread]
     static int Main(string[] args)
     {
-        string name = Path.GetFileNameWithoutExtension(Application.ExecutablePath) ?? "";
-        bool stop = name.Contains("stop") || name.Contains("Stop") || name.Contains("\u505c\u6b62");
-        if (stop)
-        {
-            try { RunPython(Pythonw(), "-m paperlib --stop"); Log("stop requested"); }
-            catch (Exception ex) { Log("stop failed: " + ex.Message); }
-            return 0;
-        }
+        // Single user entry: no stop branch. Stopping is handled by the server's
+        // idle-exit logic (30s after the last page closes).
         if (PortOpen()) { OpenUrl(); return 0; }
         try { RunPython(Pythonw(), "-m paperlib --port 4321 --no-open"); }
         catch (Exception ex)
         {
             Log("start failed: " + ex.Message);
-            MessageBox.Show("Start failed: " + ex.Message + "\r\nSee data\\logs\\launcher.log", "PaperLibrary v1.0 Nexus");
+            MessageBox.Show("Start failed: " + ex.Message + "\r\nSee data\\logs\\launcher.log", Title);
             return 1;
         }
         for (int i = 0; i < 80; i++)
@@ -107,15 +123,21 @@ class Launcher
             Thread.Sleep(300);
         }
         Log("start timeout");
-        MessageBox.Show("Startup timed out (24s).\r\nSee data\\logs\\launcher.log, or run PaperLibrary.cmd in a console.", "PaperLibrary v1.0 Nexus");
+        MessageBox.Show("Startup timed out (24s).\r\nSee data\\logs\\launcher.log. If port 4321 is occupied, close the other program and try again.", Title);
         return 1;
     }
 }
 '@
 
-# 产物名与仓库根脚本一致（全 ASCII，避免中文路径在 cmd/powershell 里的编码问题）
 $startExe = Join-Path $OutDir "PaperLibrary.exe"
-$stopExe = Join-Path $OutDir "PaperLibrary-stop.exe"
-Add-Type -TypeDefinition $src -ReferencedAssemblies @("System.dll", "System.Windows.Forms.dll") -OutputAssembly $startExe -OutputType WindowsApplication
-Copy-Item $startExe $stopExe -Force
-Write-Output ("launcher built: " + $startExe + " / " + $stopExe)
+$csPath = Join-Path ([System.IO.Path]::GetTempPath()) ("paperlibrary-launcher-" + [guid]::NewGuid().ToString("N") + ".cs")
+try {
+  [System.IO.File]::WriteAllText($csPath, $src, (New-Object System.Text.UTF8Encoding($true)))
+  & $csc /nologo /target:winexe "/win32icon:$icon" "/out:$startExe" /r:System.dll /r:System.Windows.Forms.dll $csPath
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $startExe)) {
+    throw "launcher compile failed (csc exit code $LASTEXITCODE)"
+  }
+} finally {
+  Remove-Item -LiteralPath $csPath -Force -ErrorAction SilentlyContinue
+}
+Write-Output ("launcher built: " + $startExe)

@@ -459,7 +459,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
           title: '停止文献库服务？',
           body: h('div',
             h('p', '数据会先保存，然后服务进程退出。'),
-            h('p', '停止后这个页面就打不开了。想再用，双击文件夹里的「启动.cmd」即可，文献数据不会丢。')
+            h('p', '停止后这个页面就打不开了。想再用，双击文件夹里的「PaperLibrary.exe」即可，文献数据不会丢。')
           ),
           okText: '停止服务',
           danger: true
@@ -470,7 +470,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
           document.body.replaceChildren(h('div.app-loading',
             h('div.boot-mark', '文'),
             h('p', '服务已停止，数据已保存。'),
-            h('p', { style: { fontSize: '13px', color: 'var(--faint)' } }, '想继续使用，双击文件夹里的「启动.cmd」。')
+            h('p', { style: { fontSize: '13px', color: 'var(--faint)' } }, '想继续使用，双击文件夹里的「PaperLibrary.exe」。')
           ))
         } catch (err) {
           toast('停止失败：' + err.message, 'error')
@@ -500,7 +500,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       ? null
       : presence.enabled
         ? '关掉所有网页后 ' + presence.idleLimitSeconds + ' 秒，服务会自动保存并停止、释放端口；不用再手动停。'
-        : '自动停止已关闭（启动参数 --idle-exit 0）：关掉网页后服务会一直运行，需要时用 stop.cmd 停止。'
+        : '自动停止已关闭（启动参数 --idle-exit 0）：关掉网页后服务会一直运行，需要时用命令行参数 --stop 停止。'
 
     const infoPanel = panel('服务与数据',
       h('div.svc',
@@ -526,7 +526,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
           )
         )
       ),
-      // 关掉网页就会自动停，不必再翻文件夹找 stop.cmd（秒数取服务端 --idle-exit 的真实值）
+      // 关掉网页就会自动停，不需要手动停止（秒数取服务端 --idle-exit 的真实值）
       idleNote ? h('div.svc-note', idleNote) : null
       /* 注：原来的四行说明已删除；panel(title, body, right) 只收三个参数，
          下面这枚「停止服务」按钮过去是以第 4 个参数传入的、从未被渲染，
