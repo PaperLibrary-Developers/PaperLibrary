@@ -242,6 +242,54 @@ class DeepAnalysisTest(unittest.TestCase):
         self.assertIn("We report a novel Cu catalyst", analysis["fields"]["原文摘要"])
 
 
+class DeepAnalysisOutputBudgetTest(unittest.TestCase):
+    """回归：24 槽位 JSON 的输出预算必须够（旧值 2400 会被截断 → 静默退回本地结果）。"""
+
+    class CapturingLLM:
+        settings = {"model": "fake-model"}
+
+        def __init__(self):
+            self.options = []
+            self.calls = 0
+
+        def ready(self):
+            return {"ready": True}
+
+        def chat(self, messages=None, options=None):
+            self.calls += 1
+            self.options.append(dict(options or {}))
+            return {"text": ""}
+
+    def test_ready_model_gets_enough_output_tokens(self):
+        llm = self.CapturingLLM()
+        analysis = deep_analysis.run(_fake_services(llm),
+                                     {"id": "p1", "title": "T"}, [], "")
+        self.assertEqual(analysis["model"], deep_analysis.LOCAL_MODEL)
+        # 调用本身就失败时不必再重问一次（旧实现会白等两倍超时）
+        self.assertEqual(llm.calls, 1)
+        self.assertGreaterEqual(llm.options[0].get("maxTokens"), 4000)
+        # 已配置模型却失败：必须说明原因，不能显示成「未配置大模型」
+        self.assertIn("大模型调用失败", analysis["fields"]["分析模式"])
+        self.assertIn("本地分析", analysis["fields"]["分析模式"])
+
+    def test_truncated_json_degrades_with_reason(self):
+        class TruncatedLLM:
+            settings = {"model": "fake-model"}
+
+            def ready(self):
+                return {"ready": True}
+
+            def chat(self, messages=None, options=None):
+                # 与真实故障一致：JSON 在中间被截断（旧预算 2400 的典型表现）
+                return {"text": '{"one_liner": "Cu 催化", "problem": "背景'}
+
+        analysis = deep_analysis.run(_fake_services(TruncatedLLM()),
+                                     {"id": "p1", "title": "T"}, [], "")
+        self.assertEqual(analysis["model"], deep_analysis.LOCAL_MODEL)
+        self.assertIn("大模型调用失败", analysis["fields"]["分析模式"])
+        self.assertIn("本地分析", analysis["fields"]["分析模式"])
+
+
 class LlmReadinessTest(unittest.TestCase):
     """真实 LLM 适配器未配置 Key 时，compare/deep 必须本地降级且**不触网**（离线目标 G2）。"""
 

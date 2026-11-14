@@ -12,7 +12,10 @@
   · 槽位表与系统提示词在 paperlib/legacy/deep_prompt.py（原 SYSTEM 提示词原样搬过来）；
   · 本地降级在 paperlib/legacy/deep_local.py（24 槽位全给值，取不到的写「未提及」）；
   · 模型调用统一走 services.llm（T4 适配器）；无 Key 或调用/解析失败一律本地降级返回 200
-    （契约 §8 + 离线目标 G2），不抛错、不编造。
+    （契约 §8 + 离线目标 G2），不抛错、不编造；
+  · 输出预算：24 个槽位的 JSON 实测要 2500–4000 token，旧值 2400 会在 JSON 中间被截断，
+    解析失败后又静默退回本地结果（绑定 API 也看不到模型分析）。现在给足预算（MAX_OUTPUT_TOKENS），
+    并在「已配置模型但调用失败」时把原因写进 fields["分析模式"]，不再冒充「未配置」。
 """
 from __future__ import annotations
 
@@ -186,12 +189,27 @@ def _parse_json_object(raw):
     return None
 
 
+# 输出预算：24 个语义槽位 + 五维评分的 JSON 实测 2500–4000 token。旧值 2400 会在 JSON
+# 中途被截断，_parse_json_object 必然失败，重试一次还是同样的预算，最后静默退回本地分析——
+# 这就是「绑定 API 后深度分析仍返回本地结果」的根因。给足预算，顺便留出更长的论文余量。
+MAX_OUTPUT_TOKENS = 8000
+
+# 首次输出不是合法 JSON（多为被截断）时的补正提示：要求只给 JSON 本体，并压缩每个字段的篇幅，
+# 让它在预算内把结构收完整。
+RETRY_NOTE = ("\n\n注意：上一次输出不是合法 JSON（多半是输出过长被截断）。"
+              "这次只输出 JSON 本体，不要围栏与解释；每个字段尽量精简，"
+              "scores 里每条 reason 控制在 20 字以内。")
+
+
 def _call_llm(services, messages):
+    """调用大模型，返回 (text, error)：成功时 error 为 ""，失败时 text 为 ""、error 是原因。"""
     llm = getattr(services, "llm", None)
     try:
-        response = llm.chat(messages, {"maxTokens": 2400, "temperature": 0.2})
-    except (NotImplementedError, Exception):  # noqa: BLE001 - 在线失败必须降级
-        return ""
+        response = llm.chat(messages, {"maxTokens": MAX_OUTPUT_TOKENS, "temperature": 0.2})
+    except NotImplementedError:
+        return "", "模型适配器不支持 chat()"
+    except Exception as exc:  # noqa: BLE001 - 在线失败必须降级，但原因要带回上层
+        return "", str(exc) or exc.__class__.__name__
     text = response if isinstance(response, str) else ""
     if isinstance(response, dict):
         for key in ("content", "text", "message", "answer"):
@@ -199,31 +217,39 @@ def _call_llm(services, messages):
             if isinstance(value, str) and value.strip():
                 text = value
                 break
-    return text
+    if not str(text or "").strip():
+        return "", "模型没有返回内容"
+    return text, ""
 
 
 def analyze_with_llm(services, paper, figures, full_text):
-    """返回 {fields, scores, oneLine, model}；无可用模型或解析失败返回 None。"""
+    """返回 (result, error)：result 为 {fields, scores, oneLine, model}；失败时 result 为 None。
+
+    error 只在「已配置模型但这次调用/解析失败」时有值（未配置时为空串），供上层在本地降级
+    结果里说明原因，避免把「调用失败」误报成「没配置大模型」。
+    """
     llm = getattr(services, "llm", None)
     if not compare_engine.llm_ready(llm):
-        return None
+        return None, ""
 
     messages = [
         {"role": "system", "content": deep_prompt.SYSTEM_PROMPT},
         {"role": "user", "content": _llm_prompt(paper, figures, full_text)},
     ]
-    texts = [_call_llm(services, messages)]
-    parsed = _parse_json_object(texts[0])
+    text, error = _call_llm(services, messages)
+    parsed = _parse_json_object(text)
     if parsed is None:
-        # 原实现的补正重试：只要求它把 JSON 修好，最多一次
+        if not text:
+            # 网络/鉴权/服务端错误：再问一次也不会变好，直接带原因降级（省一次超时等待）
+            return None, error or "模型没有返回内容"
+        # 补正重试：只要求它把 JSON 修好，最多一次
         retry = list(messages)
         retry[-1] = {"role": "user",
-                     "content": messages[-1]["content"] +
-                     "\n\n注意：上一次输出不是合法 JSON。这次只输出 JSON 本体，不要围栏与解释。"}
-        texts.append(_call_llm(services, retry))
-        parsed = _parse_json_object(texts[-1])
-    if parsed is None:
-        return None
+                     "content": messages[-1]["content"] + RETRY_NOTE}
+        text, retry_error = _call_llm(services, retry)
+        parsed = _parse_json_object(text)
+        if parsed is None:
+            return None, retry_error or error or "模型输出不是合法 JSON（可能被截断）"
 
     fields = _map_fields(parsed)
     scores, reasons = _map_scores(parsed)
@@ -236,12 +262,12 @@ def analyze_with_llm(services, paper, figures, full_text):
 
     one_line = (_as_text(parsed.get("one_liner"), 300) or fields.get("一句话概括")
                 or ("模型分析：" + _as_text(paper.get("title"), 80)))
-    return {"fields": fields, "scores": scores, "oneLine": one_line, "model": model}
+    return {"fields": fields, "scores": scores, "oneLine": one_line, "model": model}, ""
 
 
 def run(services, paper, figures=None, full_text=""):
     """契约 §7/§8 的 analysis 对象（6 个顶层键，一个不多一个不少）。"""
-    result = analyze_with_llm(services, paper, figures, full_text)
+    result, failure = analyze_with_llm(services, paper, figures, full_text)
     if result:
         fields, scores, one_line, model = (result["fields"], result["scores"],
                                           result["oneLine"], result["model"])
@@ -251,6 +277,9 @@ def run(services, paper, figures=None, full_text=""):
         scores = local["scores"]
         one_line = local["oneLine"]
         model = LOCAL_MODEL
+        if failure:
+            # 模型是配置好的，失败原因是调用/解析；写清楚，别让用户以为「没配置」
+            fields["分析模式"] = "大模型调用失败，已降级为本地分析：%s" % _as_text(failure, 300)
     return {
         "paperId": paper.get("id"),
         "updatedAt": now_iso(),

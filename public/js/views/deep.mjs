@@ -188,8 +188,9 @@ function deepHandler (ctx) {
     ]
     if (local) {
       children.push(h('div.panel-body.tight',
-        h('div.deep-note', '本地降级分析：当前没有可用的大模型，这些内容来自题录、摘要与正文的本地处理，' +
-          '五维评分是按启发式规则给的，仅供参考。在「设置 → 大模型」配置后点「重新分析」可得到完整结果。')
+        h('div.deep-note', '本地降级分析：没有配置可用的大模型，或模型调用失败（原因见「分析模式」字段）。' +
+          '这些内容来自题录、摘要与正文的本地处理，五维评分是按启发式规则给的，仅供参考。' +
+          '到「设置 → 大模型」检查密钥与接口地址后点「重新分析」可得到完整结果。')
       ))
     }
     if (analysis.oneLine) {
@@ -225,7 +226,7 @@ function deepHandler (ctx) {
       running = false
       renderAnalysis()
       if (analysisLooksLocal(analysis)) {
-        toast('已生成本地分析（没有配置大模型）')
+        toast('已生成本地分析（大模型未配置或调用失败）')
       } else {
         toast(force ? '已重新分析并保存' : '分析完成并保存')
       }
