@@ -9,6 +9,7 @@ import * as util from '../util.mjs'
 import { api } from '../api.mjs'
 import { go } from '../shell/app-api.mjs'
 import { paperPicker } from './paper-pick.mjs'
+import * as md from '../markdown.mjs'
 
 const { h, toast, formatDate, relTime, truncate } = util
 
@@ -45,7 +46,8 @@ function renderValue (value, depth) {
   }
   const text = String(value).trim()
   if (!text) return h('span.deep-dim', '—')
-  return h('div.deep-text', { text })
+  // 字段是纯文本（不是 Markdown），但「关键公式」等槽位带 LaTeX：只渲染公式，不动别的语法
+  return h('div.deep-text', { html: md.renderMathInText(text) })
 }
 
 /** 五维评分（契约示例是 0-5 的整数；若出现 >5 的值按 10 分制画条） */
@@ -194,7 +196,7 @@ function deepHandler (ctx) {
       ))
     }
     if (analysis.oneLine) {
-      children.push(h('div.panel-body.tight', h('div.deep-oneline', { text: analysis.oneLine })))
+      children.push(h('div.panel-body.tight', h('div.deep-oneline', { html: md.renderMathInText(analysis.oneLine) })))
     }
     const scores = scoreBlock(analysis.scores)
     if (scores) {

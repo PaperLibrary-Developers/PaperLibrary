@@ -2074,22 +2074,22 @@ a.external-title:hover { color: var(--accent-text); }
 /* ---------- 公式（KaTeX）----------
    行内公式不能把行高撑开（否则正文行距忽大忽小），所以用 inline-block + 垂直对齐微调；
    独立成块的公式允许横向滚动（长公式在窄栏里不换行、不溢出）。 */
-.md .math { display: inline-block; max-width: 100%; vertical-align: baseline; }
-.md .math .katex { font-size: 1.03em; }
-.md .math-display {
+.md .math, .deep-text .math, .deep-oneline .math { display: inline-block; max-width: 100%; vertical-align: baseline; }
+.md .math .katex, .deep-text .math .katex, .deep-oneline .math .katex { font-size: 1.03em; }
+.md .math-display, .deep-text .math-display, .deep-oneline .math-display {
   display: block; margin: 10px 0; padding: 2px 0;
   overflow-x: auto; overflow-y: hidden;
   text-align: center;
 }
-.md .math-display .katex-display { margin: 0; }
+.md .math-display .katex-display, .deep-text .math-display .katex-display, .deep-oneline .math-display .katex-display { margin: 0; }
 /* KaTeX 未加载 / 公式写坏时的原样显示：等宽字体、淡色，不去动内容 */
-.md .math-raw {
+.md .math-raw, .deep-text .math-raw, .deep-oneline .math-raw {
   font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
   font-size: .94em; color: var(--muted); background: var(--surface-2);
   border-radius: 4px; padding: 0 3px; word-break: break-all;
 }
 /* 公式里的报错提示（throwOnError:false 时 KaTeX 会标红那一段）保持可读 */
-.md .katex .katex-error { color: var(--danger); }
+.md .katex .katex-error, .deep-text .katex .katex-error, .deep-oneline .katex .katex-error { color: var(--danger); }
 
 /* ---------- 快捷键提示 ---------- */
 .kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; color: var(--muted); background: var(--surface-2); }

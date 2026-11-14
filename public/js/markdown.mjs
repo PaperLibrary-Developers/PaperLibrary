@@ -137,6 +137,38 @@
     return latexTextToHtml(extractMath(text, tmpl).text)
   }
 
+  /**
+   * 纯文本里的公式渲染（不套用 Markdown 语法）。
+   *
+   * 深度分析字段是结构化纯文本：后端把模型 JSON 的每个槽位压成一行字符串，
+   * 但「关键公式」等槽位本来就会带 $$…$$ / $…$。这里只做「转义 HTML + 渲染公式 +
+   * 保留换行」，不解析标题/列表/表格/引用，避免把字段里的 #标签、[1]、* 号等
+   * 普通文本误当成 Markdown。
+   */
+  export function renderMathInText (source) {
+    const tmpl = []
+    const stash = html => {
+      tmpl.push(html)
+      return '\u0000M' + (tmpl.length - 1) + '\u0000'
+    }
+    const renderLine = line => {
+      let text = String(line)
+      // 与 Markdown 表面一致：行内代码先抠出来，里面的 $ 不当公式
+      text = text.replace(/`([^`\n]+)`/g, (m, code) => stash('<code>' + escapeHtml(code) + '</code>'))
+      // 先抠公式（extractMath 不负责转义）；剩下的普通文本按纯文本转义，
+      // 避免模型输出里的 HTML 被 innerHTML 当真标签（旧实现用 textContent，天然安全）。
+      text = extractMath(text, tmpl).text
+      text = latexTextToHtml(escapeHtml(text))
+      return text
+    }
+    const html = String(source == null ? '' : source)
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map(renderLine)
+      .join('<br>')
+    return tmpl.length ? html.replace(/\u0000M(\d+)\u0000/g, (m, idx) => tmpl[Number(idx)] || '') : html
+  }
+
   /** 行内语法（入参必须是已转义/已抠出公式的文本） */
   function inline (escaped, ctx) {
     const store = []
