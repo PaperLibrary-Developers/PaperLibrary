@@ -1251,8 +1251,16 @@ a.external-title:hover { color: var(--accent-text); }
 .content { padding: 22px 24px 64px; width: 100%; max-width: 2400px; }
 /* 阅读型页面（详情页、设置页）限制行宽，正文太长反而不好读 */
 /* min-width: 0：详情页在窄屏是 flex 列里的子项，默认 min-width:auto 会被
-   PDF 面板/工具栏的 min-content 撑出横向滚动条，这里允许它跟着视口收缩。 */
-.content.detail { max-width: 2000px; min-width: 0; }
+   PDF 面板/工具栏的 min-content 撑出横向滚动条，这里允许它跟着视口收缩。
+   水平 auto margin：宽屏下内容触到 max-width 后，在 .main（侧栏让出的可用
+   工作区）里左右留白相等；窗口变窄时 width:100% 自动填满，不留固定偏移。
+   抽屉展开/收起只改 .main 的 margin-left，居中由 auto margin 跟随重算。 */
+.content.detail {
+  max-width: 2000px;
+  min-width: 0;
+  margin-left: auto;
+  margin-right: auto;
+}
 @media (min-width: 2200px) {
   .content { max-width: 2600px; }
   /* 阅读区即使超宽屏也不放太宽，正文行长要可控 */
