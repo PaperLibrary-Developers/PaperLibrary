@@ -32,7 +32,7 @@ const { h, toast, debounce } = util
 
   /* 前端版本号：品牌区显示的那一行就取这里，升版本只改这一处。
      页面 <title> 里的版本号在 public/index.html，需要同步改（两处都有注释互指）。 */
-  const UI_VERSION = 'v1.4'
+  const UI_VERSION = 'v1.5'
   // 同一个版本号也挂到 <html data-ui-version>：排查「页面是不是旧代码」时，
   // 控制台一句 document.documentElement.dataset.uiVersion 就够了
   document.documentElement.dataset.uiVersion = UI_VERSION
@@ -365,7 +365,7 @@ const { h, toast, debounce } = util
         onclick: () => closeDrawer()
       }, '✕'),
       // 品牌区：标记 + （字标 + NEXUS 胶囊）+ 版本号。
-      // 版本号仍在字标下方这一行（跟改造前同一个位置），只是从「v1.0 Nexus」收成「v1.4」——
+      // 版本号仍在字标下方这一行（跟改造前同一个位置），只是从「v1.0 Nexus」收成「v1.5」——
       // 产品线名已经由胶囊表达，再写一遍是重复；整块高度仍由 logo 小块（36px）决定，导航位置不变。
       h('div.brand', {
         title: 'PaperLibrary ' + UI_VERSION + ' Nexus',
