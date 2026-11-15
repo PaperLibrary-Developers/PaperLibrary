@@ -38,6 +38,7 @@ ROUTES = [
     {"name": "version", "methods": ("GET",), "pattern": "/api/version", "handler": system.version},
     {"name": "update-check", "methods": ("GET",), "pattern": "/api/update/check", "handler": update.check},
     {"name": "update-download", "methods": ("POST",), "pattern": "/api/update/download", "handler": update.download},
+    {"name": "update-status", "methods": ("GET",), "pattern": "/api/update/status", "handler": update.status},
     {"name": "stats", "methods": ("GET",), "pattern": "/api/stats", "handler": system.stats},
     {"name": "shutdown-status", "methods": ("GET",), "pattern": "/api/shutdown/status", "handler": system.shutdown_status},
     {"name": "shutdown", "methods": ("POST",), "pattern": "/api/shutdown", "handler": system.shutdown_now},

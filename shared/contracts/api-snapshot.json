@@ -34,6 +34,29 @@
       "skipped": true
     },
     {
+      "id": "update-status",
+      "method": "GET",
+      "path": "/api/update/status",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "code",
+        "error",
+        "lastCheckAt",
+        "ok",
+        "phase",
+        "progress",
+        "ready",
+        "running",
+        "stagingPath",
+        "stagingVersion",
+        "updatedAt",
+        "version"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
       "id": "version",
       "method": "GET",
       "path": "/api/version",

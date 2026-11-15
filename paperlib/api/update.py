@@ -26,6 +26,16 @@ def check(ctx):
     ctx.json(200, result)
 
 
+def status(ctx):
+    """GET /api/update/status：只读当前下载/校验/staging 状态（不会启动任务）。
+
+    契约：200 {ok, phase, running, version, progress:{downloadedBytes,totalBytes,percent},
+    ready, stagingVersion, stagingPath, error, code, updatedAt, lastCheckAt}。
+    phase: idle/checking/downloading/verifying/extracting/ready/failed/cancelled。
+    """
+    ctx.json(200, ctx.services.update.snapshot())
+
+
 def download(ctx):
     """POST /api/update/download：启动下载/续传（后台执行下载→校验→staging）。
 
