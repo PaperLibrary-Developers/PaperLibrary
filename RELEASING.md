@@ -31,29 +31,52 @@
 - zip 内不得有用户 `data/`、设置、API Key、本机路径；根目录必须有 `PaperLibrary.exe`（新包还要有 `version.json`）。
 - 私钥（`%USERPROFILE%\.paperlibrary\update-signing-key.json` 或 CI secret）**绝不**上传或打进包。
 
-## 3. 上传步骤（当前为手动步骤；P0-06 起用脚本固化）
+## 3. 发布步骤（P0-06 起脚本化）
 
-1. 确认 `version.json` 已更新（version/tag），或由发布脚本写入。
-2. 运行测试与构建：
+发布脚本：`tools/update_publish.py`。**默认只产出资产不发布**；真正发版必须显式 `--publish --yes`。
 
-       python -m unittest discover -s test
-       python tools/release.py
-       python tools/package_zip.py --src dist/PaperLibrary-<stamp>
+### 3.1 一条命令产出全部资产（不推送）
 
-3. 生成并签名清单（指向该 tag 的固定资产地址）：
+     python tools/update_publish.py --build --min-windows <x.y.z>
 
-       python tools/update_manifest.py sign --in <manifest.json> [--out dist/update-manifest.json]
+依次执行：全量测试 → `tools/release.py` 构建 → `tools/package_zip.py` 打包 →
+计算 zip 大小/SHA-256 → 生成并 Ed25519 签名 `update-manifest.json` → 写 `SHA256SUMS` 与
+`release-<tag>.json` 记录 → 用 `tools/verify_release.py` 离线校验（清单结构+验签、资产大小/
+SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`）。
 
-4. 创建并推送 tag（`v<major>.<minor>`），然后创建 Release 并上传资产：
+- 输出目录默认 `dist`（`--out` 可改）；`--zip <path>` 复用已有包；`--skip-tests` 仅紧急重跑用。
+- `--min-windows` **必须显式给出**（或环境变量 `PAPERLIB_MIN_WINDOWS`）：它是最低 Windows
+  版本的产品决定项（待确认），脚本不猜默认值。
+- 任意一步失败即返回非 0，不会留下"看似成功"的发布。
 
-       git tag v1.6
-       git push origin v1.6
-       gh release create v1.6 dist/PaperLibrary.v1.6.Nexus.zip dist/update-manifest.json \
-         --title "PaperLibrary v1.6 Nexus" --notes-file dist/release-notes-v1.6.md
+### 3.2 改版本号
 
-5. 发布后校验（必须全绿才视为发布成功）：
+     python tools/update_publish.py --set-version 1.7.0
 
-       python tools/verify_release.py --manifest dist/update-manifest.json --latest --download
+只改 `version.json`（version=1.7.0、tag=v1.7），**需要自己提交**；发布时脚本要求工作区干净、
+`version.json` 已提交到 HEAD。
+
+### 3.3 真正发版（推送 tag + 创建 Release + 发布后校验）
+
+     python tools/update_publish.py --zip dist/PaperLibrary.v1.6.Nexus.zip \
+         --min-windows <x.y.z> --publish --yes [--notes-file dist/release-notes-v1.6.md]
+
+脚本会：校验工作区干净 → 拒绝本地/远端已存在的 tag → 创建并推送 `v<major>.<minor>` tag →
+`gh release create` 上传 zip + `update-manifest.json` + `SHA256SUMS` + `release-<tag>.json` →
+用稳定地址 + 真实下载做发布后校验。发布后校验失败会返回非 0（Release 已建，不回滚，需人工处理记录）。
+
+### 3.4 手动等价步骤（脚本不可用时）
+
+1. 确认 `version.json` 已更新并提交。
+2. `python -m unittest discover -s test`；`python tools/release.py`；`python tools/package_zip.py --src <包>`。
+3. `python tools/update_manifest.py sign --in <manifest.json> --out dist/update-manifest.json`。
+4. `git tag v<tag>`；`git push origin v<tag>`；
+   `gh release create v<tag> <zip> dist/update-manifest.json --title "PaperLibrary v<tag> Nexus" --notes-file <说明>`。
+5. `python tools/verify_release.py --manifest dist/update-manifest.json --latest --download`。
+
+### 3.5 发布后校验（必须全绿才视为发布成功）
+
+     python tools/verify_release.py --manifest dist/update-manifest.json --latest --download
 
 ## 4. 发布后校验项（tools/verify_release.py）
 
