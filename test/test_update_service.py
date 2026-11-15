@@ -87,6 +87,22 @@ class FakeDownloader:
                 "partPath": str(paths.part), "sourceUrl": asset["url"]}
 
 
+class CancelAwareDownloader:
+    """在取消事件被设置时抛 DownloadCancelled，模拟真实下载的中途取消。"""
+
+    def __init__(self, zip_bytes):
+        self.zip_bytes = zip_bytes
+
+    def __call__(self, store_obj, version, asset, cancel_event=None, **kwargs):
+        for _ in range(500):
+            if cancel_event is not None and cancel_event.is_set():
+                raise download.DownloadCancelled()
+            time.sleep(0.01)
+        paths = store_obj.ensure(version)
+        paths.part.write_bytes(self.zip_bytes)
+        return {}
+
+
 class ServiceDownloadTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -241,6 +257,33 @@ class ServiceDownloadTest(unittest.TestCase):
         self.assertEqual(snap["code"], "interrupted")
         self.assertIn("续传", snap["error"])
         self.assertTrue(st.paths("1.7.1").part.is_file(), "中断后 .part 必须保留以便续传")
+
+    def test_cancel_discards_partial_files(self):
+        downloader = CancelAwareDownloader(self.zip)
+        svc = self.make_service(downloader)
+        svc.start_download()
+        time.sleep(0.05)
+        snap = svc.cancel_download()
+        self.assertEqual(snap["phase"], "cancelled")
+        self.assertFalse(snap["running"])
+        self.assertFalse(snap["ready"])
+        self.assertIn("取消", snap["error"])
+        paths = svc.store.paths("1.7.1")
+        self.assertFalse(paths.root.exists(), "取消后该版本目录与残包必须删除（方案 B）")
+        # 取消后重新下载从头开始（没有可续传残包）
+        retry = service_mod.UpdateService(self.root, self.data,
+                                          fetch_manifest=lambda: self.raw,
+                                          public_key=TEST_PUBLIC,
+                                          downloader=FakeDownloader(self.zip))
+        retry.start_download()
+        self.assertTrue(retry.wait_idle(30))
+        self.assertEqual(retry.snapshot()["phase"], "ready")
+
+    def test_cancel_without_running_task_is_noop(self):
+        svc = self.make_service()
+        snap = svc.cancel_download()
+        self.assertEqual(snap["phase"], "idle")
+        self.assertFalse(snap["running"])
 
     def test_check_with_manifest_returns_signed_raw(self):
         svc = self.make_service()

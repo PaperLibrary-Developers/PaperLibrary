@@ -7,7 +7,8 @@
 - 支持 Range 续传：已有 .part 时发 Range，206 且 Content-Range 起点匹配才继续；
   服务器返回 200（不支持 Range）或 416 时从头重下。
 - 下载前预检磁盘空间：zip + 暂存解压 + 旧程序备份 + 安全余量（按 zip 体积估算，偏保守）。
-- 用户可取消（threading.Event）：取消后保留 .part 以便续传，状态置 cancelled；不启动任何子进程。
+- 用户可取消（threading.Event）：取消即删（方案 B）——删除该版本的 .part/清单/状态/暂存，
+  不保留可用于续传的残包；不启动任何子进程。
 - 下载成功只代表字节已落盘；大小/SHA-256/签名校验在 P2-03，解压在 P2-04。
 """
 from __future__ import annotations
@@ -187,7 +188,7 @@ def download_package(store: store_mod.UpdateStore, version: str, asset: dict,
 
     for attempt in (0, 1):
         if cancelled():
-            store.update_state(version, phase="cancelled", error="用户取消", code="cancelled")
+            store.discard(version)  # 方案 B：取消即删，不保留续传残包
             raise DownloadCancelled()
         headers = {"Range": "bytes=%d-" % offset} if offset > 0 else {}
         response = None
@@ -277,7 +278,7 @@ def download_package(store: store_mod.UpdateStore, version: str, asset: dict,
                 "sourceUrl": final_url,
             }
         except DownloadCancelled:
-            store.update_state(version, phase="cancelled", error="用户取消", code="cancelled")
+            store.discard(version)  # 方案 B：取消即删
             raise
         except DownloadError as exc:
             store.update_state(version, phase="failed", error=exc.message, code=exc.code)

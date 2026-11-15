@@ -67,6 +67,7 @@ class UpdateService:
         self._state = store_mod.default_state("")
         self._ready: dict = {}
         self._last_check_at = ""
+        self._cancel_event = None
         self._load_persisted()
 
     # ---------- 持久化状态恢复 ----------
@@ -216,17 +217,20 @@ class UpdateService:
             self._version = version
             self._phase = "downloading"
             self._state = self.store.read_state(version)
-            self._thread = threading.Thread(target=self._run_pipeline, args=(version, asset),
+            self._cancel_event = threading.Event()
+            cancel_event = self._cancel_event
+            self._thread = threading.Thread(target=self._run_pipeline,
+                                            args=(version, asset, cancel_event),
                                             name="paperlib-update-download", daemon=True)
             self._thread.start()
             return self._snapshot_locked(started=True)
 
-    def _run_pipeline(self, version: str, asset: dict) -> None:
+    def _run_pipeline(self, version: str, asset: dict, cancel_event=None) -> None:
         try:
             with self._lock:
                 self._phase = "downloading"
                 self._state = self.store.read_state(version)
-            self._downloader(self.store, version, asset)
+            self._downloader(self.store, version, asset, cancel_event=cancel_event)
             with self._lock:
                 self._phase = "verifying"
                 self._state = self.store.read_state(version)
@@ -240,14 +244,15 @@ class UpdateService:
                 self._phase = "ready"
                 self._state = self.store.read_state(version)
         except download_mod.DownloadCancelled:
-            try:
-                state = self.store.update_state(version, phase="cancelled",
-                                                code="cancelled", error="下载已取消")
-            except Exception:  # noqa: BLE001
-                state = self.store.read_state(version)
+            # 方案 B：取消即删；文件已由下载层/这里删除，状态只保留在内存（重启后回到 idle）
+            self.store.discard(version)
+            state = store_mod.default_state(version)
+            state.update({"phase": "cancelled", "code": "cancelled",
+                          "error": "已取消下载，临时文件已清理"})
             with self._lock:
                 self._phase = "cancelled"
                 self._state = state
+                self._ready = {}
         except Exception as exc:  # noqa: BLE001 - 失败原因优先由各阶段写入，缺省再兜底
             code = str(getattr(exc, "code", "error") or "error")
             message = str(getattr(exc, "message", "") or exc)
@@ -288,6 +293,19 @@ class UpdateService:
             return "", {}
         _mtime, version, ready = max(candidates, key=lambda item: item[0])
         return version, ready
+
+    def cancel_download(self, timeout: float = 30.0) -> dict:
+        """取消当前下载（方案 B：取消即删）；返回取消后的状态快照。"""
+        with self._lock:
+            event = self._cancel_event
+            thread = self._thread
+            active = self._active
+            if event is None or not active:
+                return self._snapshot_locked()
+            event.set()
+        if thread is not None:
+            thread.join(timeout)
+        return self.snapshot()
 
     def apply(self) -> dict:
         """确认 staging 完整后写 data/updates/apply.json（幂等）。"""

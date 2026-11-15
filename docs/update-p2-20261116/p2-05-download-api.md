@@ -24,7 +24,7 @@
   下载使用同一份已验签清单（写入 @manifest.json@），不信任客户端传入的 URL/版本。
 - **单任务锁**：内存锁 + @_active/thread@ 判定；并发/重复 POST 只返回快照。
 - **进度与阶段落盘**：@download-state.json@ 依次 @checking → downloading → verifying → extracting → ready@；
-  失败 @failed@ + code/error，取消 @cancelled@。
+  失败 @failed@ + code/error；取消 @cancelled@（**方案 B：取消即删**，不保留残包，状态仅内存，重启回到 idle）。
 - **失败可重试**：再次 POST 会复用同版本 @.part@（2A 的 Range 续传）；失败状态不会被当成“已完成”。
 - **重启恢复**：服务启动时若发现上次停在 @downloading/verifying/extracting@，标记
   @failed/interrupted@ 并提示可续传；已有 @ready.json@ 的版本直接识别为 ready，不重复下载。
@@ -57,4 +57,4 @@ API handler 的 200/400/502/500 映射。
 ## 6. 说明
 
 - @phase@ 集合新增 @checking@；状态文件字段沿用 P2-01 定义。
-- 取消后半成品策略（保留 .part）仍是待确认项（同 P2-02），本步未改变。
+- 取消策略已确认方案 B（取消即删）：@UpdateService.cancel_download()@ 设置取消事件、等待任务结束并清理该版本目录；P2-08 会把它接到 UI。

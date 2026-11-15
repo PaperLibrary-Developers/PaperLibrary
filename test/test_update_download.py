@@ -196,7 +196,8 @@ class DownloadTest(unittest.TestCase):
         self.assertEqual(paths.part.stat().st_size, self.SIZE)
         self.assertEqual(paths.part.read_bytes(), self.server.body)
 
-    def test_cancel_keeps_part_and_no_thread_left(self):
+    def test_cancel_discards_partial_files(self):
+        """方案 B：取消即删——不保留 .part/清单/状态，不能续传残包。"""
         self.server.mode = "slow"
         cancel = threading.Event()
 
@@ -209,11 +210,10 @@ class DownloadTest(unittest.TestCase):
                                       cancel_event=cancel, progress=progress)
         self.assertEqual(ctx.exception.code, "cancelled")
         paths = self.store.paths("1.7.1")
-        self.assertTrue(paths.part.is_file())
-        self.assertGreater(paths.part.stat().st_size, 0)
-        state = self.store.read_state("1.7.1")
-        self.assertEqual(state["phase"], "cancelled")
-        self.assertEqual(state["code"], "cancelled")
+        self.assertFalse(paths.part.exists(), "取消后不得保留 .part")
+        self.assertFalse(paths.state.exists(), "取消后不得保留下载状态")
+        self.assertFalse(paths.root.exists(), "该版本目录应被清理（没有可续传残包）")
+        self.assertEqual(self.store.read_state("1.7.1")["phase"], "idle")
         # 下载是同步调用，取消返回即代表没有后台线程/子进程
         self.assertEqual(threading.active_count(), threading.active_count())
 

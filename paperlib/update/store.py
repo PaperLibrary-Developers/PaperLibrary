@@ -132,6 +132,24 @@ class UpdateStore:
             shutil.rmtree(paths.staging, ignore_errors=True)
         return paths
 
+    def discard(self, version: str) -> None:
+        """取消/放弃下载：删除该版本的半成品、清单、状态与暂存，且不保留续传残包。
+
+        方案 B（用户确认）：取消即删。目录空了就把版本目录也删掉；不影响其它版本与用户数据。
+        """
+        paths = self.paths(version)
+        for path in (paths.part, paths.package, paths.manifest, paths.state, paths.ready):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if paths.staging.exists():
+            shutil.rmtree(paths.staging, ignore_errors=True)
+        try:
+            paths.root.rmdir()  # 只有空目录才会成功
+        except OSError:
+            pass
+
     def prune_other_versions(self, keep_version: str) -> list[str]:
         """删除其它版本的更新目录（阶段 2A 策略：只保留当前目标版本）。"""
         keep = self.version_dir(keep_version).name
