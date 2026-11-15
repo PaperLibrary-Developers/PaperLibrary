@@ -26,6 +26,24 @@
       "kind": "api"
     },
     {
+      "id": "version",
+      "method": "GET",
+      "path": "/api/version",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "builtAt",
+        "commit",
+        "ok",
+        "product",
+        "tag",
+        "ui",
+        "version"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
       "id": "stats",
       "method": "GET",
       "path": "/api/stats",

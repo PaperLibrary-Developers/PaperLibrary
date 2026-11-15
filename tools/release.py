@@ -21,10 +21,16 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from paperlib.version import VersionError, build_record, dumps as dump_version  # noqa: E402
+
 INCLUDE = ["public", "shared", "paperlib", "vendor", "tools",
            "使用说明.txt", "README.md", "requirements.txt"]
 SKIP_DIRS = {"__pycache__", ".git", "node_modules"}
@@ -80,6 +86,17 @@ def main(argv=None):
         else:
             shutil.copy2(src, dst)
 
+    # 产品版本的唯一来源：仓库根 version.json。发布包里补 builtAt/commit，
+    # 启动器、后端（/api/version）和前端都读这份文件，避免三处各写一个版本号。
+    try:
+        version_record = build_record(ROOT)
+    except VersionError as exc:
+        print("[release] version.json 无效：" + str(exc))
+        return 1
+    (target / "version.json").write_text(dump_version(version_record), encoding="utf-8")
+    print("[release] version.json 已生成：%s（%s，commit %s）"
+          % (version_record["tag"], version_record["version"], version_record["commit"]))
+
     portable_src = ROOT / "runtime" / "portable"
     if not args.skip_portable:
         if not portable_src.is_dir():
@@ -126,7 +143,12 @@ def main(argv=None):
         "code": tree_size(target / "paperlib") + tree_size(target / "shared") + tree_size(target / "tools"),
     }
     manifest = {
-        "builtAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # 与包根 version.json 的 builtAt 完全一致（验收：release-manifest.json 与 version.json 可对应）
+        "builtAt": version_record["builtAt"],
+        "product": version_record["product"],
+        "version": version_record["version"],
+        "tag": version_record["tag"],
+        "commit": version_record["commit"],
         "target": str(target),
         "bytes": size,
         "kb": round(size / 1024),
@@ -140,11 +162,27 @@ def main(argv=None):
         },
         "sha256": {},
     }
-    for key in ("paperlib/routes.py", "paperlib/app.py", "public/index.html", LAUNCHER_EXE, LAUNCHER_CONFIG):
+    for key in ("version.json", "paperlib/routes.py", "paperlib/app.py", "public/index.html",
+                LAUNCHER_EXE, LAUNCHER_CONFIG):
         path = target / key
         if path.is_file():
             manifest["sha256"][key] = hashlib.sha256(path.read_bytes()).hexdigest()
     (target / "release-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 版本一致性：包内 version.json 必须能被独立读回，且与 release-manifest.json 对应
+    try:
+        from paperlib.version import load as load_version
+
+        packaged = load_version(target, require_build=True)
+    except VersionError as exc:
+        print("[release] 包内 version.json 校验失败：" + str(exc))
+        return 1
+    for key in ("product", "version", "tag", "commit"):
+        if packaged[key] != version_record[key] or manifest[key] != version_record[key]:
+            print("[release] 版本字段不一致：%s（version.json=%r，manifest=%r）"
+                  % (key, version_record[key], manifest[key]))
+            return 1
+    print("[release] 版本一致性校验通过：version.json == release-manifest.json")
 
     print("[release] %s" % target)
     print("[release] 体积 %.1f MB（%d KB），上限 %d KB" % (size / 1048576, round(size / 1024), LIMIT_KB))

@@ -15,7 +15,7 @@ zip 格式不保存 Windows 文件属性：解压后 PaperLibrary.exe.config 会
 
 用法：
     python tools/package_zip.py --src dist/PaperLibrary-<stamp>
-    python tools/package_zip.py --src <包目录> --out dist/PaperLibrary.v1.7.Nexus.zip
+    python tools/package_zip.py --src <包目录> --out dist/PaperLibrary.<tag>.Nexus.zip
 """
 from __future__ import annotations
 
@@ -80,6 +80,8 @@ def main(argv=None):
     checks = {
         LAUNCHER_EXE: LAUNCHER_EXE in names,
         LAUNCHER_CONFIG: LAUNCHER_CONFIG in names,
+        # 产品版本的唯一来源，必须随包分发（启动器/后端/前端都读它）
+        "version.json": "version.json" in names,
         # 源码包 paperlib/data 必须进 zip，否则解压后服务起不来
         "paperlib/data/__init__.py": "paperlib/data/__init__.py" in names,
         "paperlib/data/store.py": "paperlib/data/store.py" in names,

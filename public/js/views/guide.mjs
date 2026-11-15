@@ -93,7 +93,8 @@ import { go } from '../shell/app-api.mjs'
 
   function guideHandler (ctx) {
     const { outlet } = ctx
-    const version = document.documentElement.dataset.uiVersion || 'v1.6'
+    // 版本号来自 /api/version（包根 version.json），取不到时如实写「未知」，不写死一个可能过期的值
+    const version = document.documentElement.dataset.uiVersion || '未知'
 
     /* ---------- 页头 ---------- */
     const head = h('div.doc-head',

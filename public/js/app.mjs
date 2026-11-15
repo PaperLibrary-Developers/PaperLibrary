@@ -30,12 +30,20 @@ import * as foldersUi from './folders.mjs'
 
 const { h, toast, debounce } = util
 
-  /* 前端版本号：品牌区显示的那一行就取这里，升版本只改这一处。
-     页面 <title> 里的版本号在 public/index.html，需要同步改（两处都有注释互指）。 */
-  const UI_VERSION = 'v1.6'
-  // 同一个版本号也挂到 <html data-ui-version>：排查「页面是不是旧代码」时，
-  // 控制台一句 document.documentElement.dataset.uiVersion 就够了
-  document.documentElement.dataset.uiVersion = UI_VERSION
+  /* 前端版本号：唯一来源是包根 version.json（服务端 /api/version 转出），
+     品牌区、页面 <title>、使用文档里的版本号全部取自同一份，前端不再硬编码。
+     启动时若取不到（服务异常），不显示版本号而不是显示一个可能过期的写死值。 */
+  let UI_VERSION = ''
+
+  function applyUiVersion (label) {
+    UI_VERSION = label || ''
+    if (!UI_VERSION) return
+    // 排查「页面是不是旧代码」时，控制台一句 document.documentElement.dataset.uiVersion 就够了
+    document.documentElement.dataset.uiVersion = UI_VERSION
+    const meta = document.querySelector('meta[name="ui-version"]')
+    if (meta) meta.setAttribute('content', UI_VERSION)
+    document.title = 'PaperLibrary ' + UI_VERSION + ' Nexus · 我的文献资料库'
+  }
 
   /* ---------------- 全局状态（P4.4：本体在 state/store.mjs） ---------------- */
   /* 这里保留一个指向同一对象的本地别名给渲染代码用；写入统一走 patch()，
@@ -365,11 +373,11 @@ const { h, toast, debounce } = util
         onclick: () => closeDrawer()
       }, '✕'),
       // 品牌区：标记 + （字标 + NEXUS 胶囊）+ 版本号。
-      // 版本号仍在字标下方这一行（跟改造前同一个位置），只是从「v1.0 Nexus」收成「v1.6」——
+      // 版本号仍在字标下方这一行（跟改造前同一个位置），只是收成 v<major>.<minor>——
       // 产品线名已经由胶囊表达，再写一遍是重复；整块高度仍由 logo 小块（36px）决定，导航位置不变。
       h('div.brand', {
-        title: 'PaperLibrary ' + UI_VERSION + ' Nexus',
-        'aria-label': 'PaperLibrary ' + UI_VERSION + ' Nexus'
+        title: UI_VERSION ? 'PaperLibrary ' + UI_VERSION + ' Nexus' : 'PaperLibrary Nexus',
+        'aria-label': UI_VERSION ? 'PaperLibrary ' + UI_VERSION + ' Nexus' : 'PaperLibrary Nexus'
       },
         // logo 是图片（自带浅灰底），放在同底色的小圆角块里，图与块之间不露接缝
         h('div.brand-mark', h('img', { src: '/paperlibrary-mark.png', alt: 'PaperLibrary', draggable: 'false' })),
@@ -760,6 +768,11 @@ const { h, toast, debounce } = util
 
   async function boot () {
     applyTheme(state.prefs.theme)
+    // 版本先取再画：品牌区/标题/文档页要用同一个值，取不到就显示无版本号
+    try {
+      const info = await api.getVersion()
+      applyUiVersion(info && info.ui ? info.ui : '')
+    } catch {}
     watchPresence()
     // 把外壳的两件事注入服务层：切页时同步侧栏高亮/顶栏、真的离开列表面板时清批量勾选
     // （这两件事都依赖 DOM/views，不属于 app-api，所以用钩子注入而不是反向 import）

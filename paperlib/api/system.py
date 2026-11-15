@@ -1,9 +1,11 @@
-"""基础 / 运维端点：health / stats / shutdown / release。"""
+"""基础 / 运维端点：health / version / stats / shutdown / release。"""
 from __future__ import annotations
 
 import os
 import threading
 import time
+
+from paperlib.version import VersionError, load as load_version, ui_label
 
 
 def _rss_mb():
@@ -52,6 +54,27 @@ def health(ctx):
         "updatedAt": store.meta.get("updatedAt") or "",
         "bootMs": services.runtime.timing.get("bootMs"),
         "rssMB": _rss_mb(),
+    })
+
+
+def version(ctx):
+    """当前产品版本（唯一来源：包根 version.json）。
+
+    契约：200 {ok, product, version, tag, ui, builtAt, commit}；version.json 缺失/损坏时 500 + 中文原因。
+    更新比较用 semver `version`，界面显示用 `ui`（v<major>.<minor>）。
+    """
+    try:
+        info = load_version(ctx.services.runtime.root)
+    except VersionError as exc:
+        return ctx.fail(500, "读取版本信息失败：" + str(exc))
+    ctx.json(200, {
+        "ok": True,
+        "product": info["product"],
+        "version": info["version"],
+        "tag": info["tag"],
+        "ui": ui_label(info["version"]),
+        "builtAt": info["builtAt"],
+        "commit": info["commit"],
     })
 
 

@@ -56,6 +56,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -68,7 +69,9 @@ class Launcher
     static string LogFile = Path.Combine(BaseDir, "data", "logs", "launcher.log");
     const int Port = 4321;
     const string Url = "http://127.0.0.1:4321/";
-    const string Title = "PaperLibrary v1.6 Nexus";
+    // Window title = product + release tag from version.json (single source of truth).
+    // ReadVersion() runs before the mutex/window so a missing file never breaks startup.
+    static string Title = "PaperLibrary Nexus";
     const string MutexName = "PaperLibraryNexus.WebViewHost";
 
     static readonly object LogLock = new object();
@@ -87,6 +90,7 @@ class Launcher
     [STAThread]
     static int Main(string[] args)
     {
+        ReadVersion();
         bool createdNew;
         Mutex mutex = new Mutex(true, MutexName, out createdNew);
         if (!createdNew)
@@ -141,6 +145,34 @@ class Launcher
         catch (Exception ex)
         {
             Log("hide launcher config failed: " + ex.Message);
+        }
+    }
+
+    // Read the release tag from the package root version.json so the window title matches
+    // the sidebar (/api/version) without hard-coding the version in a second place.
+    static void ReadVersion()
+    {
+        try
+        {
+            string path = Path.Combine(BaseDir, "version.json");
+            if (!File.Exists(path))
+            {
+                Log("version.json missing; window title without version");
+                return;
+            }
+            string text = File.ReadAllText(path, Encoding.UTF8);
+            Match match = Regex.Match(text, "\"tag\"\\s*:\\s*\"(v[0-9]+\\.[0-9]+)\"");
+            if (!match.Success)
+            {
+                Log("version.json has no valid tag; window title without version");
+                return;
+            }
+            Title = "PaperLibrary " + match.Groups[1].Value + " Nexus";
+            Log("window title from version.json: " + Title);
+        }
+        catch (Exception ex)
+        {
+            Log("read version.json failed: " + ex.Message);
         }
     }
 

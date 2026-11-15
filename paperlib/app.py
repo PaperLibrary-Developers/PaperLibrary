@@ -23,6 +23,7 @@ from paperlib.http.static import StaticHandler
 from paperlib.routes import ROUTES
 from paperlib.services import create_services
 from paperlib.util import ensure_dir, write_json_atomic
+from paperlib.version import VersionError, load as load_version, ui_label
 
 
 def append_launcher_log(data_dir, message):
@@ -197,7 +198,13 @@ def main(argv=None, root=None):
     config.boot_ms = int((time.time() - config.started_at) * 1000)
     services.runtime.timing["bootMs"] = config.boot_ms
     print("")
-    print("  PaperLibrary v1.6 Nexus 已启动 →  %s" % url)
+    # 启动横幅与窗口标题、界面版本同源：读包根 version.json（缺失时退化为不带版本号）
+    try:
+        version_info = load_version(config.root)
+        banner = "  PaperLibrary %s Nexus 已启动 →  %s" % (ui_label(version_info["version"]), url)
+    except VersionError:
+        banner = "  PaperLibrary Nexus 已启动 →  %s" % url
+    print(banner)
     print("  数据文件：%s" % store.data_file())
     print("  原文目录：%s" % store.papers_dir)
     print("  补充材料：%s" % store.attachments_dir)

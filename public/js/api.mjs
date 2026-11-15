@@ -107,6 +107,8 @@
 
   const api = {
     ApiError,    health: () => request('GET', '/api/health'),
+    /** 当前产品版本（唯一来源：包根 version.json，服务端 /api/version 转出） */
+    getVersion: () => request('GET', '/api/version'),
     stats: () => request('GET', '/api/stats'),
     tags: () => request('GET', '/api/tags'),
     facets: () => request('GET', '/api/facets'),

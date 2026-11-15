@@ -1,9 +1,9 @@
 # Sci-lib HTTP API 契约
 
 > 状态：P5 契约固化。**这份文档是行为事实的规格化**，不是新设计。
-> 机器可校验的版本是 `tools/api-snapshot.json`（69 条响应形状快照，`npm test` 强制零差异）；
+> 机器可校验的版本是 `tools/api-snapshot.json`（70 条响应形状快照，`npm test` 强制零差异）；
 > 本文补上快照里没有的东西：入参、错误码、SSE 帧、上传与 Range 语义。
-> 任何实现改动都必须让 `npm test` 的 69 条快照保持零差异，除非显式修订本文件与快照。
+> 任何实现改动都必须让 `npm test` 的 70 条快照保持零差异，除非显式修订本文件与快照。
 
 ## 1. 通用约定
 
@@ -118,17 +118,18 @@ data: {"type":"done", ...}
 
 `ai` 与 `chat` 拆开、`files` 与 `papers` 拆开，是为了让每个文件都 ≤450 行且各自只做一类事；**路由表（server/routes.js）才是端点的唯一事实来源**，域文件只是它的实现落点。
 
-## 3. 端点清单（69 条，与 `tools/api-snapshot.json` 逐条对齐）
+## 3. 端点清单（70 条，与 `tools/api-snapshot.json` 逐条对齐）
 
 快照 id 与本文行一一对应；`network=true` 的端点只做状态类别比较（外部网络波动）。
 
-### 3.1 基础 / 运维（7）
+### 3.1 基础 / 运维（8）
 
 > `POST /api/release/build` 在快照里标记为 `skip`（它会真的跑 `tools/make-release.js` 打包），因此只在这里登记契约。
 
 | 方法 | 路径 | 入参 | 出参 | 错误 |
 |---|---|---|---|---|
 | GET | `/api/health` | — | `{ok, app, papers, dataDir, pid, port, uptimeSeconds, updatedAt, bootMs, rssMB, version}` | — |
+| GET | `/api/version` | — | `{ok, product, version, tag, ui, builtAt, commit}`（唯一来源：包根 `version.json`；`version` 用于更新比较，`ui` 为 `v<major>.<minor>`） | 500（version.json 缺失/损坏，带中文原因） |
 | GET | `/api/stats` | — | `{ok, stats:{total, withPdf, starred, pdfMissing, avgRating, noteChars, byYear[], byType[], byStatus[], tags, updatedAt}}` | — |
 | GET | `/api/prefs` | — | `{ok, prefs}` | — |
 | PUT/POST | `/api/prefs` | `{...}` 局部覆盖 | `{ok, prefs}` | — |
