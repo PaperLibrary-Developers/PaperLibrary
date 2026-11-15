@@ -1091,6 +1091,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
     const updateActions = h('div.update-actions', { id: 'update-actions' })
     let checkRunning = false
     let pollTimer = null
+    let readyInfo = null
 
     const updateRow = (label, value) => h('div.update-line',
       h('span.update-k', label),
@@ -1149,6 +1150,44 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       type: 'button',
       onclick: () => startUpdateDownload()
     }, '重试下载')
+
+    const updateInstallBtn = h('button.btn.primary', {
+      id: 'update-install-btn',
+      type: 'button',
+      onclick: () => prepareInstall()
+    }, '重启并安装')
+
+    async function prepareInstall () {
+      const version = readyInfo && readyInfo.version ? readyInfo.version : ''
+      const tag = version ? 'v' + version : ''
+      const accepted = await confirmDialog({
+        title: '安装更新 ' + (tag || ''),
+        body: h('div', { style: { display: 'grid', gap: '8px', fontSize: '13.5px' } },
+          h('div', '点击「准备安装」后，应用会在你关闭窗口时安装新版本，并在安装完成后自动重新打开。'),
+          h('div', '文献库数据（data/）会保留，不会随更新删除。'),
+          h('div', '正在进行中的 AI 请求会被中断，请等它完成或稍后再试。'),
+          h('div.hint', '不会静默安装：点「稍后」可以保持当前版本，什么都不改。')
+        ),
+        okText: '准备安装',
+        cancelText: '稍后'
+      })
+      if (!accepted) {
+        setUpdateStatus('已取消安装准备，保持当前版本', '')
+        return
+      }
+      try {
+        const res = await api.applyUpdate()
+        const applied = res && res.apply ? res.apply : {}
+        const appliedVersion = applied.version ? 'v' + applied.version : (tag || '')
+        setUpdateStatus('安装包已准备好' + (appliedVersion ? '：' + appliedVersion : '') +
+          '（关闭窗口后自动安装，数据保留）', 'ok')
+        showUpdateActions(updateLaterBtn)
+        toast('已准备安装：关闭窗口后自动更新')
+      } catch (err) {
+        setUpdateStatus('准备安装失败：' + err.message, 'err')
+        showUpdateActions(updateInstallBtn, updateLaterBtn)
+      }
+    }
 
     function renderLatestRows (latest) {
       if (!latest) return []
@@ -1221,6 +1260,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       else if (['checking', 'downloading', 'verifying', 'verified', 'extracting'].includes(phase)) kind = 'loading'
       setUpdateStatus(phaseText(snapshot), kind)
       if (phase === 'ready') {
+        readyInfo = { version: snapshot.stagingVersion || snapshot.version || '' }
         updateLatest.replaceChildren(
           updateRow('待安装版本', snapshot.stagingVersion || snapshot.version),
           updateRow('当前版本', currentVersion && currentVersion.tag ? currentVersion.tag : '—')
@@ -1234,7 +1274,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       }
       const running = ['checking', 'downloading', 'verifying', 'verified', 'extracting'].includes(phase)
       if (running) showUpdateActions(updateCancelBtn, updateLaterBtn)
-      else if (phase === 'ready') showUpdateActions(updateLaterBtn)
+      else if (phase === 'ready') showUpdateActions(updateInstallBtn, updateLaterBtn)
       else if (phase === 'failed') showUpdateActions(updateRetryBtn, updateLaterBtn)
       else if (phase === 'cancelled') showUpdateActions()
     }

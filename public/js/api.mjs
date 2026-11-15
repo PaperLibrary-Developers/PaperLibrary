@@ -117,6 +117,8 @@
     cancelUpdateDownload: () => request('POST', '/api/update/download', { body: { cancel: true } }),
     /** 读取下载/校验/staging 状态（只读，不启动任务） */
     updateStatus: () => request('GET', '/api/update/status'),
+    /** 确认 staging 完整后写 apply.json（用户确认后调用；不执行替换） */
+    applyUpdate: () => request('POST', '/api/update/apply', { body: {} }),
     stats: () => request('GET', '/api/stats'),
     tags: () => request('GET', '/api/tags'),
     facets: () => request('GET', '/api/facets'),
