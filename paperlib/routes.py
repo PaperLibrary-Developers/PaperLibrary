@@ -29,12 +29,14 @@ from paperlib.api import (
     system,
     tags,
     terms,
+    update,
 )
 
 ROUTES = [
     # ---------------- 基础 / 运维 ----------------
     {"name": "health", "methods": ("GET",), "pattern": "/api/health", "handler": system.health},
     {"name": "version", "methods": ("GET",), "pattern": "/api/version", "handler": system.version},
+    {"name": "update-check", "methods": ("GET",), "pattern": "/api/update/check", "handler": update.check},
     {"name": "stats", "methods": ("GET",), "pattern": "/api/stats", "handler": system.stats},
     {"name": "shutdown-status", "methods": ("GET",), "pattern": "/api/shutdown/status", "handler": system.shutdown_status},
     {"name": "shutdown", "methods": ("POST",), "pattern": "/api/shutdown", "handler": system.shutdown_now},

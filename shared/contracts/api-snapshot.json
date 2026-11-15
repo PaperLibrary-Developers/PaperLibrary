@@ -26,6 +26,10 @@
       "kind": "api"
     },
     {
+      "id": "update-check",
+      "skipped": true
+    },
+    {
       "id": "version",
       "method": "GET",
       "path": "/api/version",

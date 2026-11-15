@@ -18,6 +18,7 @@ from paperlib.adapters.sources import Sources
 from paperlib.adapters.websearch import WebSearch
 from paperlib.domain.folders import Folders
 from paperlib.domain.library import Library
+from paperlib.update.check import UpdateChecker
 from paperlib.util import ensure_dir, now_iso, safe_path_join
 
 try:  # 纯函数移植由 T1 交付；先允许缺失，端点实现时会显式依赖
@@ -184,5 +185,6 @@ def create_services(config, store):
         extract_attachment_text=extract_attachment_text,
         trigger_auto_summary_zh=trigger_auto_summary_zh,
         fulltext_budget=budget,
+        update=UpdateChecker(config.root),
     )
     return services
