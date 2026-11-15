@@ -14,7 +14,7 @@ Windows 无法可靠覆盖正在运行的 `PaperLibrary.exe`、WebView2 DLL 与 
 
 本契约只描述 helper 的**分发、部署、版本标识与命令行接口**；安装替换、备份、journal、
 回滚、健康检查的时序与字段由后续步骤补充（P2-14~P2-17），但不得改变这里的路径与
-部署记录格式。
+部署记录格式。程序文件替换范围与旧程序备份见 [update-install.md](update-install.md)。
 
 ## 2. 包内位置
 

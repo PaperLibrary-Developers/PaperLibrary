@@ -19,6 +19,7 @@ using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 internal sealed class HelperLog
@@ -52,6 +53,16 @@ internal sealed class HelperLog
         {
             // Logging must never abort an update; self-check reports unwritable logs.
         }
+    }
+}
+
+internal sealed class HelperFailure : Exception
+{
+    public readonly string Code;
+
+    public HelperFailure(string code, string message) : base(message)
+    {
+        Code = code;
     }
 }
 
@@ -101,6 +112,12 @@ internal static class UpdaterHelper
                     return HoldCommand(options, positional, home, log);
                 case "wait-pid":
                     return WaitPidCommand(options, positional, home, log);
+                case "plan-replace":
+                    return PlanReplaceCommand(options, log);
+                case "backup-program":
+                    return BackupProgramCommand(options, log);
+                case "replace-program":
+                    return ReplaceProgramCommand(options, log);
                 case "help":
                     Usage();
                     return 0;
@@ -109,6 +126,16 @@ internal static class UpdaterHelper
                     Usage();
                     return 2;
             }
+        }
+        catch (HelperFailure failure)
+        {
+            Console.WriteLine(Obj(
+                JB("ok", false),
+                J("command", command),
+                J("code", failure.Code),
+                J("error", failure.Message)));
+            log.Write(command + " failed: " + failure.Code + ": " + failure.Message);
+            return 3;
         }
         catch (Exception ex)
         {
@@ -314,6 +341,435 @@ internal static class UpdaterHelper
         return 0;
     }
 
+    // ---------- install: plan / backup / replace (P2-14) ----------
+    //
+    // Scope: everything in the package root is a program file EXCEPT the top-level
+    // "data" directory, which belongs to the user and must never be moved, copied over
+    // or deleted. The sequence is: move every non-data top-level entry into
+    // <program-root>\data\updates\backups\app-<oldVersion>\, then copy the staging tree
+    // into the now-empty package root, then verify key files and totals.
+
+    private static int PlanReplaceCommand(Dictionary<string, string> options, HelperLog log)
+    {
+        string programRoot = RequiredPath(options, "program-root");
+        string staging = RequiredPath(options, "staging");
+        string newVersion = Opt(options, "new-version");
+        string oldVersion = Opt(options, "old-version");
+        ValidateProgramRoot(programRoot);
+        string version = ValidateStaging(staging, programRoot, newVersion);
+        Counts stagingCounts = CountTree(staging);
+        List<string> topLevel = TopLevelNames(staging);
+
+        string backupDir = "";
+        if (!string.IsNullOrEmpty(oldVersion))
+        {
+            ValidateVersionText(oldVersion, "old-version");
+            backupDir = System.IO.Path.Combine(programRoot, "data", "updates", "backups",
+                                               "app-" + oldVersion);
+            ValidateBackupPath(programRoot, backupDir);
+        }
+
+        Console.WriteLine(Obj(
+            JB("ok", true),
+            J("command", "plan-replace"),
+            J("programRoot", programRoot),
+            J("staging", staging),
+            J("version", version),
+            J("oldVersion", oldVersion),
+            J("backupDir", backupDir),
+            J("files", stagingCounts.Files),
+            J("bytes", stagingCounts.Bytes),
+            JB("dataExcluded", true),
+            JB("stagingHasData", false),
+            Raw("topLevel", Arr(ToJsonStrings(topLevel)))));
+        log.Write("plan-replace: version=" + version + " files=" + stagingCounts.Files
+                  + " bytes=" + stagingCounts.Bytes + " backup=" + backupDir);
+        return 0;
+    }
+
+    private static int BackupProgramCommand(Dictionary<string, string> options, HelperLog log)
+    {
+        string programRoot = RequiredPath(options, "program-root");
+        string backupDir = RequiredPath(options, "backup");
+        string oldVersion = Opt(options, "old-version");
+        ValidateProgramRoot(programRoot);
+        ValidateBackupPath(programRoot, backupDir);
+
+        if (Directory.Exists(backupDir) && Directory.GetFileSystemEntries(backupDir).Length > 0)
+            throw new HelperFailure("backup-exists", "备份目录已存在且非空：" + backupDir);
+
+        string dataDir = System.IO.Path.Combine(programRoot, "data");
+        bool hadData = Directory.Exists(dataDir);
+        List<string> moved = new List<string>();
+        List<string> entries = new List<string>();
+        long files = 0;
+        long bytes = 0;
+
+        try
+        {
+            Directory.CreateDirectory(backupDir);
+            string[] roots = Directory.GetFileSystemEntries(programRoot);
+            Array.Sort(roots, StringComparer.OrdinalIgnoreCase);
+            foreach (string entry in roots)
+            {
+                string name = System.IO.Path.GetFileName(entry);
+                if (string.Equals(name, "data", StringComparison.OrdinalIgnoreCase)) continue;
+                Counts counts = CountTree(entry);
+                files += counts.Files;
+                bytes += counts.Bytes;
+                string target = System.IO.Path.Combine(backupDir, name);
+                if (Directory.Exists(entry))
+                {
+                    if (File.Exists(target) || Directory.Exists(target))
+                        throw new HelperFailure("backup-target-exists", "备份目标已存在：" + target);
+                    Directory.Move(entry, target);
+                    entries.Add(Obj(J("name", name), J("type", "dir"),
+                                    J("files", counts.Files), J("bytes", counts.Bytes)));
+                }
+                else
+                {
+                    if (File.Exists(target) || Directory.Exists(target))
+                        throw new HelperFailure("backup-target-exists", "备份目标已存在：" + target);
+                    File.Move(entry, target);
+                    entries.Add(Obj(J("name", name), J("type", "file"),
+                                    J("files", 1), J("bytes", counts.Bytes)));
+                }
+                moved.Add(name);
+            }
+        }
+        catch (HelperFailure)
+        {
+            RollbackMoves(programRoot, backupDir, moved);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            RollbackMoves(programRoot, backupDir, moved);
+            throw new HelperFailure("backup-failed", "移动程序文件失败：" + ex.Message);
+        }
+
+        bool dataPreserved = !hadData || Directory.Exists(dataDir);
+        if (!dataPreserved)
+        {
+            RollbackMoves(programRoot, backupDir, moved);
+            throw new HelperFailure("data-lost", "备份过程中 data/ 丢失，已回滚");
+        }
+        if (File.Exists(System.IO.Path.Combine(programRoot, "PaperLibrary.exe")))
+            throw new HelperFailure("backup-failed", "程序根仍存在 PaperLibrary.exe，备份未完成");
+        bool oldExeBackedUp = File.Exists(System.IO.Path.Combine(backupDir, "PaperLibrary.exe"));
+        bool oldVersionBackedUp = File.Exists(System.IO.Path.Combine(backupDir, "version.json"));
+
+        string now = NowIso();
+        string record = Obj(
+            J("schema", 1L),
+            J("product", HelperInfo.Product),
+            J("oldVersion", oldVersion),
+            J("programRoot", programRoot),
+            J("backupDir", backupDir),
+            J("files", files),
+            J("bytes", bytes),
+            JB("dataExcluded", true),
+            JB("dataPreserved", dataPreserved),
+            JB("oldExeBackedUp", oldExeBackedUp),
+            JB("oldVersionBackedUp", oldVersionBackedUp),
+            J("createdAt", now),
+            Raw("entries", Arr(entries.ToArray())));
+        WriteTextAtomic(System.IO.Path.Combine(backupDir, "backup.json"), record);
+
+        Console.WriteLine(Obj(
+            JB("ok", true),
+            J("command", "backup-program"),
+            J("programRoot", programRoot),
+            J("backupDir", backupDir),
+            J("oldVersion", oldVersion),
+            J("files", files),
+            J("bytes", bytes),
+            JB("dataPreserved", dataPreserved),
+            JB("oldExeBackedUp", oldExeBackedUp),
+            JB("oldVersionBackedUp", oldVersionBackedUp),
+            Raw("entries", Arr(entries.ToArray()))));
+        log.Write("backup-program: moved " + files + " files / " + bytes + " bytes to " + backupDir
+                  + " dataPreserved=" + dataPreserved.ToString().ToLowerInvariant());
+        return 0;
+    }
+
+    private static int ReplaceProgramCommand(Dictionary<string, string> options, HelperLog log)
+    {
+        string programRoot = RequiredPath(options, "program-root");
+        string staging = RequiredPath(options, "staging");
+        string newVersion = Opt(options, "new-version");
+        ValidateProgramRoot(programRoot);
+        string version = ValidateStaging(staging, programRoot, newVersion);
+
+        string dataDir = System.IO.Path.Combine(programRoot, "data");
+        bool hadData = Directory.Exists(dataDir);
+        foreach (string entry in Directory.GetFileSystemEntries(programRoot))
+        {
+            string name = System.IO.Path.GetFileName(entry);
+            if (string.Equals(name, "data", StringComparison.OrdinalIgnoreCase)) continue;
+            throw new HelperFailure("program-root-not-empty",
+                "程序根仍有未备份的程序文件：" + name + "（必须先执行 backup-program）");
+        }
+
+        Counts stagingCounts = CountTree(staging);
+        long copiedFiles = 0;
+        long copiedBytes = 0;
+        try
+        {
+            foreach (string name in TopLevelNames(staging))
+            {
+                string source = System.IO.Path.Combine(staging, name);
+                string target = System.IO.Path.Combine(programRoot, name);
+                if (!IsWithin(programRoot, target))
+                    throw new HelperFailure("unsafe-path", "替换目标越界：" + target);
+                if (File.Exists(target) || Directory.Exists(target))
+                    throw new HelperFailure("target-exists", "替换目标已存在：" + target);
+                if (Directory.Exists(source))
+                    CopyDirectory(source, target, ref copiedFiles, ref copiedBytes);
+                else
+                {
+                    File.Copy(source, target, false);
+                    copiedFiles++;
+                    copiedBytes += new FileInfo(target).Length;
+                }
+            }
+        }
+        catch (HelperFailure)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new HelperFailure("replace-failed", "复制 staging 失败：" + ex.Message);
+        }
+
+        bool dataPreserved = !hadData || Directory.Exists(dataDir);
+        if (!dataPreserved)
+            throw new HelperFailure("data-lost", "替换过程中 data/ 丢失");
+
+        string exePath = System.IO.Path.Combine(programRoot, "PaperLibrary.exe");
+        string versionPath = System.IO.Path.Combine(programRoot, "version.json");
+        if (!File.Exists(exePath))
+            throw new HelperFailure("verify-failed", "替换后缺少 PaperLibrary.exe");
+        if (!File.Exists(versionPath))
+            throw new HelperFailure("verify-failed", "替换后缺少 version.json");
+        string copiedVersion = ReadJsonString(versionPath, "version");
+        if (copiedVersion != version)
+            throw new HelperFailure("verify-failed",
+                "替换后 version.json 版本不符：" + copiedVersion + " != " + version);
+
+        Counts programCounts = CountProgramTree(programRoot);
+        if (programCounts.Files != stagingCounts.Files || programCounts.Bytes != stagingCounts.Bytes)
+            throw new HelperFailure("verify-failed",
+                "替换后文件数/字节数与 staging 不一致：" + programCounts.Files + "/" + programCounts.Bytes
+                + " != " + stagingCounts.Files + "/" + stagingCounts.Bytes);
+
+        Console.WriteLine(Obj(
+            JB("ok", true),
+            J("command", "replace-program"),
+            J("programRoot", programRoot),
+            J("staging", staging),
+            J("version", version),
+            J("files", copiedFiles),
+            J("bytes", copiedBytes),
+            JB("dataPreserved", dataPreserved),
+            Raw("topLevel", Arr(ToJsonStrings(TopLevelNames(staging))))));
+        log.Write("replace-program: copied " + copiedFiles + " files / " + copiedBytes
+                  + " bytes; version=" + version + " dataPreserved=" + dataPreserved.ToString().ToLowerInvariant());
+        return 0;
+    }
+
+    private static string RequiredPath(Dictionary<string, string> options, string name)
+    {
+        string value = Opt(options, name);
+        if (string.IsNullOrEmpty(value))
+            throw new HelperFailure("missing-argument", "--" + name + " is required");
+        try
+        {
+            return System.IO.Path.GetFullPath(value);
+        }
+        catch (Exception ex)
+        {
+            throw new HelperFailure("invalid-path", "--" + name + " is invalid: " + ex.Message);
+        }
+    }
+
+    private static void ValidateProgramRoot(string programRoot)
+    {
+        if (!Directory.Exists(programRoot))
+            throw new HelperFailure("program-root-missing", "程序目录不存在：" + programRoot);
+    }
+
+    private static string ValidateStaging(string staging, string programRoot, string newVersion)
+    {
+        if (!Directory.Exists(staging))
+            throw new HelperFailure("staging-missing", "staging 目录不存在：" + staging);
+        if (string.Equals(System.IO.Path.GetFullPath(staging),
+                          System.IO.Path.GetFullPath(programRoot), StringComparison.OrdinalIgnoreCase)
+            || IsWithin(programRoot, staging))
+            throw new HelperFailure("staging-inside-program", "staging 不能位于程序目录内：" + staging);
+        if (!File.Exists(System.IO.Path.Combine(staging, "PaperLibrary.exe")))
+            throw new HelperFailure("missing-exe", "staging 缺少 PaperLibrary.exe");
+        if (!File.Exists(System.IO.Path.Combine(staging, "version.json")))
+            throw new HelperFailure("missing-version", "staging 缺少 version.json");
+        if (Directory.Exists(System.IO.Path.Combine(staging, "data")))
+            throw new HelperFailure("data-directory", "staging 不得包含 data/（用户数据）");
+        string version = ReadJsonString(System.IO.Path.Combine(staging, "version.json"), "version");
+        ValidateVersionText(version, "staging version.json version");
+        if (!string.IsNullOrEmpty(newVersion) && version != newVersion)
+            throw new HelperFailure("version-mismatch",
+                "staging 版本与目标版本不符：" + version + " != " + newVersion);
+        return version;
+    }
+
+    private static void ValidateBackupPath(string programRoot, string backupDir)
+    {
+        string backupsRoot = System.IO.Path.Combine(programRoot, "data", "updates", "backups");
+        string full = System.IO.Path.GetFullPath(backupDir);
+        string root = System.IO.Path.GetFullPath(backupsRoot);
+        if (!IsWithin(root, full)
+            || string.Equals(full.TrimEnd(System.IO.Path.DirectorySeparatorChar),
+                             root.TrimEnd(System.IO.Path.DirectorySeparatorChar),
+                             StringComparison.OrdinalIgnoreCase))
+            throw new HelperFailure("backup-path-invalid",
+                "备份目录必须位于 data\\updates\\backups\\ 下：" + backupDir);
+    }
+
+    private static void ValidateVersionText(string value, string field)
+    {
+        if (string.IsNullOrEmpty(value) || !Regex.IsMatch(value, "^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+            throw new HelperFailure("invalid-version", field + " 必须是 x.y.z：" + (value ?? ""));
+    }
+
+    private static void RollbackMoves(string programRoot, string backupDir, List<string> moved)
+    {
+        for (int i = moved.Count - 1; i >= 0; i--)
+        {
+            try
+            {
+                string source = System.IO.Path.Combine(backupDir, moved[i]);
+                string target = System.IO.Path.Combine(programRoot, moved[i]);
+                if (Directory.Exists(source) && !Directory.Exists(target)) Directory.Move(source, target);
+                else if (File.Exists(source) && !File.Exists(target)) File.Move(source, target);
+            }
+            catch (Exception)
+            {
+            }
+        }
+    }
+
+    private static List<string> TopLevelNames(string root)
+    {
+        List<string> names = new List<string>();
+        foreach (string entry in Directory.GetFileSystemEntries(root))
+            names.Add(System.IO.Path.GetFileName(entry));
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+        return names;
+    }
+
+    private static string[] ToJsonStrings(List<string> values)
+    {
+        string[] result = new string[values.Count];
+        for (int i = 0; i < values.Count; i++) result[i] = Quote(values[i]);
+        return result;
+    }
+
+    private sealed class Counts
+    {
+        public long Files;
+        public long Bytes;
+    }
+
+    private static Counts CountTree(string path)
+    {
+        Counts counts = new Counts();
+        if (File.Exists(path))
+        {
+            counts.Files = 1;
+            counts.Bytes = new FileInfo(path).Length;
+            return counts;
+        }
+        if (Directory.Exists(path))
+        {
+            foreach (string file in Directory.GetFiles(path))
+            {
+                counts.Files++;
+                counts.Bytes += new FileInfo(file).Length;
+            }
+            foreach (string dir in Directory.GetDirectories(path))
+            {
+                Counts child = CountTree(dir);
+                counts.Files += child.Files;
+                counts.Bytes += child.Bytes;
+            }
+        }
+        return counts;
+    }
+
+    // 程序文件统计：跳过顶层 data/（用户数据，不属于替换范围）
+    private static Counts CountProgramTree(string programRoot)
+    {
+        Counts counts = new Counts();
+        foreach (string entry in Directory.GetFileSystemEntries(programRoot))
+        {
+            if (string.Equals(System.IO.Path.GetFileName(entry), "data", StringComparison.OrdinalIgnoreCase))
+                continue;
+            Counts child = CountTree(entry);
+            counts.Files += child.Files;
+            counts.Bytes += child.Bytes;
+        }
+        return counts;
+    }
+
+    private static void CopyDirectory(string source, string target, ref long files, ref long bytes)
+    {
+        Directory.CreateDirectory(target);
+        foreach (string file in Directory.GetFiles(source))
+        {
+            string destination = System.IO.Path.Combine(target, System.IO.Path.GetFileName(file));
+            File.Copy(file, destination, false);
+            files++;
+            bytes += new FileInfo(destination).Length;
+        }
+        foreach (string dir in Directory.GetDirectories(source))
+        {
+            CopyDirectory(dir, System.IO.Path.Combine(target, System.IO.Path.GetFileName(dir)),
+                          ref files, ref bytes);
+        }
+    }
+
+    private static string ReadJsonString(string path, string field)
+    {
+        string text;
+        try
+        {
+            text = File.ReadAllText(path, Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            throw new HelperFailure("read-failed", "无法读取 " + path + ": " + ex.Message);
+        }
+        Match match = Regex.Match(text, "\"" + Regex.Escape(field) + "\"\\s*:\\s*\"([^\"]*)\"");
+        if (!match.Success)
+            throw new HelperFailure("invalid-json", path + " 缺少字符串字段 " + field);
+        return match.Groups[1].Value;
+    }
+
+    private static void WriteTextAtomic(string path, string text)
+    {
+        string dir = System.IO.Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        string temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+        File.WriteAllText(temp, text, new UTF8Encoding(false));
+        if (File.Exists(path)) File.Replace(temp, path, null);
+        else File.Move(temp, path);
+    }
+
+    private static string NowIso()
+    {
+        return DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+    }
+
     // ---------- infrastructure ----------
 
     private static string ResolveCommand(Dictionary<string, string> options, List<string> positional)
@@ -323,6 +779,9 @@ internal static class UpdaterHelper
         if (options.ContainsKey("help")) return "help";
         if (options.ContainsKey("hold")) return "hold";
         if (options.ContainsKey("wait-pid")) return "wait-pid";
+        if (options.ContainsKey("plan-replace")) return "plan-replace";
+        if (options.ContainsKey("backup-program")) return "backup-program";
+        if (options.ContainsKey("replace-program")) return "replace-program";
         if (positional.Count > 0) return positional[0].ToLowerInvariant();
         return "help";
     }
@@ -543,6 +1002,12 @@ internal static class UpdaterHelper
         Console.Error.WriteLine("  self-check [--program-root DIR] diagnose deployment (exit 3 when a check fails)");
         Console.Error.WriteLine("  hold <seconds>                  stay alive (used to prove out-of-package operation)");
         Console.Error.WriteLine("  wait-pid <pid> [--timeout SEC]  wait for a process to exit (exit 4 on timeout)");
+        Console.Error.WriteLine("  plan-replace --program-root DIR --staging DIR [--new-version X] [--old-version Y]");
+        Console.Error.WriteLine("                                  validate staging and print the replacement plan");
+        Console.Error.WriteLine("  backup-program --program-root DIR --backup DIR [--old-version Y]");
+        Console.Error.WriteLine("                                  move program files (not data/) into the backup dir");
+        Console.Error.WriteLine("  replace-program --program-root DIR --staging DIR [--new-version X]");
+        Console.Error.WriteLine("                                  copy staging over the empty program root");
         Console.Error.WriteLine("options:");
         Console.Error.WriteLine("  --updater-home DIR   override %LOCALAPPDATA%\\PaperLibrary\\updater");
         Console.Error.WriteLine("  --log FILE           log file (default <updater-home>\\logs\\updater.log)");
