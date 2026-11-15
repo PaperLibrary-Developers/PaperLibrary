@@ -13,6 +13,9 @@ Windows 发布包的唯一入口是双击 `PaperLibrary.exe`：后台启动 Pyth
 桌面窗口（WinForms + Microsoft Edge WebView2）载入现有 `public/` 界面，不再打开外部浏览器；
 关闭窗口时保存数据并停止服务。需要系统装有 WebView2 运行时（Windows 11 自带，Win10 装了新版 Edge 一般也有）。
 
+发布包根目录只有一个可见入口 `PaperLibrary.exe`；同目录的 `PaperLibrary.exe.config` 是 .NET 运行配置
+（已设为隐藏文件），不是启动器。.NET CLR 只读取这个固定文件名（`<exe 文件名>.config`），请勿改名或删除。
+
     python -m paperlib --port 4321            # 源码运行：启动并用默认浏览器打开
     python -m paperlib --port 4321 --no-open  # 源码运行：只起服务，不自动开浏览器
     python -m paperlib --stop                 # 命令行停止（开发 / 排错用）

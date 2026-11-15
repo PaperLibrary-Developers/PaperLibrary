@@ -97,6 +97,7 @@ class Launcher
         }
         try
         {
+            EnsureConfigHidden();
             debugPort = Environment.GetEnvironmentVariable("PAPERLIB_WEBVIEW_DEBUG_PORT");
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -116,6 +117,30 @@ class Launcher
             StopServer();
             try { mutex.ReleaseMutex(); } catch (Exception) { }
             try { mutex.Close(); } catch (Exception) { }
+        }
+    }
+
+    // The package's "<exe name>.config" carries supportedRuntime + the WinForms DPI
+    // settings and cannot be renamed (the CLR only loads that exact file name). It is
+    // shipped hidden so users do not mistake it for the launcher, but zip extraction
+    // drops file attributes: restore the flag on every start (best effort, a read-only
+    // package must still start normally).
+    static void EnsureConfigHidden()
+    {
+        try
+        {
+            string config = Application.ExecutablePath + ".config";
+            if (!File.Exists(config)) return;
+            FileAttributes attrs = File.GetAttributes(config);
+            if ((attrs & FileAttributes.Hidden) == 0)
+            {
+                File.SetAttributes(config, attrs | FileAttributes.Hidden);
+                Log("launcher config marked hidden");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("hide launcher config failed: " + ex.Message);
         }
     }
 
@@ -569,8 +594,24 @@ try {
 Copy-Item -LiteralPath $wvCore -Destination $OutDir -Force
 Copy-Item -LiteralPath $wvWinForms -Destination $OutDir -Force
 Copy-Item -LiteralPath $wvLoader -Destination $OutDir -Force
-if (Test-Path -LiteralPath $appConfig) {
-  Copy-Item -LiteralPath $appConfig -Destination (Join-Path $OutDir "PaperLibrary.exe.config") -Force
+
+# The .NET CLR only ever reads the application config as "<exe file name>.config"
+# (AppDomainSetup.ConfigurationFile = exe path + ".config"), so this file cannot be
+# renamed without silently dropping supportedRuntime + the WinForms DPI settings.
+# With Explorer's "hide known extensions" on, "PaperLibrary.exe.config" is shown
+# as "PaperLibrary.exe" right under the real launcher, and users double-click the
+# wrong file. Keep the name, mark the file Hidden: the settings still load and the
+# package root shows exactly one visible entry.
+$startConfig = Join-Path $OutDir "PaperLibrary.exe.config"
+if (-not (Test-Path -LiteralPath $appConfig)) {
+  throw "Missing launcher config: $appConfig"
+}
+Copy-Item -LiteralPath $appConfig -Destination $startConfig -Force
+$configItem = Get-Item -LiteralPath $startConfig -Force
+$configItem.Attributes = $configItem.Attributes -bor [System.IO.FileAttributes]::Hidden
+if (($configItem.Attributes -band [System.IO.FileAttributes]::Hidden) -eq 0) {
+  throw "could not hide the launcher config: $startConfig"
 }
 Write-Output ("launcher built: " + $startExe)
+Write-Output ("launcher config hidden: " + $startConfig)
 Write-Output ("webview2 files copied: " + $OutDir)

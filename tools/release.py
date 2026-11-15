@@ -4,6 +4,13 @@
       （唯一用户入口 PaperLibrary.exe 由 make_launcher.ps1 现场编译，并嵌入 public/paperlibrary.ico）
 排除：data/ docs/ test/ .git/ __pycache__/ dist/ runtime/build runtime/*.exe
 用法：python tools/release.py [--out dist] [--skip-portable]
+
+启动入口约定：PaperLibrary.exe.config 由 make_launcher.ps1 设为隐藏文件，文件名不可改
+（.NET CLR 只读取 <exe 文件名>.config）。这样资源管理器里只会看到一个可见入口，
+避免用户在不显示文件扩展名时把配置文件和启动器搞混。打包结束会校验这一点。
+
+打 zip 分发请用 python tools/package_zip.py（Compress-Archive 的目录通配会跳过隐藏文件，
+把 PaperLibrary.exe.config 漏在 zip 外）；zip 不保存隐藏属性，启动器首次运行会重新隐藏它。
 """
 from __future__ import annotations
 
@@ -12,6 +19,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -21,6 +29,17 @@ INCLUDE = ["public", "shared", "paperlib", "vendor", "tools",
            "使用说明.txt", "README.md", "requirements.txt"]
 SKIP_DIRS = {"__pycache__", ".git", "node_modules"}
 LIMIT_KB = 120 * 1024
+LAUNCHER_EXE = "PaperLibrary.exe"
+LAUNCHER_CONFIG = "PaperLibrary.exe.config"
+
+
+def is_hidden(path: Path) -> bool:
+    """Windows 隐藏属性；Python 3.5+ 在 Windows 上提供 st_file_attributes。"""
+    try:
+        attrs = path.stat().st_file_attributes
+    except (AttributeError, OSError):
+        return False
+    return bool(attrs & stat.FILE_ATTRIBUTE_HIDDEN)
 
 
 def tree_size(path: Path) -> int:
@@ -84,10 +103,20 @@ def main(argv=None):
     except Exception as exc:  # noqa: BLE001
         print("[release] 启动器编译异常：" + str(exc))
         return 1
-    if proc.returncode != 0 or not (target / "PaperLibrary.exe").is_file():
+    launcher = target / LAUNCHER_EXE
+    launcher_config = target / LAUNCHER_CONFIG
+    if proc.returncode != 0 or not launcher.is_file():
         print("[release] 启动器编译失败：" + ((proc.stderr or proc.stdout or "")[-400:]))
         return 1
-    print("[release] 启动器已生成：PaperLibrary.exe（唯一入口，已嵌入图标）")
+    if not launcher_config.is_file():
+        print("[release] 缺少启动器配置：" + LAUNCHER_CONFIG)
+        return 1
+    if not is_hidden(launcher_config):
+        print("[release] 启动器配置未隐藏：" + LAUNCHER_CONFIG
+              + "（make_launcher.ps1 应设置 Hidden 属性；文件名必须保持 <exe>.config，不能改名）")
+        return 1
+    print("[release] 启动器已生成：" + LAUNCHER_EXE + "（唯一可见入口，已嵌入图标）")
+    print("[release] " + LAUNCHER_CONFIG + " 已隐藏（CLR 仍按 <exe>.config 加载配置）")
 
     size = tree_size(target)
     breakdown = {
@@ -103,9 +132,15 @@ def main(argv=None):
         "kb": round(size / 1024),
         "breakdown": {k: round(v / 1048576, 2) for k, v in breakdown.items()},
         "files": sum(len(files) for _, _, files in os.walk(target)),
+        "entry": {
+            "launcher": LAUNCHER_EXE,
+            "launcherConfig": LAUNCHER_CONFIG,
+            "launcherConfigHidden": True,
+            "note": ".NET CLR 只读取 <exe 文件名>.config；文件名保持原名并设为隐藏，避免与启动器混淆",
+        },
         "sha256": {},
     }
-    for key in ("paperlib/routes.py", "paperlib/app.py", "public/index.html", "PaperLibrary.exe"):
+    for key in ("paperlib/routes.py", "paperlib/app.py", "public/index.html", LAUNCHER_EXE, LAUNCHER_CONFIG):
         path = target / key
         if path.is_file():
             manifest["sha256"][key] = hashlib.sha256(path.read_bytes()).hexdigest()
