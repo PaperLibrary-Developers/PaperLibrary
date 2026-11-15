@@ -2,6 +2,10 @@
 
 日期：2026-11-15　阶段 0 / P0-04　状态：脚本与规范已完成；"新 Release 带清单"因版本号/发布授权待确认而阻塞
 
+## 0. 更新（2026-11-15）
+
+v1.7.1 已按本步规范发布，P0-04 的稳定地址验收在发布后通过；见 `v1.7.1-release.md`。
+
 ## 1. 交付物
 
 | 交付物 | 位置 |
@@ -52,14 +56,13 @@ python tools/verify_release.py
 
 | P0-04 验收项 | 状态 | 说明 |
 |---|---|---|
-| 匿名环境 GET `latest/download/update-manifest.json` | **阻塞** | 需要发布带清单的新 Release；涉及版本号（待确认）与推送/发布授权，本步不擅自发布 |
+| 匿名环境 GET `latest/download/update-manifest.json` | **已通过（v1.7.1）** | 2026-11-15 发布 v1.7.1 后实测 200；本步当时因版本号/发布授权未执行 |
 | manifest 内 URL/size/hash 与实际资产一致 | 已验证 | 用真实 v1.6 资产按同规则验证（URL/200/大小/SHA-256） |
 | zip 内无 `data/` | 已验证 | v1.6 真实资产 + 本地新构建包均通过 |
 | 资产命名规范/上传步骤/校验脚本 | 已完成 | `RELEASING.md` + `paperlib/update/release.py` + `tools/verify_release.py` |
 
-**阻塞说明（待确认项）**：要给 GitHub Release 补 `update-manifest.json`，必须先确定下一版版本号并
-重新构建 zip（v1.6 的 zip 不包含 P0-01 后的 version.json 与修复），再推送 tag/发布 Release；
-本轮用户要求"未明确的信息不得猜值"，且未授权推送/发布，因此保持现状并在最终汇总列出。
+**后续（2026-11-15 已完成）**：版本号确定为 v1.7.1，重新构建并发布；`latest/download/update-manifest.json`
+匿名 200，清单/资产/大小/SHA-256 与真实下载一致（发布记录见 `docs/update-p0-20261115/v1.7.1-release.md`）。
 
 ## 5. 测试与构建
 

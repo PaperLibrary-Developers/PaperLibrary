@@ -1,6 +1,6 @@
 # P0-06 发布流程脚本化（构建 → 签名 → 上传 → 发布后校验）
 
-日期：2026-11-15　阶段 0 / P0-06　状态：脚本与本地全流程已核验；**真实发布（推送 tag/创建 Release）未执行**，见第 4 节。
+日期：2026-11-15　阶段 0 / P0-06　状态：脚本与本地全流程已核验；**v1.7.1 已用本脚本真实发布并通过发布后校验**，见第 4 节。
 
 ## 1. 交付物
 
@@ -55,12 +55,11 @@ python tools/update_publish.py --build --min-windows 10.0.17763 --out dist/p0-06
 | 发布后校验项全绿 | **未执行真实发布**：v1.6 tag 已存在且下一版版本号未确定（待确认）；脚本已实现并接入，
   本地等价校验全绿；真实发布需用户确认版本号与推送授权 |
 
-## 4. 为什么没有真正发布（待确认）
+## 4. 真实发布记录（2026-11-15，v1.7.1）
 
-1. **下一版版本号未确定**（原文与清单均列为待确认；当前 `version.json` 仍为 1.6.0/v1.6）。
-2. 当前 `v1.6` tag 与 Release 已存在，且 v1.6 的 zip 不含 P0-01 之后的改动；
-   重新构建出的同名资产不能覆盖已发布包。
-3. 推送 tag / 创建公开 Release 属于对公开仓库的发布行为，需用户明确授权（按交接约定不擅自推送/发版）。
-
-待确认：下一版版本号（如 1.7.0/v1.7）→ 是否授权推送并发布 → `minWindows` 最终取值 →
-是否同时发布含 P0-01~P0-06 的修复包（含 AI 总结/批量导入修复）。
+- 版本号：用户确认 **1.7.1 / tag v1.7.1**（patch>0 用完整 tag）；`minWindows=10.0.17763`（用户确认）。
+- 执行：`python tools/update_publish.py --zip dist/p0-07-assets/PaperLibrary.v1.7.1.Nexus.zip --min-windows 10.0.17763 --out dist/p0-07-assets --publish --yes --notes-file dist/release-notes-v1.7.1.md`
+- 结果：zip 43,238,599 B / sha256 `e844ba33…0f30032`；manifest keyId=e777a2f6；
+  推送 main（`c9aa3268`）与 tag v1.7.1，Release 创建成功；
+  发布后校验 **9 通过 / 0 失败 / 0 警告**（stable 清单一致、真实下载 43 MB、大小/SHA-256、zip 无 data/）。
+- 发布地址：https://github.com/PaperLibrary-Developers/PaperLibrary/releases/tag/v1.7.1

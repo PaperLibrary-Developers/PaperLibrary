@@ -92,9 +92,12 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 ## 5. 当前状态（2026-11-15）
 
-- 已发布版本 v1.6 的 Release **只有 zip，没有 update-manifest.json**（发布流程尚未跑过 P0-04 之后的新流程）。
-  实测 `latest/download/update-manifest.json` 返回 404；zip 可匿名下载且与已知 SHA-256 一致。
-- v1.6 zip 是 P0-01 之前构建的，**不含 `version.json`**；新构建包已包含。
-- **不要**为了补齐 v1.6 而给已发布 tag 追加清单：清单应与构建该 zip 的源码一致；
-  下一次正式发布（版本号待确认）按第 3 节一次产出 zip + 签名清单。
+- **v1.7.1 已发布**（tag/Release 指向 `c9aa3268`，含 P0-01~P0-06 与批量导入/AI 总结修复）：
+  - zip `PaperLibrary.v1.7.1.Nexus.zip` 43,238,599 字节，sha256 `e844ba33ba07e44f…0f30032`；
+  - 资产：zip、`update-manifest.json`（签名 keyId=e777a2f6）、`SHA256SUMS`、`release-v1.7.1.json`；
+  - `latest/download/update-manifest.json` 匿名访问 200，清单 minWindows=`10.0.17763`；
+  - 发布后校验：9 项通过 / 0 失败 / 0 警告（stable 清单一致、真实下载、SHA-256、zip 无 data/）。
+- v1.6 的 Release 只保留 zip（无清单，历史资产）；新客户端从 v1.7.1 起走清单更新。
+- 旧分支 `PaperLibrary`、`sci-lib-refactor/p0-safety-net` 与旧整理 tag 已按审计结论删除（R1）；
+  GitHub 侧不可达对象缓存仍需 Support 清理，详见 `docs/update-p0-20261115/p0-05-audit.md`。
 - 仓库已公开可见；私有数据（data/、settings、私钥）不在任何资产中。
