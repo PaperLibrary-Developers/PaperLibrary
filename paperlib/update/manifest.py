@@ -118,9 +118,11 @@ def _check_signature(value):
     return value
 
 
-def validate(data) -> dict:
+def validate(data, require_signature: bool = True) -> dict:
     """校验清单并返回固定顺序的归一化 dict（含 signature）。
 
+    require_signature=False 只用于“签名工具接收待签清单”：此时允许没有 signature
+    （返回的归一化 dict 里 signature 为空串），其余字段约束完全相同。
     任何不符合 schema=1 的情况都抛 ManifestError（消息可直接展示，不含堆栈）。
     """
     if not isinstance(data, dict):
@@ -128,8 +130,10 @@ def validate(data) -> dict:
     unknown = sorted(set(data) - set(FIELDS))
     if unknown:
         raise ManifestError("清单含未知字段（schema=1 已冻结，扩展需提升 schema）：" + "、".join(unknown))
-    for key in FIELDS:
+    for key in PAYLOAD_FIELDS:
         _require(data, key)
+    if require_signature:
+        _require(data, "signature")
 
     schema = data["schema"]
     if isinstance(schema, bool) or not isinstance(schema, int) or schema != MANIFEST_SCHEMA:
@@ -165,7 +169,7 @@ def validate(data) -> dict:
         raise ManifestError("minWindows 必须是 x.y.z 形式（如 10.0.17763）：" + min_windows)
 
     assets = _check_assets(data["assets"])
-    signature = _check_signature(data["signature"])
+    signature = _check_signature(data["signature"]) if "signature" in data else ""
 
     return {
         "schema": MANIFEST_SCHEMA,
@@ -184,7 +188,7 @@ def validate(data) -> dict:
 
 def canonical_payload(data) -> bytes:
     """签名覆盖的规范化 JSON 字节（不含 signature，固定字段顺序，无多余空白）。"""
-    normalized = validate(data)
+    normalized = validate(data, require_signature=False)
     payload = {key: normalized[key] for key in PAYLOAD_FIELDS}
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
