@@ -520,6 +520,79 @@ class ImportEndpointsTest(Base):
         self.assertEqual(seen["options"], {"overwrite": True})
         self.assertEqual(seen["payload"]["papers"][0]["title"], "x")
 
+    def test_confirm_one_by_one_imports_every_entry(self):
+        """回归：前端「全部导入」是逐篇 confirm 的。
+
+        以前 confirm 处理完一批就删整个批次目录，第 1 篇成功会让第 2 篇起
+        报「临时文件不在了」；现在只删本轮已转正的文件。
+        """
+        self._preflight()
+        self._preflight()
+        for temp_id in ("1", "2"):
+            ctx = FakeCtx(self.services, json_body={
+                "batch": "abc123",
+                "papers": [{"tempId": temp_id, "name": "分篇 论文.pdf",
+                            "paper": {"title": "分篇导入 " + temp_id}}],
+            })
+            import_.pdf_confirm(ctx)
+            self.assertEqual(ctx.status, 200)
+            self.assertEqual(ctx.payload["failed"], [])
+            self.assertEqual(len(ctx.payload["imported"]), 1)
+        self.assertFalse((Path(self.tmp) / "tmp-import" / "abc123").exists())
+        self.assertEqual(self.store.count(), 3)  # 播种 1 篇 + 本次导入 2 篇
+
+    def test_confirm_missing_entry_keeps_other_temp_files(self):
+        """失败条目不能连锁删掉同批次里其它还没导入的临时文件。"""
+        self._preflight()
+        self._preflight()
+        ctx = FakeCtx(self.services, json_body={
+            "batch": "abc123",
+            "papers": [
+                {"tempId": "9", "title": "丢了"},
+                {"tempId": "1", "name": "论文.pdf", "paper": {"title": "保留检查"}},
+            ],
+        })
+        import_.pdf_confirm(ctx)
+        self.assertEqual(len(ctx.payload["imported"]), 1)
+        self.assertEqual(len(ctx.payload["failed"]), 1)
+        batch_dir = Path(self.tmp) / "tmp-import" / "abc123"
+        self.assertTrue((batch_dir / "2.pdf").is_file())   # 未提交的保留
+        self.assertFalse((batch_dir / "1.pdf").exists())   # 已导入的清掉
+
+    def test_preflight_numbering_does_not_overwrite_after_partial_import(self):
+        """部分导入后继续扫描：新文件不能覆盖还没导入的临时文件。"""
+        self._preflight()   # 1.pdf
+        self._preflight()   # 2.pdf
+        ctx = FakeCtx(self.services, json_body={
+            "batch": "abc123",
+            "papers": [{"tempId": "1", "name": "论文.pdf", "paper": {"title": "先导入一篇"}}],
+        })
+        import_.pdf_confirm(ctx)
+        self.assertEqual(len(ctx.payload["imported"]), 1)
+        again = self._preflight()
+        self.assertEqual(again.payload["tempId"], "3")
+        batch_dir = Path(self.tmp) / "tmp-import" / "abc123"
+        self.assertTrue((batch_dir / "2.pdf").is_file())
+        self.assertTrue((batch_dir / "3.pdf").is_file())
+
+    def test_preflight_passes_network_budget_to_lookup(self):
+        """预检题录查询要有预算上限，网络慢时不能每篇卡满 13 秒。"""
+        captured = {}
+        real = import_.pdf_import.pdf_preflight
+
+        def fake_preflight(services, path, name, temp_id="", deps=None):
+            captured["deps"] = deps
+            return {"parsed": {}, "draft": {}, "tempId": temp_id}
+
+        import_.pdf_import.pdf_preflight = fake_preflight
+        try:
+            self._preflight()
+        finally:
+            import_.pdf_import.pdf_preflight = real
+        self.assertEqual(captured["deps"]["lookup_options"]["budgetMs"],
+                         import_.PREFLIGHT_LOOKUP_BUDGET_MS)
+        self.assertLess(import_.PREFLIGHT_LOOKUP_BUDGET_MS, 13000)
+
     def test_json_import_failure_is_400(self):
         def boom(payload, options):
             raise ValueError("导入内容里没有 papers 数组")

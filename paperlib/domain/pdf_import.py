@@ -148,11 +148,21 @@ def _extract_abstract(lines, title, line_y):
 # --------------------------------------------------------------------------- 编排
 
 
-def _default_lookup_doi(services):
+def _default_lookup_doi(services, options=None):
+    """默认题录查询；options 可传 {"budgetMs": ...} 限制等待时间（预检用）。
+
+    预检只是识别题录，网络慢时不该让用户每篇都等满双来源的 13 秒预算；
+    传了预算就走多来源接口并把预算透传下去，超时按已返回的源降级。
+    """
     metadata = getattr(services, "metadata", None)
+    fetch_multi = getattr(metadata, "fetch_by_doi_multi", None)
     fetch = getattr(metadata, "fetch_by_doi", None)
+    opts = dict(options or {})
 
     def lookup(doi):
+        if callable(fetch_multi):
+            result = fetch_multi(doi, opts) or {}
+            return result.get("paper") if isinstance(result, dict) else result
         if callable(fetch):
             return fetch(doi)
         resolve = getattr(metadata, "resolve", None)
@@ -178,7 +188,8 @@ def _default_fetch_openalex_abstract(services):
 def parse_pdf(services, abs_path, deps=None):
     """解析一个 PDF 文件，给出「能自动填多少题录」的结果（形状对齐 Node parsePdf）。"""
     options = deps or {}
-    lookup_doi = options.get("lookup_doi") or _default_lookup_doi(services)
+    lookup_doi = options.get("lookup_doi") or _default_lookup_doi(
+        services, options.get("lookup_options"))
     max_pages = options.get("max_pages") or pdf_text.HEAD_PAGES
 
     base = {

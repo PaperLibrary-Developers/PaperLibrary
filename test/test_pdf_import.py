@@ -415,5 +415,51 @@ class FulltextSearchTest(unittest.TestCase):
         self.assertIsNotNone(stats["available"])
 
 
+class DefaultLookupBudgetTest(unittest.TestCase):
+    """预检要能把「最多等多久」传给题录源，避免慢网络把单篇扫描拖到十几秒。"""
+
+    def test_preflight_budget_reaches_multi_source_lookup(self):
+        seen = {}
+
+        class FakeMetadata:
+            @staticmethod
+            def fetch_by_doi_multi(doi, options=None):
+                seen["doi"] = doi
+                seen["options"] = options
+                return {"paper": {"title": "T"}}
+
+        services = SimpleNamespace(metadata=FakeMetadata)
+        lookup = pdf_import._default_lookup_doi(services, {"budgetMs": 6000})
+        self.assertEqual(lookup("10.1000/xyz"), {"title": "T"})
+        self.assertEqual(seen["doi"], "10.1000/xyz")
+        self.assertEqual(seen["options"], {"budgetMs": 6000})
+
+    def test_default_lookup_falls_back_to_fetch_by_doi(self):
+        class FakeMetadata:
+            @staticmethod
+            def fetch_by_doi(doi):
+                return {"title": "from-fetch", "doi": doi}
+
+        services = SimpleNamespace(metadata=FakeMetadata)
+        self.assertEqual(pdf_import._default_lookup_doi(services)("10.1000/abc"),
+                         {"title": "from-fetch", "doi": "10.1000/abc"})
+
+    def test_parse_pdf_passes_lookup_options(self):
+        seen = {}
+
+        class FakeMetadata:
+            @staticmethod
+            def fetch_by_doi_multi(doi, options=None):
+                seen["options"] = options
+                return {"paper": None}
+
+        services = SimpleNamespace(metadata=FakeMetadata)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "sample.pdf")
+            make_sample_pdf(path)
+            pdf_import.parse_pdf(services, path, {"lookup_options": {"budgetMs": 6000}})
+        self.assertEqual(seen.get("options"), {"budgetMs": 6000})
+
+
 if __name__ == "__main__":
     unittest.main()

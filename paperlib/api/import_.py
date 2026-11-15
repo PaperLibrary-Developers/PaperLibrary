@@ -28,6 +28,9 @@ BATCH_ID_RE = re.compile(r"^[a-z0-9]{4,40}$")
 PDF_LIMIT = 300 * 1024 * 1024
 CONFIRM_LIMIT = 8 * 1024 * 1024
 JSON_IMPORT_LIMIT = 64 * 1024 * 1024
+# 预检只做识别：题录源网络慢时最多等这么久（默认双来源预算 13 秒），超时按已有信息降级。
+# 这样批量拉入多篇时，单篇扫描不会被慢网络拖到十几秒。
+PREFLIGHT_LOOKUP_BUDGET_MS = 6000
 
 
 def tmp_dir_of(services):
@@ -86,11 +89,20 @@ def pdf_preflight(ctx):
         if len(existing) >= max_files:
             return ctx.fail(400, "一个批次最多 %d 个文件（可在「设置 → 导入与资料」里调大），请分批导入"
                              % max_files)
-        temp_id = str(len(existing) + 1)
+        # 用「当前最大编号 + 1」而不是「文件个数 + 1」：部分导入后目录里会留下
+        # 没导入的 2.pdf，如果按个数算会再次分配 2，把还没导入的临时文件覆盖掉。
+        numbers = []
+        for file_name in existing:
+            match = re.match(r"^(\d+)\.pdf$", file_name, re.I)
+            if match:
+                numbers.append(int(match.group(1)))
+        temp_id = str(max(numbers) + 1) if numbers else "1"
         temp_file = os.path.join(directory, temp_id + ".pdf")
         with open(temp_file, "wb") as fh:
             fh.write(buf)
-        result = pdf_import.pdf_preflight(services, temp_file, original_name, temp_id)
+        result = pdf_import.pdf_preflight(
+            services, temp_file, original_name, temp_id,
+            {"lookup_options": {"budgetMs": PREFLIGHT_LOOKUP_BUDGET_MS}})
         ctx.json(201, {
             "ok": True,
             "batch": batch_id,
@@ -132,6 +144,7 @@ def pdf_confirm(ctx):
 
     imported = []
     failed = []
+    consumed = []  # 本轮成功转正的临时文件编号（attach_file 是复制，需要显式清掉）
     for entry in entries:
         entry = entry if isinstance(entry, dict) else {}
         temp_id = re.sub(r"[^0-9]", "", str(entry.get("tempId") or ""))
@@ -161,10 +174,24 @@ def pdf_confirm(ctx):
                             if extract.get("ok")
                             else {"ok": False, "error": extract.get("error") or "未提取"}),
             })
+            consumed.append(temp_id)
         except Exception as exc:  # noqa: BLE001 - 单篇失败不影响其它条目
             failed.append({"tempId": temp_id, "title": entry.get("title") or "", "error": str(exc)})
 
-    remove_batch(services, batch_id)
+    # 只清掉本轮已经成功转正的临时文件。以前这里无条件 remove_batch(整批)，
+    # 而前端「全部导入」是逐篇调用 confirm 的：第 1 篇成功就把整批临时文件删掉，
+    # 第 2 篇起全部报「临时文件不在了（可能已过期或已取消）」。
+    # 失败 / 还没提交的条目必须保留，用户才能重试。
+    for temp_id in consumed:
+        try:
+            os.remove(os.path.join(directory, temp_id + ".pdf"))
+        except OSError:
+            pass
+    try:
+        if not os.listdir(directory):
+            remove_batch(services, batch_id)
+    except OSError:
+        pass
     try:
         services.fulltext.load_all(services.db.list_papers())
     except Exception:  # noqa: BLE001
