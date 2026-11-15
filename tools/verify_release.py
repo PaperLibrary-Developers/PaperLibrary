@@ -234,12 +234,15 @@ def main(argv=None):
                 remote_raw, remote_url = fetch_manifest(release.stable_manifest_url(), args.timeout)
                 remote = verify_manifest_bytes(remote_raw, public, "latest 清单")
                 same = (manifest.canonical_bytes(remote) == manifest.canonical_bytes(data))
-                record(same, "latest 稳定地址清单与本地清单一致（%s）" % remote_url)
+                # 只打印稳定地址（不打印带临时签名的重定向 URL），日志可安全留档
+                record(same, "latest 稳定地址清单与本地清单一致（%s）"
+                       % release.stable_manifest_url())
                 if not same:
                     raise SystemExit(1)
         else:
             raw, manifest_url = fetch_manifest(release.stable_manifest_url(), args.timeout)
-            print("[verify] 稳定地址：" + manifest_url)
+            # 只打印稳定地址，不打印带临时签名的重定向 URL（日志可安全留档）
+            print("[verify] 稳定地址：" + release.stable_manifest_url())
             data = verify_manifest_bytes(raw, public, "latest 清单")
 
         asset = data["assets"]["full"]
