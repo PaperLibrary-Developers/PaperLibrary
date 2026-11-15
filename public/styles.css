@@ -227,6 +227,10 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .brand-name .brand-word { display: flex; align-items: baseline; white-space: nowrap; }
 
 /* 关于与更新（阶段 1：只检查，不下载）：与设置页其它面板同一套留白与字号 */
+/* 自动检查更新开关（P1-04）：只通知、不下载；默认关 */
+.update-auto { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text); }
+.update-auto input { width: 15px; height: 15px; accent-color: var(--accent, #0e9aab); }
+
 .update-box { display: grid; gap: 10px; }
 .update-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .update-current { display: flex; align-items: baseline; gap: 8px; }

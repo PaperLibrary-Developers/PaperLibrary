@@ -27,6 +27,7 @@ import { copilotSideEntry, mountCopilotDock } from './copilot.mjs'
 import { copilotHandler } from './views/copilot.mjs'
 // 文件夹分类：侧栏树、导入选目录、管理器共用的组件
 import * as foldersUi from './folders.mjs'
+import { createAutoChecker } from './update-auto.mjs'
 
 const { h, toast, debounce } = util
 
@@ -815,6 +816,28 @@ const { h, toast, debounce } = util
     const bootEl = document.getElementById('boot')
     if (bootEl) bootEl.remove()
     patch({ booted: true })
+
+    // 自动检查更新（阶段 1：只通知，不下载）：默认关，设置页可开；失败静默、24 小时节流。
+    // 定时器只活在页面里：关掉页面/应用后不再检查，也不起任何后台进程。
+    const autoChecker = createAutoChecker({
+      check: () => api.checkUpdate(),
+      notify: latest => toast('发现新版本 ' + (latest && latest.tag ? latest.tag : '') +
+        '，可在「设置 → 关于与更新」查看'),
+      enabled: () => getState().prefs.updateAutoCheck === true,
+      getLastCheckAt: () => Number(getState().prefs.updateLastCheckAt) || 0,
+      saveLastCheckAt: ts => {
+        patch({ prefs: { updateLastCheckAt: ts } })
+        api.savePrefs({ updateLastCheckAt: ts }).catch(() => {})
+      },
+      getSkipped: () => getState().prefs.updateSkippedVersion || '',
+      onError: () => {}
+    })
+    // 暴露给验收脚本/排错（不参与业务逻辑）
+    window.__paperUpdateAuto = autoChecker
+    autoChecker.start()
+    document.addEventListener('update:auto-changed', ev => {
+      autoChecker.setEnabled(!!(ev && ev.detail && ev.detail.enabled))
+    })
 
     // 只监听 hashchange（用户手改地址、前进后退）；应用内导航统一走 go() → scheduleRender
     window.addEventListener('hashchange', () => scheduleRender())

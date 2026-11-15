@@ -1117,7 +1117,16 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
             updateRow('大小', fileSize(res.latest.size)),
             h('div.update-line',
               h('span.update-k', '更新说明'),
-              h('a.link', { href: res.latest.notesUrl, target: '_blank', rel: 'noopener' }, '在浏览器中查看'))
+              h('a.link', { href: res.latest.notesUrl, target: '_blank', rel: 'noopener' }, '在浏览器中查看')),
+            h('button.btn.sm.ghost', {
+              id: 'update-skip-btn',
+              type: 'button',
+              onclick: () => {
+                savePrefs({ updateSkippedVersion: res.latest.tag }, { silent: true })
+                toast('已跳过 ' + res.latest.tag)
+                updateStatus.textContent = '发现新版本 ' + res.latest.tag + '（已跳过）'
+              }
+            }, '跳过此版本')
           )
         } else {
           updateStatus.className = 'update-status is-ok'
@@ -1142,6 +1151,36 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       }
     }
 
+    /* 自动检查（P1-04）：默认关（产品决策待确认）；开启后也只通知、不下载 */
+    const autoEnabled = state.prefs.updateAutoCheck === true
+    const autoToggle = h('input', {
+      id: 'update-auto-toggle',
+      type: 'checkbox',
+      checked: autoEnabled,
+      onchange: ev => {
+        const on = !!ev.target.checked
+        savePrefs({ updateAutoCheck: on }, { silent: true })
+        document.dispatchEvent(new CustomEvent('update:auto-changed', { detail: { enabled: on } }))
+        toast(on ? '已开启自动检查（只通知，不下载）' : '已关闭自动检查')
+      }
+    })
+    const skippedTag = state.prefs.updateSkippedVersion || ''
+    const skippedBox = h('div.update-skipped', { id: 'update-skipped' },
+      skippedTag
+        ? h('div.update-line',
+          h('span.update-k', '已跳过版本'),
+          h('span.update-v', skippedTag),
+          h('button.btn.sm.ghost', {
+            id: 'update-unskip-btn',
+            type: 'button',
+            onclick: () => {
+              savePrefs({ updateSkippedVersion: '' }, { silent: true })
+              toast('已取消跳过 ' + skippedTag)
+              skippedBox.replaceChildren()
+            }
+          }, '取消跳过'))
+        : null)
+
     const aboutPanel = panel('关于与更新',
       h('div.update-box',
         h('div.update-head',
@@ -1150,7 +1189,12 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
         ),
         updateStatus,
         updateLatest,
-        h('div.hint', '这里只做检查：不会自动下载，也不会在后台安装。')
+        skippedBox,
+        h('label.update-auto', autoToggle,
+          h('span', '启动后自动检查更新（只通知，不下载）')),
+        h('div.hint',
+          '默认关闭（待确认）；开启后启动约 10–30 秒检查一次，之后每 24 小时最多一次，失败静默。' +
+          '这里只做检查：不会自动下载，也不会在后台安装。')
       ))
 
     const limitsPanel = panel('导入上限', h('div', { style: { display: 'grid', gap: '13px' } },
