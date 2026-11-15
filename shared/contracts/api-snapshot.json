@@ -34,6 +34,10 @@
       "skipped": true
     },
     {
+      "id": "update-apply",
+      "skipped": true
+    },
+    {
       "id": "update-status",
       "method": "GET",
       "path": "/api/update/status",

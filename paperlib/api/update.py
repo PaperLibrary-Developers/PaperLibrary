@@ -26,6 +26,24 @@ def check(ctx):
     ctx.json(200, result)
 
 
+def apply(ctx):
+    """POST /api/update/apply：确认 staging 完整后写 data/updates/apply.json（幂等）。
+
+    契约：200 {ok, applied, idempotent, apply:{schema,version,tag,fromVersion,fromTag,
+    stagingPath,stagingRel,backupPath,backupRel,packageSha256,manifestSha256,files,bytes,createdAt}}；
+    409 {ok:false, code:"staging-missing"|"staging-incomplete"|"version-mismatch"|
+    "version-same"|"downgrade"|"busy", error}；
+    500（本地 version.json 损坏）。
+    """
+    try:
+        result = ctx.services.update.apply()
+    except service_mod.UpdateServiceError as exc:
+        return ctx.fail(exc.status, exc.message, {"code": exc.code})
+    except VersionError as exc:
+        return ctx.fail(500, "读取当前版本失败：" + str(exc))
+    ctx.json(200, result)
+
+
 def status(ctx):
     """GET /api/update/status：只读当前下载/校验/staging 状态（不会启动任务）。
 

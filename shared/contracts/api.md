@@ -1,9 +1,9 @@
 # Sci-lib HTTP API 契约
 
 > 状态：P5 契约固化。**这份文档是行为事实的规格化**，不是新设计。
-> 机器可校验的版本是 `tools/api-snapshot.json`（73 条响应形状快照，`npm test` 强制零差异）；
+> 机器可校验的版本是 `tools/api-snapshot.json`（74 条响应形状快照，`npm test` 强制零差异）；
 > 本文补上快照里没有的东西：入参、错误码、SSE 帧、上传与 Range 语义。
-> 任何实现改动都必须让 `npm test` 的 73 条快照保持零差异，除非显式修订本文件与快照。
+> 任何实现改动都必须让 `npm test` 的 74 条快照保持零差异，除非显式修订本文件与快照。
 
 ## 1. 通用约定
 
@@ -118,11 +118,11 @@ data: {"type":"done", ...}
 
 `ai` 与 `chat` 拆开、`files` 与 `papers` 拆开，是为了让每个文件都 ≤450 行且各自只做一类事；**路由表（server/routes.js）才是端点的唯一事实来源**，域文件只是它的实现落点。
 
-## 3. 端点清单（73 条，与 `tools/api-snapshot.json` 逐条对齐）
+## 3. 端点清单（74 条，与 `tools/api-snapshot.json` 逐条对齐）
 
 快照 id 与本文行一一对应；`network=true` 的端点只做状态类别比较（外部网络波动）。
 
-### 3.1 基础 / 运维（11）
+### 3.1 基础 / 运维（12）
 
 > `POST /api/release/build` 在快照里标记为 `skip`（它会真的跑 `tools/make-release.js` 打包），因此只在这里登记契约。
 
@@ -133,6 +133,7 @@ data: {"type":"done", ...}
 | GET | `/api/update/check` | — | `{ok, available, reason, current:{version,tag}, latest:{version,tag,publishedAt,size,notesUrl}, checkedAt, message?}`（reason: newer/current/older/unsupported-win/unsupported-arch；只检查，不下载；清单 256 KB 上限、超时 9s、重试 2 次） | 502 `{ok:false, code, error}`（timeout/network/no-manifest/invalid-manifest/signature/manifest-too-large/redirect-host/bad-url）；500（本地 version.json 损坏） |
 | POST | `/api/update/download` | — | 200 `{ok, started, phase, running, version, progress:{downloadedBytes,totalBytes,percent}, ready, stagingVersion, stagingPath, error, code, updatedAt, lastCheckAt}`（后台执行 下载→校验→staging；同一时间只允许一个任务，重复调用返回当前状态且 `started=false`；已有 ready staging 时不重复下载） | 400（已是最新/无需下载，code=current/older/unsupported-*）；502（清单 timeout/network/no-manifest/invalid-manifest/signature 等）；500（本地 version.json 损坏） |
 | GET | `/api/update/status` | — | `{ok, phase, running, version, progress:{downloadedBytes,totalBytes,percent}, ready, stagingVersion, stagingPath, error, code, updatedAt, lastCheckAt}`（只读、不启动下载；phase: idle/checking/downloading/verifying/verified/extracting/ready/failed/cancelled） | — |
+| POST | `/api/update/apply` | — | 200 `{ok, applied, idempotent, apply:{schema,version,tag,fromVersion,fromTag,stagingPath,stagingRel,backupPath,backupRel,packageSha256,manifestSha256,files,bytes,createdAt}}`（确认 staging 完整后写 `data/updates/apply.json`，供启动器退出时安装；重复调用幂等） | 409（staging-missing/staging-incomplete/version-mismatch/version-same/downgrade/busy）；500（本地 version.json 损坏） |
 | GET | `/api/stats` | — | `{ok, stats:{total, withPdf, starred, pdfMissing, avgRating, noteChars, byYear[], byType[], byStatus[], tags, updatedAt}}` | — |
 | GET | `/api/prefs` | — | `{ok, prefs}` | — |
 | PUT/POST | `/api/prefs` | `{...}` 局部覆盖 | `{ok, prefs}` | — |

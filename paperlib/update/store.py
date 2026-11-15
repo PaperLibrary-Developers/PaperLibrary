@@ -225,6 +225,32 @@ class UpdateStore:
         except OSError:
             pass
 
+    # ---------- apply.json（安装标记，供启动器在退出时读取） ----------
+
+    @property
+    def apply_path(self) -> Path:
+        return self.updates_dir / "apply.json"
+
+    def read_apply(self) -> dict:
+        data = read_json(self.apply_path, None)
+        return data if isinstance(data, dict) else {}
+
+    def write_apply(self, payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            raise UpdateStoreError("apply.json 内容必须是对象")
+        merged = dict(payload)
+        merged["schema"] = STATE_SCHEMA
+        merged["createdAt"] = merged.get("createdAt") or now_iso()
+        ensure_dir(self.updates_dir)
+        write_json_atomic(self.apply_path, merged)
+        return merged
+
+    def clear_apply(self) -> None:
+        try:
+            self.apply_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def package_size(self, version: str) -> int:
         try:
             return self.paths(version).package.stat().st_size
