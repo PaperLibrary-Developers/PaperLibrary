@@ -14,15 +14,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from paperlib.update import manifest, signing  # noqa: E402
+from paperlib.update import ed25519, manifest, signing  # noqa: E402
+from paperlib.version import load as load_version  # noqa: E402
 from tools import update_publish  # noqa: E402
 
 TOOL = ROOT / "tools" / "update_publish.py"
 TEST_SEED = bytes(range(32))
-TEST_PUBLIC = __import__("paperlib.update.ed25519", fromlist=["public_key"]).public_key(TEST_SEED)
+TEST_PUBLIC = ed25519.public_key(TEST_SEED)
+# 用仓库当前版本，避免每次升版本都要改测试
+CURRENT = load_version(ROOT)
+VERSION = CURRENT["version"]
+TAG = CURRENT["tag"]
+ASSET = "PaperLibrary.%s.Nexus.zip" % TAG
 
 
-def make_zip(path: Path, version="1.6.0", extra=None):
+def make_zip(path: Path, version=VERSION, extra=None):
     entries = {"PaperLibrary.exe": b"MZ", "paperlib/app.py": b"x"}
     if version is not None:
         entries["version.json"] = json.dumps({"product": "PaperLibrary", "version": version})
@@ -36,7 +42,7 @@ def make_zip(path: Path, version="1.6.0", extra=None):
 class PublishUnitTest(unittest.TestCase):
     def test_build_manifest_matches_asset(self):
         with tempfile.TemporaryDirectory() as tmp:
-            zip_path = make_zip(Path(tmp) / "PaperLibrary.v1.6.Nexus.zip")
+            zip_path = make_zip(Path(tmp) / ASSET)
             data = update_publish.build_manifest(
                 {"product": "PaperLibrary", "version": "1.6.0", "tag": "v1.6"},
                 zip_path, "10.0.17763", published_at="2026-12-01T00:00:00Z")
@@ -78,7 +84,7 @@ class PublishCliTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        self.zip = make_zip(self.dir / "PaperLibrary.v1.6.Nexus.zip")
+        self.zip = make_zip(self.dir / ASSET)
         self.key = self.dir / "key.json"
         signing.save_private_key(TEST_SEED, self.key)
         self.pubkey = base64.b64encode(TEST_PUBLIC).decode()
@@ -102,10 +108,10 @@ class PublishCliTest(unittest.TestCase):
     def test_dry_run_produces_all_assets(self):
         proc = self.run_tool(*self.base_args())
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertTrue((self.out / "PaperLibrary.v1.6.Nexus.zip").is_file())
+        self.assertTrue((self.out / ASSET).is_file())
         self.assertTrue((self.out / "update-manifest.json").is_file())
         self.assertTrue((self.out / "SHA256SUMS").is_file())
-        record = json.loads((self.out / "release-v1.6.json").read_text(encoding="utf-8"))
+        record = json.loads((self.out / ("release-%s.json" % TAG)).read_text(encoding="utf-8"))
         self.assertEqual(record["publish"], False)
         self.assertEqual(record["size"], self.zip.stat().st_size)
         self.assertIn("发布校验通过", proc.stdout)

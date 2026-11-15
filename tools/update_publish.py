@@ -44,7 +44,7 @@ from paperlib.update import ed25519, keys, manifest, release, signing  # noqa: E
 from paperlib.version import (VersionError, build_record, dumps as dump_version,  # noqa: E402
                               load as load_version, ui_label, validate as validate_version)
 
-TAG_RE = re.compile(r"^v\d+\.\d+$")
+TAG_RE = re.compile(r"^v\d+\.\d+(?:\.\d+)?$")
 
 
 class PublishError(RuntimeError):
@@ -276,6 +276,9 @@ def main(argv=None):
     try:
         if args.set_version:
             set_version(args.set_version)
+            # 只改版本号（未要求构建/复用 zip/发布）时到此为止，便于先提交版本再发布
+            if not (args.build or args.zip or args.publish):
+                return 0
         version_info = load_version(ROOT)
         tag = version_info["tag"]
         if not args.min_windows.strip():

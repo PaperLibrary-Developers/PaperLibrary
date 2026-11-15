@@ -27,7 +27,8 @@
 
 硬约束：
 
-- 版本号只在 `version.json` 维护；`tag` 必须是 `v<major>.<minor>`，与 zip 名一致。
+- 版本号只在 `version.json` 维护；`tag` 规则：patch=0 用 `v<major>.<minor>`（如 `v1.6`），
+  patch>0 用完整 `v<major>.<minor>.<patch>`（如 `v1.7.1`），与 zip 名一致。
 - zip 内不得有用户 `data/`、设置、API Key、本机路径；根目录必须有 `PaperLibrary.exe`（新包还要有 `version.json`）。
 - 私钥（`%USERPROFILE%\.paperlibrary\update-signing-key.json` 或 CI secret）**绝不**上传或打进包。
 

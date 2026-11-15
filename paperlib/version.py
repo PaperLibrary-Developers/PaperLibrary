@@ -7,7 +7,8 @@ Python 后端、Web 前端都从这份文件读，不再各自硬编码。
 字段（方案一原文 §3.1）：
     product   产品名，固定 "PaperLibrary"
     version   语义化版本，如 "1.6.0"（更新比较、排序用这个）
-    tag       发布标签，如 "v1.6"（界面显示用这个；必须等于 v<major>.<minor>）
+    tag       发布标签，如 "v1.6"（1.6.0）或 "v1.7.1"（1.7.1）：
+              patch=0 用 v<major>.<minor>（兼容既有 Release），patch>0 用完整 v<major>.<minor>.<patch>
     builtAt   构建时间，UTC ISO8601（发布包里必须存在）
     commit    构建来源提交（发布包里必须存在；无 git 时写 "unknown"）
 
@@ -49,8 +50,12 @@ def semver(version: str) -> tuple[int, int, int]:
 
 
 def ui_label(version: str) -> str:
-    """界面/发布标签：1.6.0 -> v1.6（与既有 v1.6 命名和 Release 资产一致）。"""
-    major, minor, _patch = semver(version)
+    """界面/发布标签：patch=0 用 v<major>.<minor>（兼容既有 v1.6），
+    patch>0 用完整 v<major>.<minor>.<patch>（如 v1.7.1），保证同一个 tag 不重复用于多个补丁版本。
+    """
+    major, minor, patch = semver(version)
+    if patch:
+        return "v%d.%d.%d" % (major, minor, patch)
     return "v%d.%d" % (major, minor)
 
 

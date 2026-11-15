@@ -36,20 +36,23 @@ class VersionModuleTest(unittest.TestCase):
     def test_repo_version_file_is_valid(self):
         info = version_mod.load(ROOT)
         self.assertEqual(info["product"], "PaperLibrary")
-        self.assertEqual(info["version"], "1.6.0")
-        self.assertEqual(info["tag"], "v1.6")
-        self.assertEqual(version_mod.ui_label(info["version"]), info["tag"])
+        version_mod.semver(info["version"])
+        self.assertEqual(info["tag"], version_mod.ui_label(info["version"]))
 
-    def test_ui_label_uses_major_minor(self):
+    def test_ui_label_tag_rule(self):
+        # patch=0 用短标签（兼容既有 v1.6）；patch>0 用完整 vX.Y.Z，避免同一 tag 复用于多个补丁版本
         self.assertEqual(version_mod.ui_label("1.6.0"), "v1.6")
-        self.assertEqual(version_mod.ui_label("12.34.5"), "v12.34")
-        self.assertNotEqual(version_mod.ui_label("1.6.1"), "v1.6.1")
+        self.assertEqual(version_mod.ui_label("12.34.0"), "v12.34")
+        self.assertEqual(version_mod.ui_label("1.7.1"), "v1.7.1")
+        self.assertEqual(version_mod.ui_label("12.34.5"), "v12.34.5")
 
     def test_rejects_bad_records(self):
         cases = [
             ({"product": "Other", "version": "1.6.0", "tag": "v1.6"}, "product"),
             ({"product": "PaperLibrary", "version": "1.6", "tag": "v1.6"}, "x.y.z"),
             ({"product": "PaperLibrary", "version": "1.6.0", "tag": "v1.7"}, "tag"),
+            ({"product": "PaperLibrary", "version": "1.7.1", "tag": "v1.7"}, "tag"),
+            ({"product": "PaperLibrary", "version": "1.7.0", "tag": "v1.7.0"}, "tag"),
             ({"product": "PaperLibrary", "version": "1.6.0"}, "缺少字段"),
             ({"product": "PaperLibrary", "version": "1.6.0", "tag": "v1.6", "builtAt": "2026/11/15"},
              "builtAt"),
@@ -71,7 +74,7 @@ class VersionModuleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "version.json").write_text(
-                json.dumps({"product": "PaperLibrary", "version": "2.3.4", "tag": "v2.3"}),
+                json.dumps({"product": "PaperLibrary", "version": "2.3.4", "tag": "v2.3.4"}),
                 encoding="utf-8")
             record = version_mod.build_record(root, built_at="2026-12-01T00:00:00Z", commit="unknown")
             version_mod.validate(record, require_build=True)
@@ -131,7 +134,7 @@ class VersionCheckTest(unittest.TestCase):
     def test_repo_passes_consistency_check(self):
         problems, info = version_check.run(ROOT)
         self.assertEqual(problems, [])
-        self.assertEqual(info["tag"], "v1.6")
+        self.assertEqual(info["tag"], version_mod.ui_label(info["version"]))
 
     def test_detects_hardcoded_version(self):
         with tempfile.TemporaryDirectory() as tmp:

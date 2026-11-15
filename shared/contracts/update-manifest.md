@@ -25,7 +25,7 @@
 | `product` | string | 必须为 `"PaperLibrary"` | 产品标识，拒绝未知产品 |
 | `channel` | string | 必须为 `"stable"` | 渠道；灰度/分渠道属于后续扩展 |
 | `version` | string | `x.y.z` 语义化版本 | 更新比较用（semver），如 `1.6.0` |
-| `tag` | string | 必须等于 `v<major>.<minor>` | 发布标签/界面显示用，如 `v1.6`（由 `version` 推导） |
+| `tag` | string | patch=0 时等于 `v<major>.<minor>`；patch>0 时等于完整 `v<major>.<minor>.<patch>` | 发布标签/界面显示用（由 `version` 推导，如 `v1.6`、`v1.7.1`） |
 | `publishedAt` | string | UTC ISO8601 `YYYY-MM-DDTHH:MM:SSZ` | 发布时间 |
 | `releaseNotesUrl` | string | https + `github.com` + 路径含 `/releases/` | 更新说明页面 |
 | `minWindows` | string | `x.y.z` 形式 | 最低 Windows 版本；**取值待确认**（样例用原文示例 `10.0.17763`，不代表最终决定） |

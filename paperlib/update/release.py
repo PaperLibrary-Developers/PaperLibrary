@@ -21,7 +21,7 @@ REPO = "PaperLibrary-Developers/PaperLibrary"
 LAUNCHER = "PaperLibrary.exe"
 VERSION_FILE = "version.json"
 MANIFEST_NAME = "update-manifest.json"
-TAG_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+TAG_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$")
 
 # 资产 URL 允许的主机（清单里固定 github.com）；下载重定向实测落到 release-assets。
 ALLOWED_DOWNLOAD_HOSTS = frozenset({"github.com", "release-assets.githubusercontent.com"})
