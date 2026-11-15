@@ -197,7 +197,7 @@ def main(argv=None, root=None):
     config.boot_ms = int((time.time() - config.started_at) * 1000)
     services.runtime.timing["bootMs"] = config.boot_ms
     print("")
-    print("  PaperLibrary v1.5 Nexus 已启动 →  %s" % url)
+    print("  PaperLibrary v1.6 Nexus 已启动 →  %s" % url)
     print("  数据文件：%s" % store.data_file())
     print("  原文目录：%s" % store.papers_dir)
     print("  补充材料：%s" % store.attachments_dir)

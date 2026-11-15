@@ -93,7 +93,7 @@ import { go } from '../shell/app-api.mjs'
 
   function guideHandler (ctx) {
     const { outlet } = ctx
-    const version = document.documentElement.dataset.uiVersion || 'v1.5'
+    const version = document.documentElement.dataset.uiVersion || 'v1.6'
 
     /* ---------- 页头 ---------- */
     const head = h('div.doc-head',
