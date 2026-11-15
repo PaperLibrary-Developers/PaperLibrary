@@ -76,7 +76,30 @@ PaperLibraryUpdater.exe replace-program --program-root DIR --staging DIR  [--new
 - helper 不读取/执行 manifest 中的脚本；staging 已由 Python 端完成签名、大小、SHA-256 与
   安全解压校验（P2-02~P2-04），helper 只做文件操作与关键文件一致性校验。
 
-## 4. 与后续步骤的边界
+## 4. 数据备份（P2-15）
+
+安装前必须先把用户数据复制到 `<program-root>/data/backups/update-<newVersion>/`：
+
+```text
+PaperLibraryUpdater.exe backup-data --program-root DIR --new-version X [--keep N]
+```
+
+- 备份清单（固定）：`library.db`、`library.db-wal`、`library.db-shm`、
+  `prefs.json`、`settings.json`、`sources.json`；存在的文件逐个复制并校验 SHA-256，
+  不存在的可选文件记入 `missing`；
+- **`library.db` 缺失 → `library-db-missing`，中止安装**（不能保证可恢复）；
+  `data/` 缺失 → `data-missing`；备份项是目录/复制校验失败 → `data-backup-failed`；
+- 先写临时目录 `update-<version>.tmp-<random>`，完成并写 `data-backup.json` 后
+  一次性改名；失败清理临时目录，不留半份备份；
+- 幂等：已有同版本备份且与当前源文件哈希完全一致 → `idempotent=true`，不重写；
+  源数据已变化 → `data-backup-exists`，不覆盖旧备份（由用户/后续流程决策）；
+- 保留策略：默认保留最近 3 份 `update-*`，当前新备份始终保留（`--keep 1..50`）；
+- `data-backup.json` 字段：schema/product/newVersion/programRoot/backupDir/files/bytes/
+  databaseIncluded/missing/items[{name,bytes,sha256}]/createdAt；
+- 恢复方式：把备份目录内文件复制回 `data/`（P2-16 在回滚时自动执行），文件哈希与
+  `data-backup.json` 一致；不删除旧数据，更新失败可回到旧版本。
+
+## 5. 与后续步骤的边界
 
 - P2-15：在备份程序文件前把 `library.db` 与设置文件备份到
   `data/backups/update-<newVersion>/`；失败中止安装。
@@ -85,7 +108,8 @@ PaperLibraryUpdater.exe replace-program --program-root DIR --staging DIR  [--new
   启动器下次启动检测未完成 journal 时恢复旧版本；本契约的 `backup.json` 是回滚依据。
 - P2-17：新版本健康检查失败时用备份恢复程序文件。
 
-## 5. 待确认（不猜值）
+## 6. 待确认（不猜值）
 
-1. 备份保留时长/数量（原文建议 1–7 天或一个旧版本）：P2-14 只创建备份，清理策略待 P2-16 确定。
+1. 备份保留时长/数量（原文建议 1–7 天或一个旧版本）：程序备份在 P2-16 定；数据备份当前
+   默认保留最近 3 份（`--keep` 可调），待产品确认。
 2. 杀软/索引器占用导致 `Directory.Move`/`File.Copy` 失败时的等待/重试参数（P2-13/P2-18 定）。

@@ -118,6 +118,8 @@ internal static class UpdaterHelper
                     return BackupProgramCommand(options, log);
                 case "replace-program":
                     return ReplaceProgramCommand(options, log);
+                case "backup-data":
+                    return BackupDataCommand(options, log);
                 case "help":
                     Usage();
                     return 0;
@@ -339,6 +341,244 @@ internal static class UpdaterHelper
             J("waitedMs", waited),
             J("log", log.Path)));
         return 0;
+    }
+
+    // ---------- data backup (P2-15) ----------
+    //
+    // The database and settings live in <program-root>\data. A full package replacement
+    // never touches data/, but a failed launch/data migration must still be recoverable,
+    // so the update flow copies library.db + settings into data\backups\update-<newVersion>\
+    // before any program file is moved. Missing library.db aborts the install; optional
+    // settings that do not exist are recorded as missing instead of failing.
+
+    private const string DataBackupMarker = "data-backup.json";
+
+    private static readonly string[] DataBackupNames = new string[]
+    {
+        "library.db", "library.db-wal", "library.db-shm",
+        "prefs.json", "settings.json", "sources.json",
+    };
+
+    private static int BackupDataCommand(Dictionary<string, string> options, HelperLog log)
+    {
+        string programRoot = RequiredPath(options, "program-root");
+        string newVersion = Opt(options, "new-version");
+        if (string.IsNullOrEmpty(newVersion))
+            throw new HelperFailure("missing-argument", "--new-version is required");
+        ValidateVersionText(newVersion, "new-version");
+        ValidateProgramRoot(programRoot);
+
+        int keep = 3;
+        string rawKeep = Opt(options, "keep");
+        if (!string.IsNullOrEmpty(rawKeep)
+            && (!int.TryParse(rawKeep, NumberStyles.Integer, CultureInfo.InvariantCulture, out keep)
+                || keep < 1 || keep > 50))
+            throw new HelperFailure("invalid-argument", "--keep must be 1-50");
+
+        string dataDir = System.IO.Path.Combine(programRoot, "data");
+        if (!Directory.Exists(dataDir))
+            throw new HelperFailure("data-missing", "数据目录不存在：" + dataDir);
+        string backupsRoot = System.IO.Path.Combine(dataDir, "backups");
+        string finalDir = System.IO.Path.Combine(backupsRoot, "update-" + newVersion);
+        if (!IsWithin(backupsRoot, finalDir))
+            throw new HelperFailure("unsafe-path", "数据备份目录越界：" + finalDir);
+
+        string dbPath = System.IO.Path.Combine(dataDir, "library.db");
+        if (Directory.Exists(dbPath))
+            throw new HelperFailure("data-backup-failed", "library.db 不是文件：" + dbPath);
+        if (!File.Exists(dbPath))
+            throw new HelperFailure("library-db-missing",
+                "缺少 library.db，无法保证数据可恢复；中止安装：" + dbPath);
+
+        if (Directory.Exists(finalDir))
+        {
+            string existingMarker = System.IO.Path.Combine(finalDir, DataBackupMarker);
+            if (IsDataBackupCurrent(dataDir, finalDir))
+            {
+                List<string> missingNow = new List<string>();
+                foreach (string name in DataBackupNames)
+                    if (!File.Exists(System.IO.Path.Combine(dataDir, name))) missingNow.Add(name);
+                Console.WriteLine(Obj(
+                    JB("ok", true),
+                    J("command", "backup-data"),
+                    J("programRoot", programRoot),
+                    J("backupDir", finalDir),
+                    J("newVersion", newVersion),
+                    JB("idempotent", true),
+                    Raw("missing", Arr(ToJsonStrings(missingNow))),
+                    Raw("kept", Arr(ToJsonStrings(PruneDataBackups(backupsRoot, finalDir, keep))))));
+                log.Write("backup-data: idempotent, existing backup matches source: " + finalDir);
+                return 0;
+            }
+            if (File.Exists(existingMarker))
+                throw new HelperFailure("data-backup-exists",
+                    "已存在内容不同的数据备份（不覆盖）：" + finalDir);
+            throw new HelperFailure("data-backup-exists", "数据备份目录已存在且非空：" + finalDir);
+        }
+
+        Directory.CreateDirectory(backupsRoot);
+        string tempDir = System.IO.Path.Combine(
+            backupsRoot, "update-" + newVersion + ".tmp-" + Guid.NewGuid().ToString("N"));
+        List<string> items = new List<string>();
+        List<string> missing = new List<string>();
+        long totalBytes = 0;
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            foreach (string name in DataBackupNames)
+            {
+                string source = System.IO.Path.Combine(dataDir, name);
+                if (Directory.Exists(source))
+                    throw new HelperFailure("data-backup-failed", "数据项不是文件：" + source);
+                if (!File.Exists(source))
+                {
+                    missing.Add(name);
+                    continue;
+                }
+                string target = System.IO.Path.Combine(tempDir, name);
+                File.Copy(source, target, false);
+                string sourceHash = FileSha256(source);
+                string targetHash = FileSha256(target);
+                if (sourceHash.Length == 0 || sourceHash != targetHash)
+                    throw new HelperFailure("data-backup-failed", "数据备份校验失败：" + name);
+                long size = new FileInfo(target).Length;
+                totalBytes += size;
+                items.Add(Obj(J("name", name), J("bytes", size), J("sha256", sourceHash)));
+            }
+
+            string record = Obj(
+                J("schema", 1L),
+                J("product", HelperInfo.Product),
+                J("newVersion", newVersion),
+                J("programRoot", programRoot),
+                J("backupDir", finalDir),
+                J("files", (long)(DataBackupNames.Length - missing.Count)),
+                J("bytes", totalBytes),
+                JB("databaseIncluded", true),
+                Raw("missing", Arr(ToJsonStrings(missing))),
+                J("createdAt", NowIso()),
+                Raw("items", Arr(items.ToArray())));
+            WriteTextAtomic(System.IO.Path.Combine(tempDir, DataBackupMarker), record);
+
+            if (Directory.Exists(finalDir))
+                throw new HelperFailure("data-backup-exists", "数据备份目录已存在：" + finalDir);
+            Directory.Move(tempDir, finalDir);
+        }
+        catch (HelperFailure)
+        {
+            CleanupDir(tempDir);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            CleanupDir(tempDir);
+            throw new HelperFailure("data-backup-failed", "数据备份失败：" + ex.Message);
+        }
+
+        List<string> kept = PruneDataBackups(backupsRoot, finalDir, keep);
+        Console.WriteLine(Obj(
+            JB("ok", true),
+            J("command", "backup-data"),
+            J("programRoot", programRoot),
+            J("backupDir", finalDir),
+            J("newVersion", newVersion),
+            JB("idempotent", false),
+            J("files", (long)(DataBackupNames.Length - missing.Count)),
+            J("bytes", totalBytes),
+            JB("databaseIncluded", true),
+            Raw("missing", Arr(ToJsonStrings(missing))),
+            Raw("kept", Arr(ToJsonStrings(kept))),
+            Raw("items", Arr(items.ToArray()))));
+        log.Write("backup-data: " + (DataBackupNames.Length - missing.Count) + " files / "
+                  + totalBytes + " bytes -> " + finalDir + " missing=" + missing.Count);
+        return 0;
+    }
+
+    private static bool IsDataBackupCurrent(string dataDir, string backupDir)
+    {
+        bool sawAny = false;
+        foreach (string name in DataBackupNames)
+        {
+            string source = System.IO.Path.Combine(dataDir, name);
+            string target = System.IO.Path.Combine(backupDir, name);
+            if (File.Exists(source))
+            {
+                sawAny = true;
+                if (!File.Exists(target)) return false;
+                string sourceHash = FileSha256(source);
+                if (sourceHash.Length == 0 || sourceHash != FileSha256(target)) return false;
+            }
+            else if (File.Exists(target))
+            {
+                return false;
+            }
+        }
+        return sawAny;
+    }
+
+    private static List<string> PruneDataBackups(string backupsRoot, string keepName, int keep)
+    {
+        List<string> candidates = new List<string>();
+        List<string> kept = new List<string>();
+        if (!Directory.Exists(backupsRoot)) return kept;
+        foreach (string dir in Directory.GetDirectories(backupsRoot))
+        {
+            string name = System.IO.Path.GetFileName(dir);
+            if (!name.StartsWith("update-", StringComparison.OrdinalIgnoreCase)) continue;
+            if (name.IndexOf(".tmp-", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+            if (!IsVersionText(name.Substring("update-".Length))) continue;
+            candidates.Add(dir);
+        }
+        candidates.Sort(delegate(string left, string right)
+        {
+            int[] a = VersionKey(System.IO.Path.GetFileName(left));
+            int[] b = VersionKey(System.IO.Path.GetFileName(right));
+            for (int i = 0; i < 3; i++)
+            {
+                int cmp = b[i].CompareTo(a[i]);
+                if (cmp != 0) return cmp;
+            }
+            return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
+        });
+        if (!string.IsNullOrEmpty(keepName) && Directory.Exists(keepName)) kept.Add(keepName);
+        foreach (string dir in candidates)
+        {
+            if (kept.Count >= keep) break;
+            if (!kept.Contains(dir)) kept.Add(dir);
+        }
+        foreach (string dir in candidates)
+        {
+            if (kept.Contains(dir)) continue;
+            try { Directory.Delete(dir, true); } catch (Exception) { }
+        }
+        return kept;
+    }
+
+    private static int[] VersionKey(string backupName)
+    {
+        string version = backupName.StartsWith("update-", StringComparison.OrdinalIgnoreCase)
+            ? backupName.Substring("update-".Length) : backupName;
+        string[] parts = version.Split('.');
+        int[] key = new int[3];
+        for (int i = 0; i < 3 && i < parts.Length; i++)
+            int.TryParse(parts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out key[i]);
+        return key;
+    }
+
+    private static bool IsVersionText(string value)
+    {
+        return !string.IsNullOrEmpty(value) && Regex.IsMatch(value, "^[0-9]+\\.[0-9]+\\.[0-9]+$");
+    }
+
+    private static void CleanupDir(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, true);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     // ---------- install: plan / backup / replace (P2-14) ----------
@@ -782,6 +1022,7 @@ internal static class UpdaterHelper
         if (options.ContainsKey("plan-replace")) return "plan-replace";
         if (options.ContainsKey("backup-program")) return "backup-program";
         if (options.ContainsKey("replace-program")) return "replace-program";
+        if (options.ContainsKey("backup-data")) return "backup-data";
         if (positional.Count > 0) return positional[0].ToLowerInvariant();
         return "help";
     }
@@ -1008,6 +1249,8 @@ internal static class UpdaterHelper
         Console.Error.WriteLine("                                  move program files (not data/) into the backup dir");
         Console.Error.WriteLine("  replace-program --program-root DIR --staging DIR [--new-version X]");
         Console.Error.WriteLine("                                  copy staging over the empty program root");
+        Console.Error.WriteLine("  backup-data --program-root DIR --new-version X [--keep N]");
+        Console.Error.WriteLine("                                  copy library.db + settings into data/backups/update-X (default keep 3)");
         Console.Error.WriteLine("options:");
         Console.Error.WriteLine("  --updater-home DIR   override %LOCALAPPDATA%\\PaperLibrary\\updater");
         Console.Error.WriteLine("  --log FILE           log file (default <updater-home>\\logs\\updater.log)");
