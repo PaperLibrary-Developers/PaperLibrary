@@ -221,6 +221,13 @@ def publish(tag: str, assets, notes_file: str, pubkey_b64: str):
         raise PublishError(reason)
     commit = (run(["git", "rev-parse", "HEAD"]).stdout or "").strip()
     log("tag 将指向 %s" % commit[:12])
+    # 先推送当前分支，保证 main 与 tag/Release 指向同一份代码
+    branch = (run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout or "").strip()
+    if branch and branch != "HEAD":
+        proc = run(["git", "push", "origin", branch])
+        if proc.returncode != 0:
+            raise PublishError("推送分支 %s 失败：%s" % (branch, (proc.stderr or proc.stdout or "")[-400:]))
+        log("已推送分支 " + branch)
     proc = run(["git", "tag", "-a", tag, "-m", "PaperLibrary %s" % tag])
     if proc.returncode != 0:
         raise PublishError("创建 tag 失败：" + (proc.stderr or ""))
