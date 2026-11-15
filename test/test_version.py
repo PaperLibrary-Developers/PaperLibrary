@@ -92,6 +92,66 @@ class VersionModuleTest(unittest.TestCase):
             self.assertIn("version.json", str(ctx.exception))
 
 
+class _FakeCtx:
+    """api.system.version 用到的最小 ctx：只记录 json/fail 的结果。"""
+
+    def __init__(self, root):
+        from types import SimpleNamespace
+
+        self.services = SimpleNamespace(runtime=SimpleNamespace(root=root))
+        self.response = None
+
+    def json(self, status, data):
+        self.response = (status, data)
+
+    def fail(self, status, message, extra=None):
+        body = {"ok": False, "error": message}
+        if extra:
+            body.update(extra)
+        self.response = (status, body)
+
+
+class VersionEndpointErrorTest(unittest.TestCase):
+    """P1-01：/api/version 的契约测试（成功 + version.json 缺失/损坏的明确错误）。"""
+
+    def call(self, root):
+        from paperlib.api import system
+
+        ctx = _FakeCtx(root)
+        system.version(ctx)
+        return ctx.response
+
+    def test_missing_version_file_is_clear_500(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status, data = self.call(Path(tmp))
+        self.assertEqual(status, 500)
+        self.assertFalse(data["ok"])
+        self.assertIn("version.json", data["error"])
+        self.assertIn("缺少", data["error"])
+
+    def test_broken_version_file_is_clear_500(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "version.json").write_text("{not json", encoding="utf-8")
+            status, data = self.call(Path(tmp))
+        self.assertEqual(status, 500)
+        self.assertIn("JSON", data["error"])
+
+    def test_valid_version_file_returns_contract_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "version.json").write_text(
+                json.dumps({"product": "PaperLibrary", "version": "1.7.1", "tag": "v1.7.1"}),
+                encoding="utf-8")
+            status, data = self.call(Path(tmp))
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["product"], "PaperLibrary")
+        self.assertEqual(data["version"], "1.7.1")
+        self.assertEqual(data["tag"], "v1.7.1")
+        self.assertEqual(data["ui"], "v1.7.1")
+        self.assertEqual(data["builtAt"], "")
+        self.assertEqual(data["commit"], "")
+
+
 class VersionEndpointTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
