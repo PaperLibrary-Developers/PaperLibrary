@@ -17,6 +17,7 @@ from paperlib.api import ai as ai_api
 from paperlib.api import chat as chat_api
 from paperlib.domain import ai as ai_domain
 from paperlib.domain import chat as chat_domain
+from paperlib.adapters.llm import LLMError
 from paperlib.domain import fullread
 from test.test_ai import AiTestBase, FakeCtx
 
@@ -115,6 +116,49 @@ class FullReadSummaryTests(AiTestBase):
         self.assertIn("全文（正文 + 全部补充材料 SI，未截断）", final_user)
         done = frames[-1]
         self.assertEqual(done["fullRead"]["totalChars"], 800)
+
+    def test_final_summary_gets_min_output_budget(self):
+        """总结最终请求至少给 SUMMARY_MIN_MAX_TOKENS，避免思考型模型把预算用光。"""
+        services = self.make_services(api_key="sk-test")
+        paper = self.add_paper(title="Budget Paper")
+        services.fulltext.save(paper["id"], "正文内容" * 100)
+
+        class BudgetLLM(RecordingLLM):
+            def __init__(self):
+                super().__init__("总结")
+                self.stream_options = []
+
+            def stream(self, on_delta=None, options=None):
+                self.stream_options.append(dict(options or {}))
+                return super().stream(on_delta, options)
+
+        llm = BudgetLLM()
+        services.llm = llm
+        ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(FakeCtx(services)))
+        self.assertGreaterEqual(llm.stream_options[-1]["maxTokens"],
+                                ai_domain.SUMMARY_MIN_MAX_TOKENS)
+
+    def test_map_budget_covers_reasoning_models(self):
+        self.assertGreaterEqual(fullread.MAP_MAX_TOKENS, 2000)
+
+    def test_map_retries_with_larger_budget_when_truncated(self):
+        """第一次因 finish_reason=length 空回复时，第二次要用更大预算重试。"""
+        class TruncatingLLM:
+            def __init__(self):
+                self.budgets = []
+
+            def chat(self, messages=None, options=None):
+                self.budgets.append((options or {}).get("maxTokens"))
+                if len(self.budgets) == 1:
+                    raise LLMError("模型输出被 max_tokens 截断（finish_reason=length）")
+                return {"text": "重试后的要点"}
+
+        llm = TruncatingLLM()
+        notes = fullread.map_chunks(llm, [{"label": "正文", "text": "x"}], "sys",
+                                    lambda chunk, index, count: "user")
+        self.assertEqual(notes[0]["text"], "重试后的要点")
+        self.assertEqual(llm.budgets[0], fullread.MAP_MAX_TOKENS)
+        self.assertGreaterEqual(llm.budgets[1], 4000)
 
     def test_map_reduce_processes_every_chunk(self):
         services = self.make_services(api_key="sk-test")

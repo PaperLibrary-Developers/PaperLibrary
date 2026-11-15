@@ -12,7 +12,10 @@ import os
 
 DIRECT_LIMIT = 40000      # 单次完整送入的字符上限（保守值，兼容 64k 上下文模型）
 CHUNK_CHARS = 48000       # 分段上限（每段都完整送给模型）
-MAP_MAX_TOKENS = 1000     # 单段提炼的输出上限
+# 单段提炼的输出上限。OpenAI 兼容的思考型模型会先输出 reasoning_content，
+# 并发 token 计入 completion_tokens；1000 会被思考吃光、正文为空（实测），
+# 所以留出余量。单个片段提炼的实际正文约 700–1500 字，2000 足够正常收尾。
+MAP_MAX_TOKENS = 2000
 
 
 class FullReadError(RuntimeError):
@@ -247,14 +250,18 @@ def map_chunks(llm, chunks, system_prompt, build_user, max_tokens=MAP_MAX_TOKENS
         ]
         text = ""
         last_error = None
+        budget = int(max_tokens or MAP_MAX_TOKENS)
         for _attempt in (1, 2):
             try:
-                text = _response_text(llm.chat(messages, {"maxTokens": max_tokens, "temperature": 0.1})).strip()
+                text = _response_text(llm.chat(messages, {"maxTokens": budget, "temperature": 0.1})).strip()
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 text = ""
             if text:
                 break
+            # 空回复时（典型原因：思考内容把输出预算用光，finish_reason=length）
+            # 用更大的预算再试一次，而不是原样重试一次。
+            budget = max(budget * 2, 4000)
         if not text:
             raise FullReadError("第 %d/%d 段（%s）读取失败：%s"
                                 % (index, total, chunk.get("label"), last_error or "模型没有返回内容"))

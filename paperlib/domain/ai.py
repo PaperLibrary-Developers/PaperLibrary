@@ -22,6 +22,11 @@ from paperlib.domain import fullread
 from paperlib.util import now_iso
 
 PROMPT_CHARS = 12000          # 送给大模型的正文上限
+# 输出预算下限：思考型模型会先花掉一部分预算，用户设置里的 maxTokens（默认 1200）
+# 常常不够。结构化总结要写四节 Markdown（实测约 1500–2500 字），给 4000；
+# 一句话总结/翻译较短，给 2000。这只是上限，不会强制消耗。
+SUMMARY_MIN_MAX_TOKENS = 4000
+SUMMARY_ZH_MIN_MAX_TOKENS = 2000
 ATT_PART_CHARS = 4000         # 单个补充材料片段上限
 ATT_TOTAL_CHARS = 12000       # 补充材料合计上限
 ZH_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -136,6 +141,15 @@ def _summary_prepare(services, paper, use_fulltext):
     return fullread.prepare(services, paper)
 
 
+def _output_budget(llm, minimum):
+    """请求的 max_tokens：用户配置与「本次调用的下限」取大者。"""
+    try:
+        configured = int(llm.settings.get("maxTokens") or 1200)
+    except (TypeError, ValueError):
+        configured = 1200
+    return max(int(minimum), configured)
+
+
 def _run_summary(services, paper, options, emit=None, on_delta=None, auto_extract=None):
     """完整读入正文 + 全部 SI 后总结；返回 {"text","usage","coverage"}。"""
     llm = services.llm
@@ -184,10 +198,14 @@ def _run_summary(services, paper, options, emit=None, on_delta=None, auto_extrac
         system = system + ("\n\n" if system else "") + note
     user = (llm.build_user_message(paper, material, label=label) if material
             else llm.build_user_message(paper, ""))
-    result = llm.stream(on_delta, {"messages": [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]})
+    result = llm.stream(on_delta, {
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        # 总结比翻译长得多；给足输出预算，避免思考型模型把预算用光后截断/空回复。
+        "maxTokens": _output_budget(llm, SUMMARY_MIN_MAX_TOKENS),
+    })
     text = strip_echoed_material(str((result or {}).get("text") or ""))
     return {"text": text, "usage": (result or {}).get("usage") or None, "coverage": coverage}
 
@@ -257,6 +275,9 @@ def summary_zh(services, paper, options=None):
                 {"role": "user", "content": _meta_line(paper) + "\n\n" + "\n\n".join(parts)},
             ],
             "timeoutMs": 120000,
+            # 推理模型先输出思考内容，1200 常常不够一句话总结/翻译 + 思考；
+            # 给足预算，避免空回复或半截译文。
+            "maxTokens": _output_budget(llm, SUMMARY_ZH_MIN_MAX_TOKENS),
         })
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "status": 502,

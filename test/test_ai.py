@@ -382,6 +382,42 @@ class LLMCallTests(AiTestBase):
             llm.stream(None, {"messages": []})
         self.assertIn("连不上模型接口", str(ctx.exception))
 
+    def test_empty_reply_with_length_is_actionable(self):
+        """思考型模型把输出预算用光时，要给出可诊断原因，不能只回空字符串。"""
+        self.fake.set({"json": {"choices": [{
+            "finish_reason": "length",
+            "message": {"role": "assistant", "content": "",
+                        "reasoning_content": "想了很多，但预算用完了"}}]}})
+        with self.assertRaises(Exception) as ctx:
+            self.client().chat([{"role": "user", "content": "hi"}])
+        self.assertIn("max_tokens", str(ctx.exception))
+        self.assertIn("截断", str(ctx.exception))
+
+    def test_empty_reply_with_reasoning_only_is_actionable(self):
+        self.fake.set({"json": {"choices": [{
+            "finish_reason": "stop",
+            "message": {"role": "assistant", "content": "",
+                        "reasoning_content": "只有思考"}}]}})
+        with self.assertRaises(Exception) as ctx:
+            self.client().chat([{"role": "user", "content": "hi"}])
+        self.assertIn("思考内容", str(ctx.exception))
+
+    def test_chat_reports_finish_reason(self):
+        self.fake.set({"json": {"choices": [{
+            "finish_reason": "stop", "message": {"content": "正文"}}]}})
+        result = self.client().chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(result["finish_reason"], "stop")
+        self.assertEqual(result["text"], "正文")
+
+    def test_stream_empty_with_length_is_actionable(self):
+        self.fake.set({"sse": [
+            {"choices": [{"delta": {"reasoning_content": "想了很久"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "length"}]},
+        ]})
+        with self.assertRaises(Exception) as ctx:
+            self.client().stream(None, {"messages": [{"role": "user", "content": "hi"}]})
+        self.assertIn("max_tokens", str(ctx.exception))
+
     def test_test_endpoint_helper(self):
         self.fake.set({"sse": [delta("连接正常")]})
         result = self.client().test()

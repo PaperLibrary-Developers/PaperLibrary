@@ -113,6 +113,19 @@ def _status_message(status, text):
     return "模型接口返回 %d：%s" % (status, detail)
 
 
+def _empty_llm_message(finish_reason, reasoning):
+    """空回复的可诊断原因：区分「输出预算被思考吃光」与「模型只回了思考」。"""
+    if finish_reason == "length":
+        return ("模型输出被 max_tokens 截断（finish_reason=length），没有可用的正文。"
+                "该模型可能先输出思考内容、把输出预算用光了；请到「设置 → 大模型」"
+                "把 max_tokens 调大（例如 4000），或改用不输出思考过程的模型。")
+    if str(reasoning or "").strip():
+        return ("模型只返回了思考内容、没有正文（finish_reason=%s）。"
+                "请把 max_tokens 调大，或改用不输出思考过程的模型。" % (finish_reason or "无"))
+    return ("模型没有返回内容（finish_reason=%s）。请检查该模型在服务商控制台是否可用，"
+            "或稍后重试。" % (finish_reason or "无"))
+
+
 def _delta_text(chunk):
     """一条 SSE JSON 里的增量文本：优先 choices[0].delta.content，退到 message.content。"""
     if not isinstance(chunk, dict):
@@ -354,6 +367,8 @@ class LLM:
         response = self._open(payload, opts.get("timeoutMs") or DEFAULT_TIMEOUT_MS)
         pieces = []
         usage = None
+        finish_reason = None
+        reasoning_chars = 0
         try:
             for raw in response:
                 line = raw.decode("utf-8", "replace").strip() if isinstance(raw, (bytes, bytearray)) else str(raw).strip()
@@ -373,8 +388,17 @@ class LLM:
                     pieces.append(delta)
                     if on_delta:
                         on_delta(delta)
-                if isinstance(chunk, dict) and chunk.get("usage"):
-                    usage = chunk["usage"]
+                if isinstance(chunk, dict):
+                    choices = chunk.get("choices")
+                    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                        choice = choices[0]
+                        if choice.get("finish_reason"):
+                            finish_reason = str(choice["finish_reason"])
+                        part = choice.get("delta")
+                        if isinstance(part, dict):
+                            reasoning_chars += len(str(part.get("reasoning_content") or ""))
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
         except (socket.timeout, TimeoutError):
             raise LLMError(TIMEOUT_MESSAGE) from None
         finally:
@@ -382,7 +406,10 @@ class LLM:
                 response.close()
             except Exception:  # noqa: BLE001
                 pass
-        return {"text": "".join(pieces), "usage": usage}
+        text = "".join(pieces)
+        if not text.strip() and (finish_reason == "length" or reasoning_chars):
+            raise LLMError(_empty_llm_message(finish_reason, "reasoning" if reasoning_chars else ""))
+        return {"text": text, "usage": usage, "finish_reason": finish_reason}
 
     def chat(self, messages=None, options=None):
         """非流式对话（脚本/测试用）：返回 {"text", "usage"}。"""
@@ -408,17 +435,27 @@ class LLM:
         choices = data.get("choices") if isinstance(data, dict) else None
         if isinstance(choices, list) and choices and isinstance(choices[0], dict):
             choice = choices[0]
+        finish_reason = str(choice.get("finish_reason") or "") or None
         content = ""
+        reasoning = ""
         if self._is_anthropic() and isinstance(data, dict):
             for block in data.get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "text":
                     content += str(block.get("text") or "")
         message = choice.get("message")
-        if isinstance(message, dict) and not content:
-            content = message.get("content") or ""
+        if isinstance(message, dict):
+            # 思考型模型把「思考」放在 reasoning_content：正文可能为空，但思考不是回答，
+            # 不能拿来顶替；这里只用于给出可诊断的错误。
+            reasoning = str(message.get("reasoning_content") or message.get("reasoning") or "")
+            if not content:
+                content = message.get("content") or ""
         if not content:
             content = choice.get("text") or ""
-        return {"text": str(content), "usage": (data or {}).get("usage") if isinstance(data, dict) else None}
+        text = str(content)
+        if not text.strip() and (finish_reason == "length" or reasoning.strip()):
+            raise LLMError(_empty_llm_message(finish_reason, reasoning))
+        return {"text": text, "usage": (data or {}).get("usage") if isinstance(data, dict) else None,
+                "finish_reason": finish_reason}
 
     def chat_stream(self, on_delta=None, options=None):
         """与文献对话用的别名（Node 的 chatStream 就是 stream）。"""
