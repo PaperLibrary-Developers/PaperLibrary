@@ -143,6 +143,49 @@ def main(argv=None):
     print("[release] 启动器已生成：" + LAUNCHER_EXE + "（唯一可见入口，已嵌入图标）")
     print("[release] " + LAUNCHER_CONFIG + " 已隐藏（CLR 仍按 <exe>.config 加载配置）")
 
+    # 包外更新助手（P2-12）：单文件 .NET Framework exe，放在 tools/updater/（绝不在包根）。
+    # 应用先把它复制到 %LOCALAPPDATA%\PaperLibrary\updater\<version>\ 再从包外运行，
+    # 安装替换程序目录时 helper 自身不会被覆盖。
+    updater_ps = target / "tools" / "make_updater.ps1"
+    if not updater_ps.is_file():
+        print("[release] 缺少更新助手构建脚本：tools/make_updater.ps1")
+        return 1
+    try:
+        updater_proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(updater_ps), "-OutDir", str(target)],
+            cwd=str(target), capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=180,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print("[release] 更新助手编译异常：" + str(exc))
+        return 1
+    helper_exe = target / "tools" / "updater" / "PaperLibraryUpdater.exe"
+    helper_meta_path = target / "tools" / "updater" / "helper.json"
+    if updater_proc.returncode != 0 or not helper_exe.is_file() or not helper_meta_path.is_file():
+        print("[release] 更新助手编译失败："
+              + ((updater_proc.stderr or updater_proc.stdout or "")[-400:]))
+        return 1
+    if (target / "PaperLibraryUpdater.exe").exists():
+        print("[release] 更新助手不得位于包根（应为 tools/updater/PaperLibraryUpdater.exe）")
+        return 1
+    try:
+        helper_info = json.loads(helper_meta_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        print("[release] helper.json 无法读取：" + str(exc))
+        return 1
+    helper_sha = hashlib.sha256(helper_exe.read_bytes()).hexdigest()
+    if (helper_info.get("version") != version_record["version"]
+            or helper_info.get("tag") != version_record["tag"]):
+        print("[release] 更新助手版本与 version.json 不一致：%r / %r"
+              % (helper_info.get("version"), helper_info.get("tag")))
+        return 1
+    if helper_info.get("sha256") != helper_sha or helper_info.get("bytes") != helper_exe.stat().st_size:
+        print("[release] 更新助手大小/SHA-256 与 helper.json 不一致")
+        return 1
+    print("[release] 更新助手已生成：tools/updater/PaperLibraryUpdater.exe（%s，包外运行）"
+          % version_record["tag"])
+
     size = tree_size(target)
     breakdown = {
         "runtime": tree_size(target / "runtime") if (target / "runtime").exists() else 0,
@@ -168,11 +211,20 @@ def main(argv=None):
             "launcherConfig": LAUNCHER_CONFIG,
             "launcherConfigHidden": True,
             "note": ".NET CLR 只读取 <exe 文件名>.config；文件名保持原名并设为隐藏，避免与启动器混淆",
+            # P2-12：helper 随包分发但不在包根；由应用复制到包外版本目录后运行。
+            "updater": {
+                "exe": "tools/updater/PaperLibraryUpdater.exe",
+                "meta": "tools/updater/helper.json",
+                "version": helper_info.get("version"),
+                "tag": helper_info.get("tag"),
+                "sha256": helper_sha,
+                "note": "包外自举：复制到 %LOCALAPPDATA%/PaperLibrary/updater/<version>/ 后运行，不随程序目录替换",
+            },
         },
         "sha256": {},
     }
     for key in ("version.json", "paperlib/routes.py", "paperlib/app.py", "public/index.html",
-                LAUNCHER_EXE, LAUNCHER_CONFIG):
+                LAUNCHER_EXE, LAUNCHER_CONFIG, "tools/updater/PaperLibraryUpdater.exe"):
         path = target / key
         if path.is_file():
             manifest["sha256"][key] = hashlib.sha256(path.read_bytes()).hexdigest()

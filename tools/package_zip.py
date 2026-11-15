@@ -87,6 +87,9 @@ def main(argv=None):
         "paperlib/data/store.py": "paperlib/data/store.py" in names,
         "public/index.html": "public/index.html" in names,
         "runtime/portable/python.exe": "runtime/portable/python.exe" in names,
+        # 包外更新助手（P2-12）：随包分发到 tools/updater/，绝不在包根
+        "tools/updater/PaperLibraryUpdater.exe": "tools/updater/PaperLibraryUpdater.exe" in names,
+        "tools/updater/helper.json": "tools/updater/helper.json" in names,
     }
     failed = [k for k, ok in checks.items() if not ok]
     if failed:

@@ -22,3 +22,8 @@ HANDOFF.md
 /keys/
 update-signing-key*.json
 *.ed25519.key
+
+# 更新助手构建产物（tools/make_updater.ps1 生成到发布包；仓库只留源码）
+/tools/updater/*.exe
+/tools/updater/helper.json
+/tools/updater/*.g.cs
