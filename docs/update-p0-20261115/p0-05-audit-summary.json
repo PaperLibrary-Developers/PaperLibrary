@@ -37,31 +37,31 @@
   "highFindings": [
     {
       "kind": "user_data_in_history:user_backups",
-      "where": "history:data/backups/library-2026-11-03T15-08-50-422Z.json@3d87bd83c9"
+      "where": "history:data/backups/library-2026-11-03T15-08-50-422Z.json"
     },
     {
       "kind": "user_data_in_history:user_backups",
-      "where": "history:data/backups/library-2026-11-03T15-33-18-711Z.json@de44908891"
+      "where": "history:data/backups/library-2026-11-03T15-33-18-711Z.json"
     },
     {
       "kind": "user_data_in_history:user_backups",
-      "where": "history:data/backups/library-2026-11-03T15-37-47-600Z.json@71b494e47f"
+      "where": "history:data/backups/library-2026-11-03T15-37-47-600Z.json"
     },
     {
       "kind": "user_data_in_history:user_fulltext",
-      "where": "history:data/fulltext/d61693e220deafac.txt@805740b1f6"
+      "where": "history:data/fulltext/d61693e220deafac.txt"
     },
     {
       "kind": "user_data_in_history:user_prefs",
-      "where": "history:data/prefs.json@c2f8a998de"
+      "where": "history:data/prefs.json"
     },
     {
       "kind": "user_data_in_history:user_logs",
-      "where": "history:data/server.log@13634e8c9b"
+      "where": "history:data/server.log"
     },
     {
       "kind": "user_data_in_history:user_database",
-      "where": "history:app/data/papers.db@cd01db09c8"
+      "where": "history:app/data/papers.db"
     }
   ],
   "mediumByArea": {
