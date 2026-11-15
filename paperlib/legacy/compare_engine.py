@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """多篇同类文献横向对比（模板 + Map-Reduce + 离线降级）。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\compare_engine.py
+移植自 旧 PaperLibrary 工程\\compare_engine.py
 契约名：compare.templates / compare.run（GET /api/compare/templates、POST /api/compare）
 
 与旧版的差异：

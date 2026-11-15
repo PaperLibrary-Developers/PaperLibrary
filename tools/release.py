@@ -48,6 +48,14 @@ def is_hidden(path: Path) -> bool:
     return bool(attrs & stat.FILE_ATTRIBUTE_HIDDEN)
 
 
+def relative_target(root, target) -> str:
+    """分发清单里的构建目录：相对仓库根，绝不写本机绝对路径（用户名/目录会随包公开）。"""
+    try:
+        return Path(target).relative_to(Path(root)).as_posix()
+    except ValueError:
+        return Path(target).name
+
+
 def tree_size(path: Path) -> int:
     total = 0
     for root, dirs, files in os.walk(path):
@@ -142,6 +150,7 @@ def main(argv=None):
         "public": tree_size(target / "public"),
         "code": tree_size(target / "paperlib") + tree_size(target / "shared") + tree_size(target / "tools"),
     }
+    target_rel = relative_target(ROOT, target)
     manifest = {
         # 与包根 version.json 的 builtAt 完全一致（验收：release-manifest.json 与 version.json 可对应）
         "builtAt": version_record["builtAt"],
@@ -149,7 +158,7 @@ def main(argv=None):
         "version": version_record["version"],
         "tag": version_record["tag"],
         "commit": version_record["commit"],
-        "target": str(target),
+        "target": target_rel,
         "bytes": size,
         "kb": round(size / 1024),
         "breakdown": {k: round(v / 1048576, 2) for k, v in breakdown.items()},

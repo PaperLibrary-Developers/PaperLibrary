@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """论文深度分析：22 个语义槽位 + 五维评分（无 Key 时本地降级）。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\deep_analysis.py
+移植自 旧 PaperLibrary 工程\\deep_analysis.py
 契约名：deep.get / deep.run（GET|POST /api/papers/:id/deep-analysis）
 
 保留全部能力（G3：22 字段 + 五维评分），同时遵守契约 §7 的 6 个顶层键：

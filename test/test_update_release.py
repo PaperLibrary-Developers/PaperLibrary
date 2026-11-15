@@ -30,6 +30,17 @@ def make_zip(path: Path, entries: dict, version="1.6.0"):
     return path
 
 
+class ReleaseManifestTest(unittest.TestCase):
+    def test_manifest_target_never_contains_local_path(self):
+        from tools import release as release_tool
+
+        self.assertEqual(release_tool.relative_target("C:/repo", "C:/repo/dist/PK"),
+                         "dist/PK")
+        self.assertEqual(release_tool.relative_target("/repo", "/repo/dist/PK"), "dist/PK")
+        # 仓库外的路径只保留末级目录名，绝不回退成绝对路径
+        self.assertEqual(release_tool.relative_target("/repo", "D:/other/PK"), "PK")
+
+
 class NamingTest(unittest.TestCase):
     def test_asset_name(self):
         self.assertEqual(release.asset_name("v1.6"), "PaperLibrary.v1.6.Nexus.zip")

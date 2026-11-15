@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """中英术语表：加载 terms.json 并提供检索 / 中英扩展。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\local_rank.py 的 GLOSSARY
+移植自 旧 PaperLibrary 工程\\local_rank.py 的 GLOSSARY
 （119 条中英术语对照）+ 合并后补充的化学/材料/生物交叉词条，共 155 条。
 契约名：terms.search（GET /api/terms/search）
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """图文双向锚定：图表身份识别 + 正文讨论定位 + 离线结论提炼。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\figure_anchor.py
+移植自 旧 PaperLibrary 工程\\figure_anchor.py
 契约名：figure_anchor（extract_figure_identity / find_figure_mentions_in_paper /
         extract_offline_conclusion）
 

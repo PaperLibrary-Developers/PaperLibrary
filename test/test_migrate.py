@@ -23,8 +23,18 @@ from paperlib.config import Config
 from paperlib.migrate import discover_sources, migrate_from_legacy
 from paperlib.data.store import Store
 
-SCILIB_REAL = Path(r"C:\Users\wzxle\Desktop\WB比赛\Sci-lib\data")
-PAPERLIBRARY_REAL = Path(r"C:\Users\wzxle\Desktop\WB比赛\PaperLibrary\app\data")
+def _real_path(env_name):
+    """真实旧库路径只从环境变量读：仓库与发布包不得写死任何本机路径。"""
+    raw = os.environ.get(env_name, "").strip()
+    return Path(raw) if raw else None
+
+
+SCILIB_REAL = _real_path("PAPERLIB_SCILIB_REAL")
+PAPERLIBRARY_REAL = _real_path("PAPERLIB_PAPERLIBRARY_REAL")
+HAS_REAL_SOURCES = bool(
+    SCILIB_REAL and PAPERLIBRARY_REAL
+    and PAPERLIBRARY_REAL.joinpath("papers.db").is_file()
+    and SCILIB_REAL.joinpath("library.json").is_file())
 
 PL_SCHEMA = """
 CREATE TABLE papers (id TEXT PRIMARY KEY, filename TEXT NOT NULL, title TEXT DEFAULT '',
@@ -503,9 +513,8 @@ class NoSourceTest(MigrateTestCase):
             self.close(store)
 
 
-@unittest.skipUnless(PAPERLIBRARY_REAL.joinpath("papers.db").is_file()
-                     and SCILIB_REAL.joinpath("library.json").is_file(),
-                     "本机没有真实旧库，跳过真实库干跑")
+@unittest.skipUnless(HAS_REAL_SOURCES,
+                     "未设置 PAPERLIB_SCILIB_REAL / PAPERLIB_PAPERLIBRARY_REAL，或本机没有真实旧库；跳过真实库干跑")
 class RealSourcesTest(MigrateTestCase):
     def test_real_dry_run_counts_match_sources(self):
         config = Config(root=ROOT, data_dir=self.tmp / "data")  # root=仓库根 → 默认找同级旧库

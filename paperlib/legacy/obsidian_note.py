@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Obsidian 笔记拼装（只生成文本与媒体清单，不落盘）。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\obsidian_export.py
+移植自 旧 PaperLibrary 工程\\obsidian_export.py
 契约名：export.obsidian（GET /api/export/obsidian → zip 内每篇的 .md）
 
 与旧版的差异：

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """PDF 图表提取（PyMuPDF 渲染 + 图注 bbox/上下文匹配）。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\parser.py（extract_figures）
+移植自 旧 PaperLibrary 工程\\parser.py（extract_figures）
 与 figures_arxiv.py（落盘规则 / 最小体积过滤）。
 契约名：figures（extract_pdf_figures / rows_from_existing_images / resolve_image_path）
 

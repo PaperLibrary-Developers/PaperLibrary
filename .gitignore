@@ -16,3 +16,9 @@ __pycache__/
 /.archify/
 /.workbuddy/
 HANDOFF.md
+
+# 本机密钥（更新签名私钥等）绝不入库
+/.paperlibrary/
+/keys/
+update-signing-key*.json
+*.ed25519.key

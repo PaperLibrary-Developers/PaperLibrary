@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """深度分析的本地降级（无 Key / 调用失败时用，离线目标 G2）。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\deep_analysis.py 的
+移植自 旧 PaperLibrary 工程\\deep_analysis.py 的
 build_context / _normalize 思路，改成「24 语义槽位 + 五维评分」全部由本地信号填。
 契约名：deep.get / deep.run（无 Key 时 200 + 本地结果，fields 里注明未配置大模型）
 

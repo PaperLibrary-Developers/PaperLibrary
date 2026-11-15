@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """基于空间几何（Bounding Box Proximity）的图注精准匹配器。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\caption_matcher.py
+移植自 旧 PaperLibrary 工程\\caption_matcher.py
 契约名：caption_matcher（match_boxes_with_captions / extract_page_captions_with_boxes）
 
 算法与 PaperLibrary 完全一致：

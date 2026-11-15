@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """深度分析的提示词与字段槽位表（从 PaperLibrary 原 SYSTEM JSON 原样搬过来）。
 
-移植自 C:\\Users\\wzxle\\Desktop\\WB比赛\\PaperLibrary\\app\\deep_analysis.py 的 SYSTEM 常量
+移植自 旧 PaperLibrary 工程\\deep_analysis.py 的 SYSTEM 常量
 契约名：deep.get / deep.run（GET|POST /api/papers/:id/deep-analysis）
 
 为什么单独成文件：原提示词有 22 个顶层键（experiments 6 个子槽 + applicability 2 个子槽），

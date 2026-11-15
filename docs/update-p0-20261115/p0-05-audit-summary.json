@@ -1,0 +1,80 @@
+{
+  "generatedAt": "2026-11-15T12:58:01Z",
+  "tool": "tools/audit_sensitive.py",
+  "repo": "PaperLibrary-Developers/PaperLibrary",
+  "visibility": "public",
+  "scanned": {
+    "worktreeTextFiles": 284,
+    "historyBlobs": 978,
+    "historyNote": "runtime/ 与 vendor/ 的第三方 blob 仅计数，不做内容判定（上游测试向量会造成假阳性）",
+    "zips": [
+      "PaperLibrary-20261107-113116-56268.zip",
+      "PaperLibrary-20261115-175324-66224.zip",
+      "PaperLibrary-20261115-213530-13496.zip",
+      "PaperLibrary-v1.1-20261108.zip",
+      "PaperLibrary-v1.3-Nexus.zip",
+      "PaperLibrary-v1.4-Nexus.zip",
+      "PaperLibrary.v1.6.Nexus.zip",
+      "PaperLibrary-20261107.zip",
+      "PaperLibrary-v1.2-Nexus.zip",
+      "PaperLibrary.v1.5.Nexus.zip",
+      "PaperLibrary-20261115-215457-85892.zip"
+    ]
+  },
+  "counts": {
+    "HIGH": 7,
+    "MEDIUM": 297,
+    "zipProblems": 0
+  },
+  "categoryCounts": {
+    "local_user_path": 297,
+    "user_data_in_history:user_backups": 3,
+    "user_data_in_history:user_fulltext": 1,
+    "user_data_in_history:user_prefs": 1,
+    "user_data_in_history:user_logs": 1,
+    "user_data_in_history:user_database": 1
+  },
+  "highFindings": [
+    {
+      "kind": "user_data_in_history:user_backups",
+      "where": "history:data/backups/library-2026-11-03T15-08-50-422Z.json@3d87bd83c9"
+    },
+    {
+      "kind": "user_data_in_history:user_backups",
+      "where": "history:data/backups/library-2026-11-03T15-33-18-711Z.json@de44908891"
+    },
+    {
+      "kind": "user_data_in_history:user_backups",
+      "where": "history:data/backups/library-2026-11-03T15-37-47-600Z.json@71b494e47f"
+    },
+    {
+      "kind": "user_data_in_history:user_fulltext",
+      "where": "history:data/fulltext/d61693e220deafac.txt@805740b1f6"
+    },
+    {
+      "kind": "user_data_in_history:user_prefs",
+      "where": "history:data/prefs.json@c2f8a998de"
+    },
+    {
+      "kind": "user_data_in_history:user_logs",
+      "where": "history:data/server.log@13634e8c9b"
+    },
+    {
+      "kind": "user_data_in_history:user_database",
+      "where": "history:app/data/papers.db@cd01db09c8"
+    }
+  ],
+  "mediumByArea": {
+    "worktree-local-ignored": 4,
+    "worktree-docs": 246,
+    "history": 27,
+    "zip": 20
+  },
+  "zipProblems": [],
+  "conclusions": {
+    "apiKeysOrPrivateKeys": "未发现真实密钥；HIGH 规则命中仅来自第三方 cryptography 源码里的 SSH/测试向量（sk-ssh-*、BEGIN OPENSSH PRIVATE KEY 常量）",
+    "userDataInHistory": "发现（见 highFindings）；仅存在于非 main / 非 v1.x 发布标签的旧分支与旧 tag 历史",
+    "currentTrackedLocalPaths": "已在本步清理；工作区跟踪文件不再含本机用户目录路径（剩余命中为 gitignore 的本地文档/交接文件）",
+    "oldReleaseAssets": "11 个 zip（v1.0-final..v1.6 与本地历史构建）均无 data/、settings、数据库或密钥；旧包含 tools/migrate_fixtures.py 的本机路径字符串，新构建已清理"
+  }
+}

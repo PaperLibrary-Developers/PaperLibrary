@@ -29,8 +29,14 @@ from paperlib.migrate import discover_sources, migrate_from_legacy  # noqa: E402
 from paperlib.data.store import Store  # noqa: E402
 from paperlib.util import dump_json, ensure_dir  # noqa: E402
 
-REAL_SCILIB = Path(r"C:\Users\wzxle\Desktop\WB比赛\Sci-lib\data")
-REAL_PAPERLIBRARY = Path(r"C:\Users\wzxle\Desktop\WB比赛\PaperLibrary\app")
+def _real_path(env_name):
+    """真实旧库路径只从环境变量读：仓库与发布包不得写死任何本机路径。"""
+    raw = os.environ.get(env_name, "").strip()
+    return Path(raw) if raw else None
+
+
+REAL_SCILIB = _real_path("PAPERLIB_SCILIB_REAL")
+REAL_PAPERLIBRARY = _real_path("PAPERLIB_PAPERLIBRARY_REAL")
 
 
 def _config(args):
@@ -113,6 +119,9 @@ def _make_fixture(args):
         shutil.rmtree(target)
     data_dir = ensure_dir(target / "data")
     source = Path(args.source).resolve() if args.source else REAL_PAPERLIBRARY
+    if not source:
+        raise SystemExit("缺少真实 PaperLibrary 路径：用 --source 指定，"
+                         "或设置环境变量 PAPERLIB_PAPERLIBRARY_REAL")
     src_db = (source / "data" / "papers.db") if (source / "data" / "papers.db").is_file() \
         else (source / "papers.db")
     db_target = data_dir / "papers.db"
