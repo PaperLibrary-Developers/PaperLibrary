@@ -109,8 +109,14 @@
     ApiError,    health: () => request('GET', '/api/health'),
     /** 当前产品版本（唯一来源：包根 version.json，服务端 /api/version 转出） */
     getVersion: () => request('GET', '/api/version'),
-    /** 检查更新（阶段 1 只检查，不下载；失败时抛 ApiError，消息可直接展示） */
+    /** 检查更新（只检查，不下载；失败时抛 ApiError，消息可直接展示） */
     checkUpdate: () => request('GET', '/api/update/check'),
+    /** 启动下载/续传（后台下载→校验→staging；重复调用返回当前状态） */
+    startUpdateDownload: () => request('POST', '/api/update/download', { body: {} }),
+    /** 取消当前下载（方案 B：取消即删，不留续传残包） */
+    cancelUpdateDownload: () => request('POST', '/api/update/download', { body: { cancel: true } }),
+    /** 读取下载/校验/staging 状态（只读，不启动任务） */
+    updateStatus: () => request('GET', '/api/update/status'),
     stats: () => request('GET', '/api/stats'),
     tags: () => request('GET', '/api/tags'),
     facets: () => request('GET', '/api/facets'),

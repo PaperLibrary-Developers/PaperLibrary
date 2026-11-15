@@ -294,9 +294,13 @@ class ServiceDownloadTest(unittest.TestCase):
 
 
 class _FakeCtx:
-    def __init__(self, update):
+    def __init__(self, update, body=None):
         self.services = SimpleNamespace(update=update)
         self.response = None
+        self.body = body
+
+    def read_json(self):
+        return self.body
 
     def json(self, status, data):
         self.response = (status, data)
@@ -318,8 +322,8 @@ class ApiDownloadHandlerTest(unittest.TestCase):
                 raise self.error
             return self.result
 
-    def call(self, stub):
-        ctx = _FakeCtx(stub)
+    def call(self, stub, body=None):
+        ctx = _FakeCtx(stub, body=body)
         update_api.download(ctx)
         return ctx.response
 
@@ -345,6 +349,22 @@ class ApiDownloadHandlerTest(unittest.TestCase):
         status, body = self.call(self.Stub(error=check.CheckError("signature", "签名失败")))
         self.assertEqual(status, 502)
         self.assertEqual(body["code"], "signature")
+
+    def test_cancel_action_calls_cancel_and_returns_snapshot(self):
+        class CancelStub:
+            def __init__(self):
+                self.cancelled = 0
+
+            def cancel_download(self):
+                self.cancelled += 1
+                return {"ok": True, "phase": "cancelled", "running": False,
+                        "progress": {"downloadedBytes": 0, "totalBytes": 0, "percent": 0}}
+
+        stub = CancelStub()
+        status, body = self.call(stub, body={"cancel": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["phase"], "cancelled")
+        self.assertEqual(stub.cancelled, 1)
 
     def test_local_version_error_maps_500(self):
         status, body = self.call(self.Stub(error=VersionError("坏 version.json")))

@@ -25,7 +25,8 @@ TEST_SEED = bytes(range(32))
 TEST_PUBLIC = __import__("paperlib.update.ed25519", fromlist=["public_key"]).public_key(TEST_SEED)
 KEYS = {"ok", "phase", "running", "version", "progress", "ready",
         "stagingVersion", "stagingPath", "error", "code", "updatedAt", "lastCheckAt"}
-PHASES = {"idle", "checking", "downloading", "verifying", "extracting", "ready", "failed", "cancelled"}
+PHASES = {"idle", "checking", "downloading", "verifying", "verified", "extracting",
+          "ready", "failed", "cancelled"}
 
 
 def make_root(tmp: Path, version="1.6.0") -> Path:
@@ -177,6 +178,39 @@ class StatusTest(unittest.TestCase):
             thread.join(20)
         self.assertEqual(errors, [])
         self.assertTrue(set(seen).issubset(PHASES))
+        self.assertTrue(svc.wait_idle(30))
+        self.assertEqual(svc.snapshot()["phase"], "ready")
+
+    def test_snapshot_reflects_live_progress_while_downloading(self):
+        gate = threading.Event()
+        entered = threading.Event()
+
+        class ProgressDownloader:
+            def __init__(self, zip_bytes):
+                self.zip_bytes = zip_bytes
+
+            def __call__(self, store_obj, version, asset, cancel_event=None, **kwargs):
+                paths = store_obj.ensure(version)
+                paths.part.write_bytes(b"x" * 1000)
+                store_obj.update_state(version, phase="downloading",
+                                       downloadedBytes=1000, totalBytes=2000)
+                entered.set()
+                gate.wait(10)
+                paths.part.write_bytes(self.zip_bytes)
+                store_obj.update_state(version, phase="downloading",
+                                       downloadedBytes=len(self.zip_bytes),
+                                       totalBytes=len(self.zip_bytes))
+                return {}
+
+        svc = self.make_service(downloader=ProgressDownloader(self.zip))
+        svc.start_download()
+        self.assertTrue(entered.wait(10))
+        snap = svc.snapshot()
+        self.assertEqual(snap["phase"], "downloading")
+        self.assertEqual(snap["progress"]["downloadedBytes"], 1000)
+        self.assertEqual(snap["progress"]["totalBytes"], 2000)
+        self.assertEqual(snap["progress"]["percent"], 50)
+        gate.set()
         self.assertTrue(svc.wait_idle(30))
         self.assertEqual(svc.snapshot()["phase"], "ready")
 

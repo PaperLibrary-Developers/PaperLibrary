@@ -55,13 +55,21 @@ def status(ctx):
 
 
 def download(ctx):
-    """POST /api/update/download：启动下载/续传（后台执行下载→校验→staging）。
+    """POST /api/update/download：启动下载/续传，或取消当前下载。
 
+    请求体可选 @{"cancel": true}@：取消当前任务（方案 B：取消即删，不保留残包）。
     契约：200 {ok, started, phase, running, version, progress, ready, stagingVersion,
     stagingPath, error, code, updatedAt, lastCheckAt}；
     400 {ok:false, code:"no-update"/..., error}（已是最新/无需下载）；
     502 {ok:false, code, error}（清单网络/签名/清单无效）；500（本地 version.json 损坏）。
     """
+    try:
+        body = ctx.read_json() or {}
+    except ValueError:
+        return ctx.fail(400, "请求体不是合法 JSON")
+    if isinstance(body, dict) and body.get("cancel"):
+        snapshot = ctx.services.update.cancel_download()
+        return ctx.json(200, snapshot)
     try:
         snapshot = ctx.services.update.start_download()
     except service_mod.UpdateServiceError as exc:

@@ -1087,10 +1087,30 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       currentVersion && currentVersion.tag ? currentVersion.tag : '—')
     const updateStatus = h('div.update-status', { id: 'update-check-status', 'aria-live': 'polite' }, '尚未检查')
     const updateLatest = h('div.update-latest', { id: 'update-latest' })
-    let updateRunning = false
+    const updateProgress = h('div.update-progress', { id: 'update-progress' })
+    const updateActions = h('div.update-actions', { id: 'update-actions' })
+    let checkRunning = false
+    let pollTimer = null
+
     const updateRow = (label, value) => h('div.update-line',
       h('span.update-k', label),
       typeof value === 'string' ? h('span.update-v', value) : value)
+
+    function setUpdateStatus (text, kind) {
+      updateStatus.className = 'update-status' + (kind ? ' is-' + kind : '')
+      updateStatus.textContent = text
+    }
+
+    function showUpdateActions (...nodes) {
+      updateActions.replaceChildren(...nodes.filter(Boolean))
+    }
+
+    function stopStatusPoll () {
+      if (pollTimer) {
+        clearTimeout(pollTimer)
+        pollTimer = null
+      }
+    }
 
     const updateCheckBtn = h('button.btn', {
       id: 'update-check-btn',
@@ -1098,56 +1118,195 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       onclick: () => runUpdateCheck()
     }, '检查更新')
 
-    async function runUpdateCheck () {
-      if (updateRunning) return
-      updateRunning = true
-      updateCheckBtn.disabled = true
-      updateCheckBtn.textContent = '检查中…'
-      updateStatus.className = 'update-status is-loading'
-      updateStatus.textContent = '正在检查更新…'
-      updateLatest.replaceChildren()
-      try {
-        const res = await api.checkUpdate()
-        if (res.available) {
-          updateStatus.className = 'update-status is-ok'
-          updateStatus.textContent = '发现新版本 ' + res.latest.tag
-          updateLatest.replaceChildren(
-            updateRow('最新版本', res.latest.tag),
-            updateRow('发布时间', formatDate(res.latest.publishedAt)),
-            updateRow('大小', fileSize(res.latest.size)),
-            h('div.update-line',
-              h('span.update-k', '更新说明'),
-              h('a.link', { href: res.latest.notesUrl, target: '_blank', rel: 'noopener' }, '在浏览器中查看')),
-            h('button.btn.sm.ghost', {
-              id: 'update-skip-btn',
-              type: 'button',
-              onclick: () => {
-                savePrefs({ updateSkippedVersion: res.latest.tag }, { silent: true })
-                toast('已跳过 ' + res.latest.tag)
-                updateStatus.textContent = '发现新版本 ' + res.latest.tag + '（已跳过）'
-              }
-            }, '跳过此版本')
-          )
-        } else {
-          updateStatus.className = 'update-status is-ok'
-          updateStatus.textContent = res.message || '已是最新版本'
-          if (res.latest) {
-            updateLatest.replaceChildren(
-              updateRow('最新版本', res.latest.tag),
-              updateRow('发布时间', formatDate(res.latest.publishedAt)),
-              updateRow('大小', fileSize(res.latest.size))
-            )
+    const updateDownloadBtn = h('button.btn.primary', {
+      id: 'update-download-btn',
+      type: 'button',
+      onclick: () => startUpdateDownload()
+    }, '下载并准备安装')
+
+    const updateCancelBtn = h('button.btn.sm.ghost', {
+      id: 'update-cancel-btn',
+      type: 'button',
+      onclick: () => cancelUpdateDownload()
+    }, '取消下载')
+
+    const updateLaterBtn = h('button.btn.sm.ghost', {
+      id: 'update-later-btn',
+      type: 'button',
+      onclick: () => {
+        stopStatusPoll()
+        setUpdateStatus('已稍后：更新任务在后台继续，下次打开设置页可查看进度', '')
+        showUpdateActions(h('button.btn.sm.ghost', {
+          id: 'update-resume-btn',
+          type: 'button',
+          onclick: () => { startStatusPoll() }
+        }, '查看进度'))
+      }
+    }, '稍后')
+
+    const updateRetryBtn = h('button.btn.sm.ghost', {
+      id: 'update-retry-btn',
+      type: 'button',
+      onclick: () => startUpdateDownload()
+    }, '重试下载')
+
+    function renderLatestRows (latest) {
+      if (!latest) return []
+      const rows = [
+        updateRow('最新版本', latest.tag),
+        updateRow('发布时间', formatDate(latest.publishedAt)),
+        updateRow('大小', fileSize(latest.size))
+      ]
+      if (latest.notesUrl) {
+        rows.push(h('div.update-line',
+          h('span.update-k', '更新说明'),
+          h('a.link', { href: latest.notesUrl, target: '_blank', rel: 'noopener' }, '在浏览器中查看')))
+      }
+      return rows
+    }
+
+    function renderCheckResult (res) {
+      updateProgress.replaceChildren()
+      if (res && res.available && res.latest) {
+        setUpdateStatus('发现新版本 ' + res.latest.tag, 'ok')
+        updateLatest.replaceChildren(...renderLatestRows(res.latest), h('button.btn.sm.ghost', {
+          id: 'update-skip-btn',
+          type: 'button',
+          onclick: () => {
+            savePrefs({ updateSkippedVersion: res.latest.tag }, { silent: true })
+            toast('已跳过 ' + res.latest.tag)
+            setUpdateStatus('发现新版本 ' + res.latest.tag + '（已跳过）', '')
+            showUpdateActions()
           }
+        }, '跳过此版本'))
+        showUpdateActions(updateDownloadBtn)
+        return
+      }
+      setUpdateStatus((res && res.message) || '已是最新版本', 'ok')
+      updateLatest.replaceChildren(...renderLatestRows(res && res.latest))
+      showUpdateActions()
+    }
+
+    function phaseText (snapshot) {
+      const progress = snapshot.progress || {}
+      const done = Number(progress.downloadedBytes) || 0
+      const total = Number(progress.totalBytes) || 0
+      const percent = Number(progress.percent) || 0
+      switch (snapshot.phase) {
+        case 'checking': return '正在检查更新…'
+        case 'downloading':
+          if (total > 0) {
+            return '下载中 ' + percent + '%（' + (done / 1048576).toFixed(1) + ' / ' +
+              (total / 1048576).toFixed(1) + ' MB）'
+          }
+          return '下载中…'
+        case 'verifying': return '正在校验下载（大小 / SHA-256 / 签名）…'
+        case 'verified': return '校验完成，准备解压…'
+        case 'extracting': return '正在解压并检查更新包…'
+        case 'ready': return '更新已准备好：' + (snapshot.stagingVersion || snapshot.version) +
+          '（关闭应用后安装）'
+        case 'failed': return '下载/校验失败：' + (snapshot.error || snapshot.code || '未知错误')
+        case 'cancelled': return '已取消下载（临时文件已清理）'
+        case 'idle': return '尚未检查'
+        default: return String(snapshot.phase || '')
+      }
+    }
+
+    function renderStatus (snapshot) {
+      if (!snapshot) return
+      const phase = snapshot.phase
+      let kind = ''
+      if (phase === 'ready') kind = 'ok'
+      else if (phase === 'failed' || phase === 'cancelled') kind = 'err'
+      else if (['checking', 'downloading', 'verifying', 'verified', 'extracting'].includes(phase)) kind = 'loading'
+      setUpdateStatus(phaseText(snapshot), kind)
+      if (phase === 'ready') {
+        updateLatest.replaceChildren(
+          updateRow('待安装版本', snapshot.stagingVersion || snapshot.version),
+          updateRow('当前版本', currentVersion && currentVersion.tag ? currentVersion.tag : '—')
+        )
+      } else if (phase === 'downloading' && snapshot.progress) {
+        updateProgress.replaceChildren(h('div.update-bar', h('div.update-bar-fill', {
+          style: { width: Math.max(0, Math.min(100, Number(snapshot.progress.percent) || 0)) + '%' }
+        })))
+      } else if (phase !== 'failed' && phase !== 'cancelled') {
+        updateProgress.replaceChildren()
+      }
+      const running = ['checking', 'downloading', 'verifying', 'verified', 'extracting'].includes(phase)
+      if (running) showUpdateActions(updateCancelBtn, updateLaterBtn)
+      else if (phase === 'ready') showUpdateActions(updateLaterBtn)
+      else if (phase === 'failed') showUpdateActions(updateRetryBtn, updateLaterBtn)
+      else if (phase === 'cancelled') showUpdateActions()
+    }
+
+    async function pollStatusLoop () {
+      if (isStale()) { stopStatusPoll(); return }
+      try {
+        const snapshot = await api.updateStatus()
+        renderStatus(snapshot)
+        if (['checking', 'downloading', 'verifying', 'verified', 'extracting'].includes(snapshot.phase)) {
+          pollTimer = setTimeout(pollStatusLoop, 800)
+        } else {
+          stopStatusPoll()
         }
       } catch (err) {
-        updateStatus.className = 'update-status is-err'
-        updateStatus.textContent = '检查失败：' + err.message
+        stopStatusPoll()
+        setUpdateStatus('读取更新状态失败：' + err.message, 'err')
+      }
+    }
+
+    function startStatusPoll () {
+      stopStatusPoll()
+      void pollStatusLoop()
+    }
+
+    async function runUpdateCheck () {
+      if (checkRunning) return
+      checkRunning = true
+      stopStatusPoll()
+      updateCheckBtn.disabled = true
+      updateCheckBtn.textContent = '检查中…'
+      setUpdateStatus('正在检查更新…', 'loading')
+      updateLatest.replaceChildren()
+      updateProgress.replaceChildren()
+      showUpdateActions()
+      try {
+        const res = await api.checkUpdate()
+        renderCheckResult(res)
+      } catch (err) {
+        setUpdateStatus('检查失败：' + err.message, 'err')
         updateLatest.replaceChildren(h('div.hint',
           '无法连接更新源或更新清单无效。可以稍后重试；自动检查失败不会打扰你。'))
+        showUpdateActions()
       } finally {
-        updateRunning = false
+        checkRunning = false
         updateCheckBtn.disabled = false
         updateCheckBtn.textContent = '检查更新'
+      }
+    }
+
+    async function startUpdateDownload () {
+      stopStatusPoll()
+      setUpdateStatus('正在启动下载…', 'loading')
+      showUpdateActions(h('button.btn.sm.ghost', { type: 'button', disabled: true }, '启动中…'))
+      try {
+        const snapshot = await api.startUpdateDownload()
+        renderStatus(snapshot)
+        startStatusPoll()
+      } catch (err) {
+        setUpdateStatus('下载失败：' + err.message, 'err')
+        showUpdateActions(updateRetryBtn)
+      }
+    }
+
+    async function cancelUpdateDownload () {
+      try {
+        const snapshot = await api.cancelUpdateDownload()
+        stopStatusPoll()
+        renderStatus(snapshot)
+        toast('已取消下载，临时文件已清理')
+      } catch (err) {
+        setUpdateStatus('取消失败：' + err.message, 'err')
       }
     }
 
@@ -1188,14 +1347,22 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
           updateCheckBtn
         ),
         updateStatus,
+        updateProgress,
         updateLatest,
+        updateActions,
         skippedBox,
         h('label.update-auto', autoToggle,
           h('span', '启动后自动检查更新（只通知，不下载）')),
         h('div.hint',
-          '默认关闭（待确认）；开启后启动约 10–30 秒检查一次，之后每 24 小时最多一次，失败静默。' +
-          '这里只做检查：不会自动下载，也不会在后台安装。')
+          '下载与安装需要你手动确认；下载完成后不会自动替换程序。' +
+          '自动检查默认关闭（待确认），开启后启动约 10–30 秒检查一次、之后每 24 小时最多一次，失败静默。')
       ))
+
+    // 进入设置页时恢复正在进行的下载/已准备好的状态（只读查询，不启动任务）
+    api.updateStatus().then(snapshot => {
+      if (isStale()) return
+      if (snapshot.phase !== 'idle') renderStatus(snapshot)
+    }).catch(() => {})
 
     const limitsPanel = panel('导入上限', h('div', { style: { display: 'grid', gap: '13px' } },
       h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },

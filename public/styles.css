@@ -227,6 +227,11 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .brand-name .brand-word { display: flex; align-items: baseline; white-space: nowrap; }
 
 /* 关于与更新（阶段 1：只检查，不下载）：与设置页其它面板同一套留白与字号 */
+/* 下载/安装交互（P2-08）：进度条与操作按钮 */
+.update-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.update-bar { height: 6px; width: 100%; background: var(--line, #ddd); border-radius: 999px; overflow: hidden; margin-top: 4px; }
+.update-bar-fill { height: 100%; background: var(--accent, #0e9aab); transition: width .25s ease; }
+
 /* 自动检查更新开关（P1-04）：只通知、不下载；默认关 */
 .update-auto { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text); }
 .update-auto input { width: 15px; height: 15px; accent-color: var(--accent, #0e9aab); }

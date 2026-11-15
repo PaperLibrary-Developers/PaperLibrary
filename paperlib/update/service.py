@@ -124,6 +124,17 @@ class UpdateService:
         phase = "ready" if ready else (state.get("phase") or self._phase or "idle")
         running = bool(self._active or (self._thread is not None and self._thread.is_alive()))
         version = self._version or ready.get("version") or ""
+        # 下载线程按块把进度写进 download-state.json；查询时读一次最新文件，
+        # 否则 UI 轮询只能看到启动时的 0 字节（P2-06 字段正确但进度不刷新）。
+        if running and version:
+            try:
+                live = self.store.read_state(version)
+                if live and live.get("updatedAt"):
+                    state = live
+                    self._state = live
+                    phase = state.get("phase") or phase
+            except Exception:  # noqa: BLE001
+                pass
         done = int(state.get("downloadedBytes") or 0)
         total = int(state.get("totalBytes") or 0)
         percent = 0
