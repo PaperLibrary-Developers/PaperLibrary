@@ -30,6 +30,10 @@
       "skipped": true
     },
     {
+      "id": "update-download",
+      "skipped": true
+    },
+    {
       "id": "version",
       "method": "GET",
       "path": "/api/version",

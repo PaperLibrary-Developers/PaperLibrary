@@ -89,6 +89,18 @@ class UpdateChecker:
         raw = self._fetch() if self._fetch is not None else fetch_mod.fetch_manifest(self.manifest_url)
         return self._evaluate(current, raw)
 
+    def check_with_manifest(self):
+        """同 check()，但同时返回 (结果, 清单 dict, 清单原始字节) 供下载流程复用。
+
+        下载端点用它拿到“已验签”的清单，避免重复请求/重复验签，也避免信任客户端传入的 URL。
+        """
+        current = version_mod.load(self.root)
+        raw = self._fetch() if self._fetch is not None else fetch_mod.fetch_manifest(self.manifest_url)
+        result = self._evaluate(current, raw)
+        data = manifest.load_bytes(raw)
+        signing.verify_manifest(data, self.public_key)
+        return result, data, raw
+
     def _evaluate(self, current: dict, raw: bytes) -> dict:
         try:
             data = manifest.load_bytes(raw)

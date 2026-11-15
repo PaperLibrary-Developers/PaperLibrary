@@ -30,7 +30,7 @@ from paperlib import version as version_mod
 from paperlib.util import ensure_dir, read_json, write_json_atomic
 
 STATE_SCHEMA = 1
-PHASES = ("idle", "downloading", "verifying", "verified", "extracting", "ready", "failed", "cancelled")
+PHASES = ("idle", "checking", "downloading", "verifying", "verified", "extracting", "ready", "failed", "cancelled")
 
 
 class UpdateStoreError(ValueError):
