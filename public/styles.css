@@ -225,6 +225,20 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .brand-name .brand-navy { color: var(--brand-navy, #1b2d56); }
 .brand-name .brand-teal { color: var(--brand-teal, #0e9aab); }
 .brand-name .brand-word { display: flex; align-items: baseline; white-space: nowrap; }
+
+/* 关于与更新（阶段 1：只检查，不下载）：与设置页其它面板同一套留白与字号 */
+.update-box { display: grid; gap: 10px; }
+.update-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.update-current { display: flex; align-items: baseline; gap: 8px; }
+.update-line { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; color: var(--text); }
+.update-k { color: var(--muted); font-size: 12.5px; min-width: 62px; }
+.update-v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.update-latest { display: grid; gap: 4px; }
+.update-status { font-size: 13.5px; color: var(--muted); min-height: 20px; }
+.update-status.is-loading { color: var(--muted); }
+.update-status.is-ok { color: var(--accent-text, #0e7a63); }
+.update-status.is-err { color: var(--danger, #b3261e); }
+
 /* 版本号：字标下方的小字（跟改造前同一个位置，只保留 v<major>.<minor>）。
    字号/字重/颜色都单独压住，避免被 .brand-name 的 17.5px/800 继承成第二个标题 */
 .brand-name .brand-ver {

@@ -1074,6 +1074,85 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       )
     }
 
+    /* ---------- 关于与更新（阶段 1：只检查，不下载/不安装） ---------- */
+
+    let currentVersion = null
+    try {
+      currentVersion = await api.getVersion()
+    } catch (err) {
+      currentVersion = null
+    }
+    if (isStale()) return
+    const updateCurrentVersion = h('span.update-v', { id: 'update-current-version' },
+      currentVersion && currentVersion.tag ? currentVersion.tag : '—')
+    const updateStatus = h('div.update-status', { id: 'update-check-status', 'aria-live': 'polite' }, '尚未检查')
+    const updateLatest = h('div.update-latest', { id: 'update-latest' })
+    let updateRunning = false
+    const updateRow = (label, value) => h('div.update-line',
+      h('span.update-k', label),
+      typeof value === 'string' ? h('span.update-v', value) : value)
+
+    const updateCheckBtn = h('button.btn', {
+      id: 'update-check-btn',
+      type: 'button',
+      onclick: () => runUpdateCheck()
+    }, '检查更新')
+
+    async function runUpdateCheck () {
+      if (updateRunning) return
+      updateRunning = true
+      updateCheckBtn.disabled = true
+      updateCheckBtn.textContent = '检查中…'
+      updateStatus.className = 'update-status is-loading'
+      updateStatus.textContent = '正在检查更新…'
+      updateLatest.replaceChildren()
+      try {
+        const res = await api.checkUpdate()
+        if (res.available) {
+          updateStatus.className = 'update-status is-ok'
+          updateStatus.textContent = '发现新版本 ' + res.latest.tag
+          updateLatest.replaceChildren(
+            updateRow('最新版本', res.latest.tag),
+            updateRow('发布时间', formatDate(res.latest.publishedAt)),
+            updateRow('大小', fileSize(res.latest.size)),
+            h('div.update-line',
+              h('span.update-k', '更新说明'),
+              h('a.link', { href: res.latest.notesUrl, target: '_blank', rel: 'noopener' }, '在浏览器中查看'))
+          )
+        } else {
+          updateStatus.className = 'update-status is-ok'
+          updateStatus.textContent = res.message || '已是最新版本'
+          if (res.latest) {
+            updateLatest.replaceChildren(
+              updateRow('最新版本', res.latest.tag),
+              updateRow('发布时间', formatDate(res.latest.publishedAt)),
+              updateRow('大小', fileSize(res.latest.size))
+            )
+          }
+        }
+      } catch (err) {
+        updateStatus.className = 'update-status is-err'
+        updateStatus.textContent = '检查失败：' + err.message
+        updateLatest.replaceChildren(h('div.hint',
+          '无法连接更新源或更新清单无效。可以稍后重试；自动检查失败不会打扰你。'))
+      } finally {
+        updateRunning = false
+        updateCheckBtn.disabled = false
+        updateCheckBtn.textContent = '检查更新'
+      }
+    }
+
+    const aboutPanel = panel('关于与更新',
+      h('div.update-box',
+        h('div.update-head',
+          h('div.update-current', h('span.update-k', '当前版本'), updateCurrentVersion),
+          updateCheckBtn
+        ),
+        updateStatus,
+        updateLatest,
+        h('div.hint', '这里只做检查：不会自动下载，也不会在后台安装。')
+      ))
+
     const limitsPanel = panel('导入上限', h('div', { style: { display: 'grid', gap: '13px' } },
       h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
         '一次导入太多 PDF 会占内存、让电脑发卡；这个上限可以按你的机器调，改完立刻生效，不用重启。'),
@@ -1099,6 +1178,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       exportPanel,
       importPanel,
       pdfPanel,
+      aboutPanel,
       infoPanel
     ))
     document.onkeydown = null

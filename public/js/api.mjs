@@ -109,6 +109,8 @@
     ApiError,    health: () => request('GET', '/api/health'),
     /** 当前产品版本（唯一来源：包根 version.json，服务端 /api/version 转出） */
     getVersion: () => request('GET', '/api/version'),
+    /** 检查更新（阶段 1 只检查，不下载；失败时抛 ApiError，消息可直接展示） */
+    checkUpdate: () => request('GET', '/api/update/check'),
     stats: () => request('GET', '/api/stats'),
     tags: () => request('GET', '/api/tags'),
     facets: () => request('GET', '/api/facets'),
