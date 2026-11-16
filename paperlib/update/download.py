@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from paperlib.update import release, store as store_mod
+from paperlib.update import release, store as store_mod, tls
 
 CHUNK_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT = 20.0
@@ -50,7 +50,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+_OPENER = tls.build_opener(_NoRedirect)
 
 
 def required_space(size: int) -> int:

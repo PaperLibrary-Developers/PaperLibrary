@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from paperlib.update import manifest, release
+from paperlib.update import manifest, release, tls
 
 DEFAULT_TIMEOUT = 9.0
 DEFAULT_RETRIES = 2
@@ -41,7 +41,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+_OPENER = tls.build_opener(_NoRedirect)
 
 
 def _request_once(url: str, timeout: float):
