@@ -13,6 +13,7 @@ const argValue = (name, fallback) => {
 }
 const port = Number(process.env.PAPERLIB_WEBVIEW_DEBUG_PORT || argValue('--port', '9222'))
 const outDir = argValue('--out', 'update-install-shots')
+const mockApply = args.includes('--mock-apply')
 mkdirSync(outDir, { recursive: true })
 
 const targets = await fetch('http://127.0.0.1:' + port + '/json/list').then(r => r.json())
@@ -54,8 +55,17 @@ async function shot (name) {
 }
 await send('Page.enable')
 await send('Runtime.enable')
+if (mockApply) {
+  await send('Page.addScriptToEvaluateOnNewDocument', {
+    source: "(function(){var of=window.fetch;window.fetch=function(input,init){if(String(input).indexOf('/api/update/apply')>=0){return Promise.resolve(new Response(JSON.stringify({ok:true,apply:{version:'1.7.2'}}),{status:200,headers:{'Content-Type':'application/json'}}));}return of.apply(this,arguments);};})();"
+  })
+  await send('Page.reload', { ignoreCache: true })
+  await new Promise(resolve => setTimeout(resolve, 1000))
+}
 await evaluate("location.hash = '#/settings'")
 await new Promise(resolve => setTimeout(resolve, 600))
+await evaluate("(function(){var e=document.querySelector('#update-check-status');if(e)e.scrollIntoView({block:'center'});return true;})()")
+await new Promise(resolve => setTimeout(resolve, 300))
 await shot('01-before-click.png')
 
 const clicked = await evaluate("(function(){var b=document.querySelector('#update-install-btn');if(!b)return 'no-install-button';b.click();return 'clicked';})()")
@@ -68,5 +78,7 @@ console.log('confirm dialog: ' + confirmed)
 await new Promise(resolve => setTimeout(resolve, 1200))
 const status = await evaluate("(function(){var e=document.querySelector('#update-check-status');return e?e.textContent:'';})()")
 console.log('status: ' + status)
+await evaluate("(function(){var e=document.querySelector('#update-check-status');if(e)e.scrollIntoView({block:'center'});return true;})()")
+await new Promise(resolve => setTimeout(resolve, 200))
 await shot('03-after-confirm.png')
 ws.close()

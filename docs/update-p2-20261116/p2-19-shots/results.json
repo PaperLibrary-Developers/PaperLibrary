@@ -1,0 +1,5 @@
+{
+  "helper-fail": "安装未启动（helper-start-failed）：更新助手启动后立即退出（退出码 1），请查看日志。",
+  "disk-low": "安装未启动（disk-low）：磁盘空间不足：需要约 418.5 MB，当前可用约 0.0 MB（含 300 MB 余量）",
+  "program-files": "安装未启动（program-files）：程序位于 Program Files，第一阶段不支持提权安装，请放到用户可写目录"
+}

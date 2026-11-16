@@ -1,0 +1,7 @@
+screenshot: C:\Users\wzxle\Desktop\WB比赛\Nexus\docs\update-p2-20261116\p2-19-shots\02-disk-low\01-before-click.png
+install button: clicked
+screenshot: C:\Users\wzxle\Desktop\WB比赛\Nexus\docs\update-p2-20261116\p2-19-shots\02-disk-low\02-confirm-dialog.png
+confirm dialog: confirmed
+status: 安装未启动（disk-low）：磁盘空间不足：需要约 418.5 MB，当前可用约 0.0 MB（含 300 MB 余量）
+screenshot: C:\Users\wzxle\Desktop\WB比赛\Nexus\docs\update-p2-20261116\p2-19-shots\02-disk-low\03-after-confirm.png
+

@@ -1,0 +1,7 @@
+screenshot: C:\Users\wzxle\Desktop\WB比赛\Nexus\docs\update-p2-20261116\p2-19-shots\01-click-helper-fail\01-before-click.png
+install button: clicked
+screenshot: C:\Users\wzxle\Desktop\WB比赛\Nexus\docs\update-p2-20261116\p2-19-shots\01-click-helper-fail\02-confirm-dialog.png
+confirm dialog: confirmed
+status: 安装未启动（helper-start-failed）：更新助手启动后立即退出（退出码 1），请查看日志。
+screenshot: C:\Users\wzxle\Desktop\WB比赛\Nexus\docs\update-p2-20261116\p2-19-shots\01-click-helper-fail\03-after-confirm.png
+

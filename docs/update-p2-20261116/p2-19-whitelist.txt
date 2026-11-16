@@ -1,0 +1,7 @@
+P2-19 下载白名单实测（2026-11-17）
+URL: https://github.com/PaperLibrary-Developers/PaperLibrary/releases/latest/download/update-manifest.json
+HTTP: 200
+FINAL_HOST: release-assets.githubusercontent.com
+BYTES: 595
+首个字段: schema=1, product=PaperLibrary, channel=stable, version=1.7.1, tag=v1.7.1
+结论: github.com 稳定地址匿名可用；重定向落点 release-assets.githubusercontent.com，均在已确认白名单内。

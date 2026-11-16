@@ -1,0 +1,14 @@
+P2-19 GUI 验收日志摘录（临时包，2026-11-17）
+2026-11-17 02:07:57 install request ... version=1.7.2 precheck=disk-low ok=False
+2026-11-17 02:07:57 install result posted: ... ok=False code=disk-low
+2026-11-17 02:08:01 startup decision: action=start code=ok
+2026-11-17 02:08:07 install request ... precheck=program-files ok=False
+2026-11-17 02:08:10 startup decision: action=prompt-apply code=apply-ready
+2026-11-17 02:08:10 startup apply prompt: 有已准备好的更新（v1.7.2），是否立即安装？
+2026-11-17 02:08:17 startup decision: action=recover code=journal-replace
+2026-11-17 02:08:17 running recover: ...PaperLibraryUpdater.exe
+2026-11-17 02:08:17 recover exit=0
+2026-11-17 02:08:xx install request ... precheck=ok ok=True
+2026-11-17 02:08:xx install helper started pid=...
+2026-11-17 02:08:xx install: service stopped
+2026-11-17 02:08:xx install result posted: ... ok=True code=started

@@ -275,6 +275,17 @@ public static class LauncherCore
     public static PrecheckResult Precheck(string baseDir, string updaterHome,
                                           long freeBytesOverride, string programFilesRootOverride)
     {
+        // 仅供 P2-19 GUI 验收注入磁盘/Program Files 条件；生产不设置这些环境变量。
+        if (freeBytesOverride < 0)
+        {
+            string testFree = Environment.GetEnvironmentVariable("PAPERLIB_TEST_FREE_BYTES");
+            long parsed;
+            if (!string.IsNullOrEmpty(testFree) && long.TryParse(testFree, out parsed))
+                freeBytesOverride = parsed;
+        }
+        if (string.IsNullOrEmpty(programFilesRootOverride))
+            programFilesRootOverride = Environment.GetEnvironmentVariable("PAPERLIB_TEST_PROGRAM_FILES_ROOT");
+
         PrecheckResult result = new PrecheckResult();
         try
         {
