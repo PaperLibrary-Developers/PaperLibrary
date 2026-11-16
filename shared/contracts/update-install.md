@@ -222,15 +222,31 @@ PaperLibraryUpdater.exe recover --program-root DIR [--log FILE]
 失败后沿用 P2-13 的回滚路径：关停本次新应用、恢复程序备份、启动旧版本、写
 state failed（含具体 code）；`apply.json` 保留供重试。
 
-## 8. 与后续步骤的边界
+## 8. 启动器拉起 helper（P2-11R）
+
+UI 确认后，启动器执行：
+
+1. 再次调用 P2-10R 预检（apply/staging/helper/程序目录）；
+2. 启动包外 helper（参数见 `update-apply.md` 第 8 节），传入当前启动器 PID、
+   staging、旧/新版本、backupPath、端口 4321 和 install 日志；
+3. helper 存活检查通过后，启动器 `POST /api/shutdown` 并等待 Python 最多 5 秒；
+4. 服务停止 → 回 UI `ok:true` 并关闭启动器；helper 等待启动器 PID 退出（60 秒超时）后
+   进入 `install` 等待/备份/替换/健康检查；
+5. helper 启动失败/预检失败 → UI `ok:false`，窗口保持；服务 5 秒未停止 → 终止本次 helper，
+   UI `ok:false, code=service-stop-timeout`，窗口保持；
+6. 手动关窗且存在 pending apply 时走同一路径；无 pending 时行为不变；
+7. 启动器 Mutex 贯穿；helper 创建 `data/updates/install.lock`，双开被 Mutex/锁拦截。
+
+## 9. 与后续步骤的边界
 
 - P2-15（已完成）：数据备份到 `data/backups/update-<newVersion>/`；失败中止安装。
 - P2-13（已完成）：安装锁 + 等待 + 数据/程序备份 + 替换 + 启动 + 健康检查 + 失败回滚。
 - P2-16（已完成）：journal 完整状态机、state schema、安装锁过期、`recover` 启动恢复、
   分阶段强杀恢复、程序备份保留最近一个；`backup.json` 是回滚依据。
 - P2-17（已完成）：健康检查错误分类与具体失败码；失败仍回滚。
+- P2-10R/P2-11R（已完成）：启动器预检/启动判定、WebView2 握手、helper 启动与关闭时序。
 
-## 9. 待确认（不猜值）
+## 10. 待确认（不猜值）
 
 1. 杀软/索引器占用导致 `Directory.Move`/`File.Copy` 失败时的安装期重试参数：P2-18 确定
    （端口/文件锁等待已按 30 秒确认，超时只中止）。

@@ -40,6 +40,8 @@ class Launcher
     static Mutex appMutex;
     static bool mutexHeld;
     static bool installStarted;
+    static Process installHelper;
+    static System.Windows.Forms.Timer closeTimer;
 
     [STAThread]
     static int Main(string[] args)
@@ -475,7 +477,21 @@ class Launcher
         if (decision.Action == "prompt-apply")
         {
             Log("startup apply prompt: " + decision.Message);
-            MessageBox.Show(decision.Message, Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            DialogResult answer = MessageBox.Show(decision.Message, Title,
+                MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+            if (answer != DialogResult.Yes) return true;
+            PrecheckResult pre = LauncherCore.Precheck(BaseDir, UpdaterHome);
+            Log("startup install precheck: " + pre.Code + " ok=" + pre.Ok);
+            if (!pre.Ok)
+            {
+                MessageBox.Show("无法立即安装：\r\n" + pre.Message, Title,
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return true;
+            }
+            InstallRequest request = new InstallRequest();
+            request.RequestId = "startup-" + DateTime.Now.Ticks.ToString();
+            request.Version = pre.Version;
+            if (StartInstall(request, pre)) return false;
             return true;
         }
         if (decision.Action == "notice-success" || decision.Action == "notice-failed")
@@ -577,6 +593,189 @@ class Launcher
         return false;
     }
 
+    static bool StartInstall(InstallRequest request, PrecheckResult pre)
+    {
+        if (installStarted)
+        {
+            PostInstallResult(request.RequestId, false, "install-busy", "安装已经启动，请稍候");
+            return false;
+        }
+        string logPath = pre.LogPath;
+        try { Directory.CreateDirectory(Path.GetDirectoryName(logPath)); } catch (Exception) { }
+        string[] args = LauncherCore.BuildInstallArgs(pre, BaseDir,
+            Process.GetCurrentProcess().Id, logPath);
+        string commandLine = LauncherCore.JoinArgs(args);
+        Log("install start: helper=" + pre.HelperPath + " args=" + commandLine);
+        string errorCode;
+        string errorMessage;
+        Process helper = StartHelper(pre.HelperPath, commandLine, out errorCode, out errorMessage);
+        if (helper == null)
+        {
+            Log("install helper start failed: " + errorCode + " " + errorMessage);
+            PostInstallResult(request.RequestId, false, errorCode, errorMessage);
+            return false;
+        }
+        installStarted = true;
+        installHelper = helper;
+        Log("install helper started pid=" + helper.Id);
+        if (!ShutdownServiceForInstall())
+        {
+            Log("install aborted: service did not stop within 5s");
+            installStarted = false;
+            KillInstallHelper();
+            PostInstallResult(request.RequestId, false, "service-stop-timeout",
+                "服务在 5 秒内没有停止，安装已取消；窗口保持打开，可重试。");
+            return false;
+        }
+        Log("install prepared: service stopped, closing launcher");
+        if (!string.IsNullOrEmpty(request.RequestId))
+            PostInstallResult(request.RequestId, true, "started", "安装已启动，应用即将关闭");
+        ScheduleClose();
+        return true;
+    }
+
+    static Process StartHelper(string helper, string args, out string code, out string message)
+    {
+        code = "";
+        message = "";
+        try
+        {
+            ProcessStartInfo info = new ProcessStartInfo(helper, args);
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.WorkingDirectory = BaseDir;
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            Process process = Process.Start(info);
+            if (process == null)
+            {
+                code = "helper-start-failed";
+                message = "无法启动更新助手：" + helper;
+                return null;
+            }
+            process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs ev)
+            {
+                if (ev.Data != null) Log("helper: " + ev.Data);
+            };
+            process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs ev)
+            {
+                if (ev.Data != null) Log("helper error: " + ev.Data);
+            };
+            try
+            {
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+            }
+            catch (Exception) { }
+            Thread.Sleep(300);
+            if (process.HasExited)
+            {
+                int exitCode = -1;
+                try { exitCode = process.ExitCode; } catch (Exception) { }
+                code = "helper-start-failed";
+                message = "更新助手启动后立即退出（退出码 " + exitCode + "），请查看日志。";
+                return null;
+            }
+            return process;
+        }
+        catch (Exception ex)
+        {
+            code = "helper-start-failed";
+            message = "启动更新助手失败：" + ex.Message;
+            return null;
+        }
+    }
+
+    static bool ShutdownServiceForInstall()
+    {
+        Log("install: requesting python service shutdown");
+        try
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(Url + "api/shutdown");
+            request.Method = "POST";
+            request.Timeout = 3000;
+            request.ReadWriteTimeout = 3000;
+            request.Proxy = null;
+            request.ContentLength = 0;
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            {
+                using (Stream stream = response.GetResponseStream())
+                {
+                    if (stream != null)
+                    {
+                        using (StreamReader reader = new StreamReader(stream)) reader.ReadToEnd();
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("install shutdown request failed: " + ex.Message);
+        }
+        for (int i = 0; i < 50; i++)
+        {
+            bool serverAlive = false;
+            Process proc = server;
+            if (proc != null)
+            {
+                try { serverAlive = !proc.HasExited; }
+                catch (Exception) { serverAlive = false; }
+            }
+            if (!serverAlive && !PortOpen())
+            {
+                lock (ServerLock)
+                {
+                    server = null;
+                    startedServer = false;
+                }
+                Log("install: service stopped");
+                return true;
+            }
+            Thread.Sleep(100);
+        }
+        Log("install: service still running after 5s");
+        return false;
+    }
+
+    static void KillInstallHelper()
+    {
+        if (installHelper == null) return;
+        try
+        {
+            if (!installHelper.HasExited)
+            {
+                installHelper.Kill();
+                Log("install helper killed");
+            }
+        }
+        catch (Exception ex) { Log("kill install helper failed: " + ex.Message); }
+        try { installHelper.Dispose(); } catch (Exception) { }
+        installHelper = null;
+    }
+
+    static void ScheduleClose()
+    {
+        closeTimer = new System.Windows.Forms.Timer();
+        closeTimer.Interval = 300;
+        closeTimer.Tick += delegate(object sender, EventArgs ev)
+        {
+            try
+            {
+                closeTimer.Stop();
+                closeTimer.Dispose();
+                closeTimer = null;
+            }
+            catch (Exception) { }
+            try { form.Close(); } catch (Exception) { }
+        };
+        closeTimer.Start();
+    }
+
+    static bool HasPendingApply()
+    {
+        return File.Exists(Path.Combine(BaseDir, "data", "updates", "apply.json"));
+    }
+
     static void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         string source = e.Source;
@@ -614,9 +813,7 @@ class Launcher
             PostInstallResult(request.RequestId, false, pre.Code, pre.Message);
             return;
         }
-        // P2-11R 将在此启动 helper 并关闭窗口；P2-10R 只完成协议与预检。
-        PostInstallResult(request.RequestId, false, "install-not-wired",
-            "预检通过；安装启动将在 P2-11R 接入");
+        StartInstall(request, pre);
     }
 
     static void PostInstallResult(string requestId, bool ok, string code, string message)
@@ -668,6 +865,30 @@ class Launcher
     static void OnClosing(object sender, FormClosingEventArgs e)
     {
         if (closing) return;
+        if (!installStarted && HasPendingApply())
+        {
+            e.Cancel = true;
+            Log("manual close with pending apply; asking user");
+            DialogResult answer = MessageBox.Show(
+                "有已准备好的更新，是否立即安装？\r\n\r\n"
+                + "点击「是」将立即关闭应用并安装，完成后自动重新打开；数据保留。\r\n"
+                + "点击「否」保持当前窗口，稍后再说。",
+                Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) return;
+            PrecheckResult pre = LauncherCore.Precheck(BaseDir, UpdaterHome);
+            Log("manual close install precheck: " + pre.Code + " ok=" + pre.Ok);
+            if (!pre.Ok)
+            {
+                MessageBox.Show("无法立即安装：\r\n" + pre.Message, Title,
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            InstallRequest request = new InstallRequest();
+            request.RequestId = "manual-" + DateTime.Now.Ticks.ToString();
+            request.Version = pre.Version;
+            StartInstall(request, pre);
+            return;
+        }
         closing = true;
         Log("window closing");
         if (loading != null)

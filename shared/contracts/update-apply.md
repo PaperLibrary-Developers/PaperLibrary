@@ -116,7 +116,23 @@ UI → 启动器：
    不伪装成已自动安装。
 5. 同一时间只允许一个安装请求；按钮防重复。
 
-## 8. 安全边界
+## 8. 启动器执行时序（P2-11R）
+
+1. 收到已通过 P2-10R 预检的 UI 请求后，启动包外 helper：
+   `install --program-root <程序根> --staging <staging> --old-version <旧版本>
+   --new-version <新版本> --launcher-pid <当前启动器 PID> --backup <backupPath>
+   --port 4321 --log <data/updates/install-<version>.log>`；
+2. helper 启动后观察 300ms，必须仍存活；启动异常/立即退出 → 回
+   `ok:false, code=helper-start-failed`，窗口保持；
+3. 回 `ok:true` 前优雅停止 Python（`POST /api/shutdown`，最多 5 秒）：
+   - 成功 → 回 `ok:true, code=started`，300ms 后关闭启动器；helper 等待启动器退出后继续；
+   - 5 秒未停止 → 杀掉本次 helper，回 `ok:false, code=service-stop-timeout`，
+     窗口保持、服务不静默关闭；
+4. 手动关窗且存在 pending `apply.json` → 同一“确认→预检→启动 helper→停服务→关闭”路径；
+   无 pending 时保持原有直接关闭行为；
+5. 启动器 Mutex 保持；helper 持有 `install.lock`，双开被 Mutex/锁拦截。
+
+## 9. 安全边界
 
 - 后端不执行任何替换/命令；只写标记；
 - 不信任客户端传入路径/版本：apply 全部从 staging/清单/当前 version.json 推导；
