@@ -104,7 +104,19 @@ UI → 启动器：
 `PaperLibrary.exe`/`version.json` 存在且版本一致、包外 helper 部署与 SHA-256 一致、
 程序目录可写且不在 Program Files（磁盘阈值/占用重试由 P2-18 补全）。
 
-## 7. 安全边界
+## 7. UI 立即安装流程（P2-09R）
+
+1. 用户点击“立即安装”，确认框必须明确：立即关闭、安装后自动重开、data/ 保留、
+   进行中的 AI 请求会中断、不会静默安装；取消则保持当前版本，不发请求。
+2. 确认后先 `POST /api/update/apply`（失败不关闭、不请求启动器），成功后再通过
+   `public/js/update-install.mjs` 发送 `paperlibrary:install.request`。
+3. 启动器回 `ok:true` 后显示“正在关闭并安装…”并禁用按钮，由启动器关闭窗口；
+   等待 result 超时（20 秒）或 `ok:false` → 窗口保持，显示 code/message，可重试。
+4. 非 WebView2/浏览器预览：apply 成功后显示“请关闭窗口后安装”的降级提示，
+   不伪装成已自动安装。
+5. 同一时间只允许一个安装请求；按钮防重复。
+
+## 8. 安全边界
 
 - 后端不执行任何替换/命令；只写标记；
 - 不信任客户端传入路径/版本：apply 全部从 staging/清单/当前 version.json 推导；

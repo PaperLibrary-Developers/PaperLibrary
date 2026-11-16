@@ -4,6 +4,7 @@ import { api } from '../api.mjs'
 import { getState } from '../state/store.mjs'
 import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
 import { autoCheckEnabled } from '../update-auto.mjs'
+import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update-install.mjs'
 
   const { h, toast, rich, confirmDialog, fileSize, formatDate } = util
   
@@ -1093,6 +1094,7 @@ import { autoCheckEnabled } from '../update-auto.mjs'
     let checkRunning = false
     let pollTimer = null
     let readyInfo = null
+    let installing = false
 
     const updateRow = (label, value) => h('div.update-line',
       h('span.update-k', label),
@@ -1156,36 +1158,58 @@ import { autoCheckEnabled } from '../update-auto.mjs'
       id: 'update-install-btn',
       type: 'button',
       onclick: () => prepareInstall()
-    }, '重启并安装')
+    }, '立即安装')
 
     async function prepareInstall () {
+      if (installing) return
       const version = readyInfo && readyInfo.version ? readyInfo.version : ''
       const tag = version ? 'v' + version : ''
       const accepted = await confirmDialog({
-        title: '安装更新 ' + (tag || ''),
+        title: '立即安装 ' + (tag || ''),
         body: h('div', { style: { display: 'grid', gap: '8px', fontSize: '13.5px' } },
-          h('div', '点击「准备安装」后，应用会在你关闭窗口时安装新版本，并在安装完成后自动重新打开。'),
+          h('div', '点击「立即安装」后，应用会立即关闭并安装新版本，安装完成后自动重新打开。'),
           h('div', '文献库数据（data/）会保留，不会随更新删除。'),
           h('div', '正在进行中的 AI 请求会被中断，请等它完成或稍后再试。'),
           h('div.hint', '不会静默安装：点「稍后」可以保持当前版本，什么都不改。')
         ),
-        okText: '准备安装',
+        okText: '立即安装并关闭',
         cancelText: '稍后'
       })
       if (!accepted) {
-        setUpdateStatus('已取消安装准备，保持当前版本', '')
+        setUpdateStatus('已取消安装，保持当前版本', '')
         return
       }
+      installing = true
+      updateInstallBtn.disabled = true
+      setUpdateStatus('正在准备安装…', 'loading')
+      showUpdateActions()
+      let appliedVersion = version
+      let appliedTag = tag
       try {
         const res = await api.applyUpdate()
         const applied = res && res.apply ? res.apply : {}
-        const appliedVersion = applied.version ? 'v' + applied.version : (tag || '')
-        setUpdateStatus('安装包已准备好' + (appliedVersion ? '：' + appliedVersion : '') +
-          '（关闭窗口后自动安装，数据保留）', 'ok')
-        showUpdateActions(updateLaterBtn)
-        toast('已准备安装：关闭窗口后自动更新')
+        if (applied.version) {
+          appliedVersion = applied.version
+          appliedTag = 'v' + applied.version
+        }
+        if (!isWebViewHost()) {
+          installing = false
+          updateInstallBtn.disabled = false
+          setUpdateStatus('安装包已准备好' + (appliedTag ? '：' + appliedTag : '') +
+            '。' + fallbackInstallMessage(), '')
+          showUpdateActions(updateLaterBtn)
+          return
+        }
+        setUpdateStatus('正在请求启动器安装' + (appliedTag ? ' ' + appliedTag : '') + '…', 'loading')
+        await requestInstall({ version: appliedVersion })
+        setUpdateStatus('正在关闭并安装' + (appliedTag ? ' ' + appliedTag : '') +
+          '…（数据保留，完成后自动重新打开）', 'ok')
+        showUpdateActions()
       } catch (err) {
-        setUpdateStatus('准备安装失败：' + err.message, 'err')
+        installing = false
+        updateInstallBtn.disabled = false
+        const code = err && err.code ? '（' + err.code + '）' : ''
+        setUpdateStatus('安装未启动' + code + '：' + (err && err.message ? err.message : '未知错误'), 'err')
         showUpdateActions(updateInstallBtn, updateLaterBtn)
       }
     }
@@ -1244,7 +1268,7 @@ import { autoCheckEnabled } from '../update-auto.mjs'
         case 'verified': return '校验完成，准备解压…'
         case 'extracting': return '正在解压并检查更新包…'
         case 'ready': return '更新已准备好：' + (snapshot.stagingVersion || snapshot.version) +
-          '（关闭应用后安装）'
+          '（点击「立即安装」）'
         case 'failed': return '下载/校验失败：' + (snapshot.error || snapshot.code || '未知错误')
         case 'cancelled': return '已取消下载（临时文件已清理）'
         case 'idle': return '尚未检查'
