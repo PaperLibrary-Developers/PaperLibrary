@@ -1,4 +1,4 @@
-/** P1-04 验收：自动检查（只通知，不下载）+ 24 小时节流 + 跳过版本 + 默认关闭。
+/** P1-04 验收：自动检查（只通知，不下载）+ 24 小时节流 + 跳过版本 + 默认开启/显式关闭。
  *
  * 用法：node docs/update-p1-20261116/scripts/update-auto-check.mjs <base> <截图目录>
  * 服务由调用方从「version=1.6.0 的临时副本」启动，因此线上 v1.7.1 会被视为新版本（真实数据，不 mock）。
@@ -52,7 +52,15 @@ const page = await openPage({ base, cdpPort: 9402, startupMs: 2200 })
 const report = { base, states: {}, errors: null }
 try {
   await page.hash('#/settings', 1200)
-  /* 开启自动检查（默认关；这里用真实偏好开关的状态） */
+
+  /* 0) 默认开启：偏好里没有 updateAutoCheck（首次启动/旧数据）→ 自动激活并排定检查 */
+  await openWithPrefs(page, { updateLastCheckAt: 0, updateSkippedVersion: '' })
+  const defaultState = await page.evaluate('window.__paperUpdateAuto.state()')
+  report.states.defaultOn = defaultState
+  assert(defaultState.active === true && defaultState.scheduled === true,
+    '默认未开启自动检查：' + JSON.stringify(defaultState))
+
+  /* 1) 显式开启（真实偏好开关） */
   await openWithPrefs(page, { updateAutoCheck: true, updateLastCheckAt: 0, updateSkippedVersion: '' })
   const enabledState = await page.evaluate('window.__paperUpdateAuto.state()')
   assert(enabledState.active === true, '开启后自动检查器未激活')
@@ -95,7 +103,7 @@ try {
   assert(fourth === 'checked', '跳过版本的检查状态不对：' + fourth)
   assert(!toast4.includes('发现新版本'), '已跳过版本仍被通知')
 
-  /* 5) 默认关闭（偏好为 false）→ 不激活、不检查 */
+  /* 5) 显式关闭（偏好为 false）→ 不排定时器、不检查 */
   await openWithPrefs(page, { updateAutoCheck: false, updateLastCheckAt: 0, updateSkippedVersion: '' })
   const disabledState = await page.evaluate('window.__paperUpdateAuto.state()')
   const disabledRun = await page.evaluate('window.__paperUpdateAuto.runNow()')

@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import {
   STARTUP_MIN_MS, STARTUP_MAX_MS, INTERVAL_MS,
-  startupDelay, withinInterval, createAutoChecker
+  startupDelay, withinInterval, autoCheckEnabled, createAutoChecker
 } from '../../public/js/update-auto.mjs'
 
 let passed = 0
@@ -55,7 +55,14 @@ await test('withinInterval 24 小时节流', () => {
   assert.equal(withinInterval(now - INTERVAL_MS - 1, now), false)
 })
 
-await test('默认关闭时 start 不排定时器、runNow 返回 disabled', async () => {
+await test('默认开启：未设置或 true 为开，仅显式 false 关闭', () => {
+  assert.equal(autoCheckEnabled(undefined), true)
+  assert.equal(autoCheckEnabled({}), true)
+  assert.equal(autoCheckEnabled({ updateAutoCheck: true }), true)
+  assert.equal(autoCheckEnabled({ updateAutoCheck: false }), false)
+})
+
+await test('显式关闭时 start 不排定时器、runNow 返回 disabled', async () => {
   const h = harness()
   h.state.enabled = false
   h.checker.start()

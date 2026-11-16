@@ -1,6 +1,6 @@
 # P1-04 自动检查（只通知，不自动下载）
 
-日期：2026-11-16　阶段 1 / P1-04　状态：已完成并核验；**默认开关仍为待确认项**（见第 5 节）
+日期：2026-11-16　阶段 1 / P1-04　状态：已完成并核验；**默认开关已确认：默认开启**（2026-11-16，见第 6 节）
 
 ## 1. 实现
 
@@ -8,7 +8,7 @@
 |---|---|
 | @public/js/update-auto.mjs@（新增） | 纯调度模块：启动后 10–30 秒随机延迟检查一次；之后每 24 小时最多一次；失败静默；只在新版本且未被跳过时通知；不启动任何子进程/后端任务 |
 | @public/js/app.mjs@ | 页面启动后创建 autoChecker：check=@/api/update/check@，notify=轻量 toast，lastCheckAt/skippedVersion 存服务端 prefs；设置页开关变化时 @setEnabled@ 立即生效 |
-| @public/js/views/settings.mjs@ | 「关于与更新」增加自动检查开关（默认关，待确认）、提示文案、已跳过版本与“取消跳过”；检查到新版本时提供“跳过此版本” |
+| @public/js/views/settings.mjs@ | 「关于与更新」增加自动检查开关（现默认开，见第 6 节）、提示文案、已跳过版本与“取消跳过”；检查到新版本时提供“跳过此版本” |
 | @public/styles.css@ | 开关样式 |
 | @test/js/update-auto.test.mjs@（新增） | Node 11 条：启动延迟范围、24h 节流、失败静默、通知/跳过、stop、启用/停用重排 |
 | @test/test_update_auto.py@（新增） | 调起 Node 测试（无 Node 时 skip），纳入 unittest 全量 |
@@ -36,7 +36,8 @@
 | 已跳过 v1.7.1 | @checked@ 但不通知 |
 | 关闭自动检查 | @state.scheduled=false@；@runNow() = disabled@ |
 | 页面 JS 错误 | @errors.js = []@；网络错误 @[]@ |
-| 设置页开关可见 | @#update-auto-toggle@ 存在（默认未勾选） |
+| 设置页开关可见 | @#update-auto-toggle@ 存在 |
+| 默认开启（偏好无 @updateAutoCheck@） | 2026-11-16 复测：@state.active=true, scheduled=true@（真实浏览器） |
 
 截图：@docs/update-p1-20261116/screenshots/update-auto-toast.png@（轻量通知）、
 @settings-update-auto-toggle.png@（面板与开关，裁剪到面板避免带本机路径）。
@@ -61,14 +62,25 @@
 - 应用关闭后不检查、不做计划任务：实现（页面定时器，无后台进程）；
 - 自动检查只通知、不自动下载：实现（仅 toast + 面板信息）；
 - 记录“跳过此版本”：实现；
-- 默认开关：**未定**，见第 5 节。
+- 默认开关：**默认开启**（产品已确认，2026-11-16），见第 5/6 节。
 
-## 5. 待确认项（不猜值）
+## 5. 已确认：自动检查默认开启（2026-11-16）
 
-**自动检查默认开还是关**（原文 §8：「默认开或关由产品决定」）：
+产品确认：**自动检查默认开启**，只通知、不下载；用户可在设置页显式关闭。
 
-- 当前实现：**默认关**（避免未经同意的联网检查；用户可在设置页开启）。
-- 可选方案：
-  - A（建议）：确认后改为**默认开**，只通知、不下载——更符合“有更新能及时知道”，且不产生下载流量；
-  - B：保持默认关，把开关作为显式选择（隐私最保守）。
-- 改动成本：默认值只在 @app.mjs@ 的 enabled 判定与设置页初值两处调整（一行级），可随 P1-05 或后续版本调整。
+- 判定：@prefs.updateAutoCheck !== false@（@undefined@/旧数据/首次启动 = 开；显式 @false@ = 关）；
+- 改动位置：@public/js/update-auto.mjs@（新增 @autoCheckEnabled@）、@app.mjs@、@settings.mjs@ 两处接入；
+- 行为不变：启动后 10–30 秒一次、之后每 24 小时最多一次、失败静默、只通知、不自动下载/安装；
+- 用户关闭后不会再有检查定时器，刷新/重开仍保持关闭（prefs 持久化）。
+
+## 6. 2026-11-16 决策落地与复测
+
+- 代码：新增 @autoCheckEnabled(prefs)@（默认开、显式 false 才关），启动与设置页统一走它；
+  设置页文案改为“自动检查默认开启（只通知，不下载）……可随时关闭”。
+- Node 测试：@node test/js/update-auto.test.mjs@ → **12 tests passed**（新增默认开/显式关用例）。
+- 真实浏览器复测（临时副本 version=1.6.0，线上 latest=v1.7.1，CDP）：
+  - 偏好无 @updateAutoCheck@：@state.active=true, scheduled=true@；
+  - 显式开启：首次 @checked@ 并 toast「发现新版本 v1.7.1…」；
+  - 24 小时节流、25 小时边界、跳过版本、显式关闭（@scheduled=false@、@runNow=disabled@）均通过；
+  - @errors.js=[]@、@errors.network=[]@；结束后 4396 端口释放。
+- 全量测试与契约结果见提交说明（默认开启改动只影响前端默认值，无 API 变更）。

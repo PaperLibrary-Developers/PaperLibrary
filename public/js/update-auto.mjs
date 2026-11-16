@@ -15,6 +15,15 @@ export const STARTUP_MIN_MS = 10 * 1000
 export const STARTUP_MAX_MS = 30 * 1000
 export const INTERVAL_MS = 24 * 60 * 60 * 1000
 
+/**
+ * 自动检查是否开启：产品已确认**默认开启**（2026-11-16）。
+ * 只有用户显式关闭（prefs.updateAutoCheck === false）才停用；prefs 缺失/旧数据视为开启。
+ * 默认开启只影响“检查并提示”，不会自动下载或安装。
+ */
+export function autoCheckEnabled (prefs) {
+  return !prefs || prefs.updateAutoCheck !== false
+}
+
 /** 启动后首次检查的延迟（10–30 秒，含端点） */
 export function startupDelay (random) {
   const r = typeof random === 'function' ? random() : Math.random()

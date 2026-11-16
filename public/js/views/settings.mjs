@@ -3,6 +3,7 @@ import * as util from '../util.mjs'
 import { api } from '../api.mjs'
 import { getState } from '../state/store.mjs'
 import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
+import { autoCheckEnabled } from '../update-auto.mjs'
 
   const { h, toast, rich, confirmDialog, fileSize, formatDate } = util
   
@@ -1350,8 +1351,8 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
       }
     }
 
-    /* 自动检查（P1-04）：默认关（产品决策待确认）；开启后也只通知、不下载 */
-    const autoEnabled = state.prefs.updateAutoCheck === true
+    /* 自动检查（P1-04）：默认开（产品已确认，2026-11-16）；只通知、不下载，可显式关闭 */
+    const autoEnabled = autoCheckEnabled(state.prefs)
     const autoToggle = h('input', {
       id: 'update-auto-toggle',
       type: 'checkbox',
@@ -1395,7 +1396,7 @@ import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
           h('span', '启动后自动检查更新（只通知，不下载）')),
         h('div.hint',
           '下载与安装需要你手动确认；下载完成后不会自动替换程序。' +
-          '自动检查默认关闭（待确认），开启后启动约 10–30 秒检查一次、之后每 24 小时最多一次，失败静默。')
+          '自动检查默认开启（只通知，不下载）：启动约 10–30 秒检查一次、之后每 24 小时最多一次，失败静默；可随时关闭。')
       ))
 
     // 进入设置页时恢复正在进行的下载/已准备好的状态（只读查询，不启动任务）

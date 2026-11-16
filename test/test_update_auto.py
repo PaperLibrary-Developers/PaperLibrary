@@ -20,7 +20,7 @@ class UpdateAutoNodeTest(unittest.TestCase):
                               cwd=str(ROOT), capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=120, env=env)
         self.assertEqual(proc.returncode, 0, (proc.stdout or "") + (proc.stderr or ""))
-        self.assertIn("11 tests passed", proc.stdout)
+        self.assertIn("12 tests passed", proc.stdout)
         self.assertIn("24 小时内再次 runNow 被节流", proc.stdout)
 
 

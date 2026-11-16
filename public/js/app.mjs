@@ -27,7 +27,7 @@ import { copilotSideEntry, mountCopilotDock } from './copilot.mjs'
 import { copilotHandler } from './views/copilot.mjs'
 // 文件夹分类：侧栏树、导入选目录、管理器共用的组件
 import * as foldersUi from './folders.mjs'
-import { createAutoChecker } from './update-auto.mjs'
+import { autoCheckEnabled, createAutoChecker } from './update-auto.mjs'
 
 const { h, toast, debounce } = util
 
@@ -817,13 +817,13 @@ const { h, toast, debounce } = util
     if (bootEl) bootEl.remove()
     patch({ booted: true })
 
-    // 自动检查更新（阶段 1：只通知，不下载）：默认关，设置页可开；失败静默、24 小时节流。
+    // 自动检查更新（阶段 1：只通知，不下载）：默认开（产品已确认），设置页可关；失败静默、24 小时节流。
     // 定时器只活在页面里：关掉页面/应用后不再检查，也不起任何后台进程。
     const autoChecker = createAutoChecker({
       check: () => api.checkUpdate(),
       notify: latest => toast('发现新版本 ' + (latest && latest.tag ? latest.tag : '') +
         '，可在「设置 → 关于与更新」查看'),
-      enabled: () => getState().prefs.updateAutoCheck === true,
+      enabled: () => autoCheckEnabled(getState().prefs),
       getLastCheckAt: () => Number(getState().prefs.updateLastCheckAt) || 0,
       saveLastCheckAt: ts => {
         patch({ prefs: { updateLastCheckAt: ts } })
