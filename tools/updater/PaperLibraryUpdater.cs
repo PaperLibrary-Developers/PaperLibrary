@@ -16,6 +16,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -120,6 +123,8 @@ internal static class UpdaterHelper
                     return ReplaceProgramCommand(options, log);
                 case "backup-data":
                     return BackupDataCommand(options, log);
+                case "install":
+                    return InstallCommand(options, log);
                 case "help":
                     Usage();
                     return 0;
@@ -819,6 +824,703 @@ internal static class UpdaterHelper
         return 0;
     }
 
+    // ---------- full install sequence (P2-13) ----------
+    //
+    // Inputs come from the launcher (which already validated apply.json):
+    //   --program-root, --staging, --old-version, --new-version, --launcher-pid,
+    //   --backup (optional), --port, --log
+    // Default waits are the values confirmed in the plan; the --timeout-* / --health-*
+    // switches exist for deterministic tests and must not be passed by the launcher.
+    //
+    // Order: install lock + journal prepare -> wait launcher PID / port / file locks ->
+    // backup data -> backup program files -> replace -> verify -> launch new app ->
+    // health check (health + /api/version, 2 consecutive) -> state.json success + clear apply.
+    // Any failure after program files moved restores the backup and launches the old app.
+
+    private const int DefaultLauncherWaitSeconds = 60;
+    private const int DefaultPortWaitSeconds = 30;
+    private const int DefaultLockWaitSeconds = 30;
+    private const int DefaultTotalSeconds = 300;
+    private const int DefaultHealthTimeoutSeconds = 60;
+    private const int DefaultHealthIntervalMs = 1000;
+    private const int DefaultHealthRequestMs = 2000;
+    private const int DefaultHealthSuccesses = 2;
+
+    private static int InstallCommand(Dictionary<string, string> options, HelperLog log)
+    {
+        string programRoot = RequiredPath(options, "program-root");
+        string staging = RequiredPath(options, "staging");
+        ValidateProgramRoot(programRoot);
+
+        string newVersion = Opt(options, "new-version");
+        string stagingVersion = ValidateStaging(staging, programRoot, newVersion);
+        if (string.IsNullOrEmpty(newVersion)) newVersion = stagingVersion;
+
+        string oldVersion = Opt(options, "old-version");
+        if (string.IsNullOrEmpty(oldVersion))
+        {
+            string currentVersionPath = System.IO.Path.Combine(programRoot, "version.json");
+            if (!File.Exists(currentVersionPath))
+                throw new HelperFailure("old-version-missing",
+                    "缺少当前版本 version.json，且未提供 --old-version：" + currentVersionPath);
+            oldVersion = ReadJsonString(currentVersionPath, "version");
+        }
+        ValidateVersionText(oldVersion, "old-version");
+
+        string backupDir = Opt(options, "backup");
+        if (string.IsNullOrEmpty(backupDir))
+            backupDir = System.IO.Path.Combine(programRoot, "data", "updates", "backups", "app-" + oldVersion);
+        backupDir = System.IO.Path.GetFullPath(backupDir);
+        ValidateBackupPath(programRoot, backupDir);
+
+        int launcherPid = IntOption(options, "launcher-pid", 0, 0, int.MaxValue);
+        int port = IntOption(options, "port", 4321, 1, 65535);
+        int pidWait = IntOption(options, "timeout-pid", DefaultLauncherWaitSeconds, 0, 3600);
+        int portWait = IntOption(options, "timeout-port", DefaultPortWaitSeconds, 1, 3600);
+        int lockWait = IntOption(options, "timeout-lock", DefaultLockWaitSeconds, 1, 3600);
+        int totalSeconds = IntOption(options, "timeout-total", DefaultTotalSeconds, 10, 7200);
+        int healthTimeout = IntOption(options, "health-timeout", DefaultHealthTimeoutSeconds, 1, 3600);
+        int healthInterval = IntOption(options, "health-interval", DefaultHealthIntervalMs, 50, 60000);
+        int healthRequest = IntOption(options, "health-request-timeout", DefaultHealthRequestMs, 100, 60000);
+        int healthSuccesses = IntOption(options, "health-successes", DefaultHealthSuccesses, 1, 10);
+
+        string updatesDir = System.IO.Path.Combine(programRoot, "data", "updates");
+        Directory.CreateDirectory(updatesDir);
+        string lockPath = System.IO.Path.Combine(updatesDir, "install.lock");
+        string journalPath = System.IO.Path.Combine(updatesDir, "journal.json");
+        string statePath = System.IO.Path.Combine(updatesDir, "state.json");
+        string applyPath = System.IO.Path.Combine(updatesDir, "apply.json");
+
+        if (File.Exists(lockPath))
+            throw new HelperFailure("install-locked", "已有安装任务在进行（install.lock 存在）：" + lockPath);
+
+        string startedAt = NowIso();
+        bool lockCreated = false;
+        try
+        {
+            CreateInstallLock(lockPath, newVersion, oldVersion, launcherPid, log);
+            lockCreated = true;
+            WriteJournal(journalPath, "prepare", newVersion, oldVersion, backupDir, staging, "", "", log);
+
+            Stopwatch total = Stopwatch.StartNew();
+            bool programBackupDone = false;
+            bool replaceDone = false;
+            Process newProc = null;
+            try
+            {
+                if (!WaitForPidExit(launcherPid, pidWait, 200, log))
+                    throw new HelperFailure("launcher-timeout",
+                        "等待启动器退出超时（" + pidWait + " 秒），未改动任何文件");
+                CheckBudget(total, totalSeconds, "wait-launcher");
+
+                if (!WaitForPortFree(port, portWait, 250, log))
+                    throw new HelperFailure("port-timeout",
+                        "等待端口 " + port + " 释放超时（" + portWait + " 秒），未改动任何文件");
+                CheckBudget(total, totalSeconds, "wait-port");
+
+                string lockedFile;
+                if (!WaitForFileLocks(programRoot, lockWait, 500, log, out lockedFile))
+                    throw new HelperFailure("file-lock-timeout",
+                        "等待文件锁释放超时（" + lockWait + " 秒）：" + lockedFile + "，未改动任何文件");
+                CheckBudget(total, totalSeconds, "wait-locks");
+
+                int rc = RunSelf("backup-data", log, "--program-root", programRoot,
+                                 "--new-version", newVersion, "--log", log.Path);
+                if (rc != 0)
+                    throw new HelperFailure("data-backup-failed", "数据备份失败（backup-data 退出码 " + rc + "）");
+                CheckBudget(total, totalSeconds, "backup-data");
+
+                rc = RunSelf("backup-program", log, "--program-root", programRoot,
+                             "--backup", backupDir, "--old-version", oldVersion, "--log", log.Path);
+                if (rc != 0)
+                    throw new HelperFailure("program-backup-failed",
+                        "程序文件备份失败（backup-program 退出码 " + rc + "）");
+                programBackupDone = true;
+                CheckBudget(total, totalSeconds, "backup-program");
+
+                rc = RunSelf("replace-program", log, "--program-root", programRoot,
+                             "--staging", staging, "--new-version", newVersion, "--log", log.Path);
+                if (rc != 0)
+                    throw new HelperFailure("replace-failed", "程序文件替换失败（replace-program 退出码 " + rc + "）");
+                replaceDone = true;
+                VerifyInstalledProgram(programRoot, newVersion);
+                CheckBudget(total, totalSeconds, "verify");
+
+                newProc = LaunchApplication(programRoot, log);
+                CheckBudget(total, totalSeconds, "launch");
+
+                string healthDetail;
+                if (!WaitForHealthy(port, newVersion, healthTimeout, healthInterval, healthRequest,
+                                    healthSuccesses, total, totalSeconds, log, out healthDetail))
+                    throw new HelperFailure("health-failed", "新版本健康检查失败：" + healthDetail);
+
+                int healthSeconds = (int)(total.ElapsedMilliseconds / 1000);
+                WriteJournal(journalPath, "success", newVersion, oldVersion, backupDir, staging, "", "", log);
+                WriteState(statePath, "success", newVersion, oldVersion, backupDir, staging,
+                           newProc.Id, false, 0, healthSeconds, startedAt, "", "", log.Path, log);
+                TryDelete(applyPath);
+                RemoveInstallLock(lockPath);
+                lockCreated = false;
+
+                Console.WriteLine(Obj(
+                    JB("ok", true),
+                    J("command", "install"),
+                    J("programRoot", programRoot),
+                    J("version", newVersion),
+                    J("fromVersion", oldVersion),
+                    J("launchedPid", (long)newProc.Id),
+                    J("backupDir", backupDir),
+                    J("healthSeconds", (long)healthSeconds),
+                    J("log", log.Path)));
+                log.Write("install success: " + oldVersion + " -> " + newVersion
+                          + " launchedPid=" + newProc.Id + " health=" + healthSeconds + "s");
+                return 0;
+            }
+            catch (HelperFailure failure)
+            {
+                string failCode = failure.Code;
+                string failMessage = failure.Message;
+                log.Write("install failed: " + failCode + ": " + failMessage);
+
+                bool restored = false;
+                int oldPid = 0;
+
+                if (newProc != null)
+                {
+                    try { RequestShutdown(port); }
+                    catch (Exception) { }
+                    bool exited = false;
+                    try { exited = newProc.WaitForExit(5000); }
+                    catch (Exception) { }
+                    if (!exited) KillProcessTree(newProc.Id);
+                }
+
+                if (programBackupDone || replaceDone)
+                {
+                    string restoreError;
+                    restored = TryRestoreProgram(programRoot, backupDir, log, out restoreError);
+                    if (!restored) log.Write("restore failed: " + restoreError);
+                }
+
+                // 只有程序文件已被搬动（备份/替换开始）才回滚并重启旧版；
+                // 等待/端口/锁/数据备份失败发生在改动之前，直接中止，文件保持原样。
+                bool shouldRelaunch = (programBackupDone || replaceDone)
+                    && File.Exists(System.IO.Path.Combine(programRoot, "PaperLibrary.exe"));
+                if (shouldRelaunch)
+                {
+                    try
+                    {
+                        Process oldProc = LaunchApplication(programRoot, log);
+                        oldPid = oldProc.Id;
+                    }
+                    catch (Exception ex)
+                    {
+                        log.Write("old version relaunch failed: " + ex.Message);
+                    }
+                }
+
+                try
+                {
+                    WriteJournal(journalPath, "failed", newVersion, oldVersion, backupDir, staging,
+                                 failCode, failMessage, log);
+                    WriteState(statePath, "failed", newVersion, oldVersion, backupDir, staging,
+                               0, restored, oldPid, 0, startedAt, failCode, failMessage, log.Path, log);
+                }
+                catch (Exception ex)
+                {
+                    log.Write("write failed state failed: " + ex.Message);
+                }
+
+                Console.WriteLine(Obj(
+                    JB("ok", false),
+                    J("command", "install"),
+                    J("programRoot", programRoot),
+                    J("version", newVersion),
+                    J("fromVersion", oldVersion),
+                    J("code", failCode),
+                    J("error", failMessage),
+                    JB("restored", restored),
+                    J("oldLaunchedPid", (long)oldPid),
+                    J("backupDir", backupDir),
+                    J("log", log.Path)));
+                return 3;
+            }
+        }
+        finally
+        {
+            if (lockCreated) RemoveInstallLock(lockPath);
+        }
+    }
+
+    private static int IntOption(Dictionary<string, string> options, string name, int fallback,
+                                 int min, int max)
+    {
+        string raw = Opt(options, name);
+        int value = fallback;
+        if (!string.IsNullOrEmpty(raw)
+            && (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out value)
+                || value < min || value > max))
+            throw new HelperFailure("invalid-argument", "--" + name + " must be " + min + "-" + max);
+        return value;
+    }
+
+    private static bool WaitForPidExit(int pid, int seconds, int intervalMs, HelperLog log)
+    {
+        if (pid <= 0) return true;
+        Stopwatch watch = Stopwatch.StartNew();
+        while (watch.ElapsedMilliseconds < (long)seconds * 1000)
+        {
+            if (!ProcessExists(pid)) return true;
+            Thread.Sleep(intervalMs);
+        }
+        return !ProcessExists(pid);
+    }
+
+    private static bool PortInUse(int port)
+    {
+        try
+        {
+            IPGlobalProperties properties = IPGlobalProperties.GetIPGlobalProperties();
+            foreach (IPEndPoint endpoint in properties.GetActiveTcpListeners())
+            {
+                if (endpoint.Port == port) return true;
+            }
+            return false;
+        }
+        catch (Exception)
+        {
+            // 探测失败时按“未占用”处理；真正的绑定失败会由后续启动/健康检查暴露。
+            return false;
+        }
+    }
+
+    private static bool WaitForPortFree(int port, int seconds, int intervalMs, HelperLog log)
+    {
+        Stopwatch watch = Stopwatch.StartNew();
+        while (watch.ElapsedMilliseconds < (long)seconds * 1000)
+        {
+            if (!PortInUse(port)) return true;
+            Thread.Sleep(intervalMs);
+        }
+        return !PortInUse(port);
+    }
+
+    private static bool IsFileLocked(string path)
+    {
+        if (!File.Exists(path)) return false;
+        try
+        {
+            using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                stream.Close();
+            }
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
+    private static string FirstLockedProgramFile(string programRoot)
+    {
+        string[] relative =
+        {
+            "PaperLibrary.exe", "PaperLibrary.exe.config",
+            "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll",
+            "WebView2Loader.dll", System.IO.Path.Combine("runtime", "portable", "python.exe"),
+        };
+        foreach (string name in relative)
+        {
+            string path = System.IO.Path.Combine(programRoot, name);
+            if (IsFileLocked(path)) return path;
+        }
+        return "";
+    }
+
+    private static bool WaitForFileLocks(string programRoot, int seconds, int intervalMs,
+                                         HelperLog log, out string lockedFile)
+    {
+        Stopwatch watch = Stopwatch.StartNew();
+        while (watch.ElapsedMilliseconds < (long)seconds * 1000)
+        {
+            lockedFile = FirstLockedProgramFile(programRoot);
+            if (lockedFile.Length == 0) return true;
+            Thread.Sleep(intervalMs);
+        }
+        lockedFile = FirstLockedProgramFile(programRoot);
+        return lockedFile.Length == 0;
+    }
+
+    private static void CheckBudget(Stopwatch watch, int totalSeconds, string phase)
+    {
+        if (watch.ElapsedMilliseconds > (long)totalSeconds * 1000)
+            throw new HelperFailure("total-timeout",
+                "安装超出总预算（" + totalSeconds + " 秒），阶段：" + phase);
+    }
+
+    private static int RunSelf(string command, HelperLog log, params string[] args)
+    {
+        string exe = ExePath();
+        StringBuilder commandLine = new StringBuilder(command);
+        foreach (string arg in args)
+        {
+            if (arg == null) continue;
+            commandLine.Append(' ').Append(QuoteArgument(arg));
+        }
+        ProcessStartInfo info = new ProcessStartInfo(exe, commandLine.ToString());
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        info.WorkingDirectory = System.IO.Path.GetDirectoryName(exe);
+        try
+        {
+            using (Process process = Process.Start(info))
+            {
+                string stdout = process.StandardOutput.ReadToEnd();
+                string stderr = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                if (!string.IsNullOrEmpty(stdout.Trim())) log.Write("[" + command + "] " + stdout.Trim());
+                if (!string.IsNullOrEmpty(stderr.Trim())) log.Write("[" + command + "] stderr: " + stderr.Trim());
+                return process.ExitCode;
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new HelperFailure("subcommand-failed", "无法执行 " + command + "：" + ex.Message);
+        }
+    }
+
+    private static string QuoteArgument(string value)
+    {
+        if (value.Length > 0 && value.IndexOf(' ') < 0 && value.IndexOf('"') < 0) return value;
+        return "\"" + value.Replace("\"", "\\\"") + "\"";
+    }
+
+    private static void VerifyInstalledProgram(string programRoot, string newVersion)
+    {
+        string exePath = System.IO.Path.Combine(programRoot, "PaperLibrary.exe");
+        string versionPath = System.IO.Path.Combine(programRoot, "version.json");
+        if (!File.Exists(exePath))
+            throw new HelperFailure("verify-failed", "替换后缺少 PaperLibrary.exe：" + exePath);
+        if (!File.Exists(versionPath))
+            throw new HelperFailure("verify-failed", "替换后缺少 version.json：" + versionPath);
+        string installedVersion = ReadJsonString(versionPath, "version");
+        if (installedVersion != newVersion)
+            throw new HelperFailure("verify-failed",
+                "替换后版本不符：" + installedVersion + " != " + newVersion);
+    }
+
+    private static Process LaunchApplication(string programRoot, HelperLog log)
+    {
+        string exePath = System.IO.Path.Combine(programRoot, "PaperLibrary.exe");
+        if (!File.Exists(exePath))
+            throw new HelperFailure("launch-failed", "缺少启动器：" + exePath);
+        ProcessStartInfo info = new ProcessStartInfo(exePath);
+        info.WorkingDirectory = programRoot;
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        // 不要让新应用继承 helper 的 stdout/stderr（helper 的输出被启动器/测试以管道读取；
+        // 子进程若继承管道，helper 退出后管道仍不关闭，调用方会一直等不到 EOF）。
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        Process process = Process.Start(info);
+        if (process == null)
+            throw new HelperFailure("launch-failed", "无法启动：" + exePath);
+        try
+        {
+            process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs ev) { };
+            process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs ev) { };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+        }
+        catch (Exception)
+        {
+        }
+        log.Write("launched " + exePath + " pid=" + process.Id);
+        return process;
+    }
+
+    private static void RequestShutdown(int port)
+    {
+        try
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(
+                "http://127.0.0.1:" + port + "/api/shutdown");
+            request.Method = "POST";
+            request.Timeout = 2000;
+            request.ReadWriteTimeout = 2000;
+            request.Proxy = null;
+            request.ContentLength = 0;
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            {
+                using (Stream stream = response.GetResponseStream())
+                {
+                    if (stream != null)
+                    {
+                        using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                            reader.ReadToEnd();
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static void KillProcessTree(int pid)
+    {
+        if (pid <= 0) return;
+        try
+        {
+            ProcessStartInfo info = new ProcessStartInfo("taskkill", "/PID " + pid + " /T /F");
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            using (Process process = Process.Start(info))
+            {
+                if (process == null) return;
+                process.StandardOutput.ReadToEnd();
+                process.StandardError.ReadToEnd();
+                process.WaitForExit(5000);
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static string HttpGet(string url, int timeoutMs)
+    {
+        try
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.Method = "GET";
+            request.Timeout = timeoutMs;
+            request.ReadWriteTimeout = timeoutMs;
+            request.Proxy = null;
+            request.KeepAlive = false;
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            {
+                if ((int)response.StatusCode != 200) return null;
+                using (Stream stream = response.GetResponseStream())
+                {
+                    if (stream == null) return null;
+                    using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                    {
+                        char[] buffer = new char[65536];
+                        int read = reader.Read(buffer, 0, buffer.Length);
+                        return read <= 0 ? "" : new string(buffer, 0, read);
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static bool HealthCheck(int port, string targetVersion, int requestMs, out string detail)
+    {
+        detail = "";
+        string health = HttpGet("http://127.0.0.1:" + port + "/api/health", requestMs);
+        if (health == null) { detail = "health-unreachable"; return false; }
+        if (!Regex.IsMatch(health, "\"ok\"\\s*:\\s*true")) { detail = "health-not-ok"; return false; }
+        if (!Regex.IsMatch(health, "\"app\"\\s*:\\s*\"literature-vault\""))
+        { detail = "health-app-mismatch"; return false; }
+
+        string versionJson = HttpGet("http://127.0.0.1:" + port + "/api/version", requestMs);
+        if (versionJson == null) { detail = "version-unreachable"; return false; }
+        if (!Regex.IsMatch(versionJson, "\"product\"\\s*:\\s*\"PaperLibrary\""))
+        { detail = "version-product-mismatch"; return false; }
+        Match match = Regex.Match(versionJson, "\"version\"\\s*:\\s*\"([^\"]*)\"");
+        if (!match.Success || match.Groups[1].Value != targetVersion)
+        { detail = "version-mismatch"; return false; }
+        detail = "ok";
+        return true;
+    }
+
+    private static bool WaitForHealthy(int port, string targetVersion, int timeoutSeconds,
+                                       int intervalMs, int requestMs, int successes,
+                                       Stopwatch total, int totalSeconds, HelperLog log,
+                                       out string lastDetail)
+    {
+        lastDetail = "";
+        Stopwatch watch = Stopwatch.StartNew();
+        int streak = 0;
+        int attempts = 0;
+        while (watch.ElapsedMilliseconds < (long)timeoutSeconds * 1000)
+        {
+            CheckBudget(total, totalSeconds, "health");
+            attempts++;
+            string detail;
+            if (HealthCheck(port, targetVersion, requestMs, out detail))
+            {
+                streak++;
+                log.Write("health attempt " + attempts + ": ok (streak " + streak + "/" + successes + ")");
+                if (streak >= successes) return true;
+            }
+            else
+            {
+                streak = 0;
+                lastDetail = detail;
+                log.Write("health attempt " + attempts + ": " + detail);
+            }
+            Thread.Sleep(intervalMs);
+        }
+        return false;
+    }
+
+    private static void CreateInstallLock(string path, string version, string fromVersion,
+                                          int launcherPid, HelperLog log)
+    {
+        string dir = System.IO.Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        string record = Obj(
+            J("schema", 1L),
+            J("product", HelperInfo.Product),
+            J("pid", (long)Process.GetCurrentProcess().Id),
+            J("launcherPid", (long)launcherPid),
+            J("version", version),
+            J("fromVersion", fromVersion),
+            J("createdAt", NowIso()));
+        try
+        {
+            using (FileStream stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                byte[] bytes = new UTF8Encoding(false).GetBytes(record);
+                stream.Write(bytes, 0, bytes.Length);
+            }
+        }
+        catch (IOException)
+        {
+            throw new HelperFailure("install-locked", "已有安装任务在进行（install.lock 存在）：" + path);
+        }
+        log.Write("install lock created: " + path);
+    }
+
+    private static void RemoveInstallLock(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static void WriteJournal(string path, string phase, string version, string fromVersion,
+                                     string backupDir, string staging, string code, string error,
+                                     HelperLog log)
+    {
+        string record = Obj(
+            J("schema", 1L),
+            J("product", HelperInfo.Product),
+            J("phase", phase),
+            J("version", version),
+            J("fromVersion", fromVersion),
+            J("backupDir", backupDir),
+            J("staging", staging),
+            J("updatedAt", NowIso()),
+            J("code", code),
+            J("error", error));
+        WriteTextAtomic(path, record);
+        log.Write("journal: " + phase);
+    }
+
+    private static void WriteState(string path, string phase, string version, string fromVersion,
+                                   string backupDir, string staging, int launchedPid, bool restored,
+                                   int oldLaunchedPid, int healthSeconds, string startedAt,
+                                   string code, string error, string logPath, HelperLog log)
+    {
+        string record = Obj(
+            J("schema", 1L),
+            J("product", HelperInfo.Product),
+            J("phase", phase),
+            J("version", version),
+            J("fromVersion", fromVersion),
+            J("backupDir", backupDir),
+            J("staging", staging),
+            J("launchedPid", (long)launchedPid),
+            JB("restored", restored),
+            J("oldLaunchedPid", (long)oldLaunchedPid),
+            J("healthSeconds", (long)healthSeconds),
+            J("startedAt", startedAt),
+            J("finishedAt", NowIso()),
+            J("code", code),
+            J("error", error),
+            J("log", logPath));
+        WriteTextAtomic(path, record);
+        log.Write("state: " + phase);
+    }
+
+    private static bool TryRestoreProgram(string programRoot, string backupDir, HelperLog log,
+                                          out string error)
+    {
+        error = "";
+        try
+        {
+            if (!Directory.Exists(backupDir))
+            {
+                error = "backup-missing";
+                return false;
+            }
+            string dataDir = System.IO.Path.Combine(programRoot, "data");
+            foreach (string entry in Directory.GetFileSystemEntries(programRoot))
+            {
+                if (string.Equals(System.IO.Path.GetFileName(entry), "data", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (Directory.Exists(entry)) Directory.Delete(entry, true);
+                else File.Delete(entry);
+            }
+            foreach (string entry in Directory.GetFileSystemEntries(backupDir))
+            {
+                string name = System.IO.Path.GetFileName(entry);
+                if (string.Equals(name, "backup.json", StringComparison.OrdinalIgnoreCase)) continue;
+                string target = System.IO.Path.Combine(programRoot, name);
+                if (Directory.Exists(entry)) Directory.Move(entry, target);
+                else File.Move(entry, target);
+            }
+            if (!File.Exists(System.IO.Path.Combine(programRoot, "PaperLibrary.exe")))
+            {
+                error = "restore-missing-exe";
+                return false;
+            }
+            if (!Directory.Exists(dataDir))
+            {
+                error = "restore-data-missing";
+                return false;
+            }
+            log.Write("program restored from " + backupDir);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.GetType().Name + ": " + ex.Message;
+            return false;
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
     private static string RequiredPath(Dictionary<string, string> options, string name)
     {
         string value = Opt(options, name);
@@ -844,10 +1546,23 @@ internal static class UpdaterHelper
     {
         if (!Directory.Exists(staging))
             throw new HelperFailure("staging-missing", "staging 目录不存在：" + staging);
+        // 正式流程的 staging 位于 <program-root>\data\updates\<version>\staging（P2-01/P2-04），
+        // 属于程序目录内的 data/，替换时必须允许；只拒绝直接放在程序目录或其它程序文件区的 staging。
+        string dataUpdatesRoot = System.IO.Path.Combine(programRoot, "data", "updates");
+        bool insideProgram = IsWithin(programRoot, staging)
+            && !string.Equals(System.IO.Path.GetFullPath(staging),
+                              System.IO.Path.GetFullPath(programRoot), StringComparison.OrdinalIgnoreCase);
+        if (insideProgram)
+        {
+            bool underDataUpdates = IsWithin(dataUpdatesRoot, staging);
+            bool underBackups = IsWithin(System.IO.Path.Combine(dataUpdatesRoot, "backups"), staging);
+            if (!underDataUpdates || underBackups)
+                throw new HelperFailure("staging-inside-program",
+                    "staging 只能位于 data\\updates\\ 下（或程序目录外）：" + staging);
+        }
         if (string.Equals(System.IO.Path.GetFullPath(staging),
-                          System.IO.Path.GetFullPath(programRoot), StringComparison.OrdinalIgnoreCase)
-            || IsWithin(programRoot, staging))
-            throw new HelperFailure("staging-inside-program", "staging 不能位于程序目录内：" + staging);
+                          System.IO.Path.GetFullPath(programRoot), StringComparison.OrdinalIgnoreCase))
+            throw new HelperFailure("staging-inside-program", "staging 不能等于程序目录：" + staging);
         if (!File.Exists(System.IO.Path.Combine(staging, "PaperLibrary.exe")))
             throw new HelperFailure("missing-exe", "staging 缺少 PaperLibrary.exe");
         if (!File.Exists(System.IO.Path.Combine(staging, "version.json")))
@@ -1023,6 +1738,7 @@ internal static class UpdaterHelper
         if (options.ContainsKey("backup-program")) return "backup-program";
         if (options.ContainsKey("replace-program")) return "replace-program";
         if (options.ContainsKey("backup-data")) return "backup-data";
+        if (options.ContainsKey("install")) return "install";
         if (positional.Count > 0) return positional[0].ToLowerInvariant();
         return "help";
     }
@@ -1251,6 +1967,8 @@ internal static class UpdaterHelper
         Console.Error.WriteLine("                                  copy staging over the empty program root");
         Console.Error.WriteLine("  backup-data --program-root DIR --new-version X [--keep N]");
         Console.Error.WriteLine("                                  copy library.db + settings into data/backups/update-X (default keep 1)");
+        Console.Error.WriteLine("  install --program-root DIR --staging DIR [--old-version Y] [--new-version X] [--launcher-pid PID] [--backup DIR] [--port 4321]");
+        Console.Error.WriteLine("                                  full install: wait, backup data/program, replace, launch, health, rollback");
         Console.Error.WriteLine("options:");
         Console.Error.WriteLine("  --updater-home DIR   override %LOCALAPPDATA%\\PaperLibrary\\updater");
         Console.Error.WriteLine("  --log FILE           log file (default <updater-home>\\logs\\updater.log)");
