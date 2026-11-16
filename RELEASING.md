@@ -1,6 +1,6 @@
 # PaperLibrary 发布流程（方案一：GitHub Releases 整包替换）
 
-> 适用：阶段 0 及其后的每次公开发布。更新机制其余部分（下载/安装/回滚）仍在后续阶段实现。
+> 适用：阶段 0 及其后的每次公开发布。更新机制（检查/下载/立即安装/回滚/自动下载）已落地。
 > 本文与 `shared/contracts/update-manifest.md`（清单契约）、`version.json`（唯一版本来源）配套。
 
 ## 1. 仓库与稳定地址
@@ -90,8 +90,12 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 任一 FAIL 即判定发布失败；WARN 需人工确认（例如历史资产没有 version.json）。
 
-## 5. 当前状态（2026-11-15）
+## 5. 当前状态（2026-11-17）
 
+- **v1.8.0 已发布**（tag v1.8 / Release 指向 `ca4c1f4`，完整更新机制 + 立即安装 + 自动下载开关）：
+  - zip `PaperLibrary.v1.8.Nexus.zip` 43,370,712 字节，sha256 `6b147db1215134db28cc27f587cff921951d2ee3d86816d126065c892688de41`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（stable 清单一致、真实下载、SHA-256、zip 无 data/）。
 - **v1.7.1 已发布**（tag/Release 指向 `c9aa3268`，含 P0-01~P0-06 与批量导入/AI 总结修复）：
   - zip `PaperLibrary.v1.7.1.Nexus.zip` 43,238,599 字节，sha256 `e844ba33ba07e44f…0f30032`；
   - 资产：zip、`update-manifest.json`（签名 keyId=e777a2f6）、`SHA256SUMS`、`release-v1.7.1.json`；
