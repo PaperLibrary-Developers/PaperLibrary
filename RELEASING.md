@@ -92,6 +92,10 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 ## 5. 当前状态（2026-11-17）
 
+- **v1.8.1 已发布**（tag v1.8.1 / Release 指向 `9cd64b6`，修复更新检查 SSL 证书链校验失败）：
+  - zip `PaperLibrary.v1.8.1.Nexus.zip` 43,371,547 字节，sha256 `331ef50245f9a4ba7b26f6469ca654bc5e2c364a4c9e68afc3c376e5986618cf`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.1.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、真实下载、SHA-256、zip 无 data/）。
 - **v1.8.0 已发布**（tag v1.8 / Release 指向 `ca4c1f4`，完整更新机制 + 立即安装 + 自动下载开关）：
   - zip `PaperLibrary.v1.8.Nexus.zip` 43,370,712 字节，sha256 `6b147db1215134db28cc27f587cff921951d2ee3d86816d126065c892688de41`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.json`；
