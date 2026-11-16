@@ -1,0 +1,25 @@
+{
+  "oldVersion": {
+    "product": "PaperLibrary",
+    "version": "1.6.0",
+    "tag": "v1.6"
+  },
+  "newVersion": {
+    "product": "PaperLibrary",
+    "version": "1.7.1",
+    "tag": "v1.7.1",
+    "commit": "c9aa32684743bf37d9d33f197fbad6541835e2a3"
+  },
+  "oldExit": 0,
+  "elapsedSeconds": 31.6,
+  "dataDb": true,
+  "source": "https://github.com/PaperLibrary-Developers/PaperLibrary/releases/latest/download/update-manifest.json",
+  "screenshots": [
+    "01-old-version.png",
+    "02-found.png",
+    "03-ready.png",
+    "04-confirm.png",
+    "05-closing.png",
+    "06-new-version.png"
+  ]
+}

@@ -1,0 +1,14 @@
+P2-20 安装日志摘录（真实 GitHub v1.7.1 资产）
+2026-11-17 02:06:00 install lock created
+2026-11-17 02:06:00 journal: prepare
+2026-11-17 02:06:02 journal: backup
+2026-11-17 02:06:02 backup-data: 4 files / 172074 bytes -> data\backups\update-1.7.1 (library.db 139264, prefs.json 42, ...)
+2026-11-17 02:06:02 backup-program: moved 878 files / 106925713 bytes -> data\updates\backups\app-1.6.0 dataPreserved=true
+2026-11-17 02:06:03 replace-program: copied 714 files / 99436397 bytes; version=1.7.1 dataPreserved=true
+2026-11-17 02:06:03 launched PaperLibrary.exe pid=110904
+2026-11-17 02:06:05 health attempt 1: health-timeout
+2026-11-17 02:06:06 health attempt 2: ok (streak 1/2)
+2026-11-17 02:06:07 health attempt 3: ok (streak 2/2)
+2026-11-17 02:06:07 journal: success
+2026-11-17 02:06:07 state: success
+2026-11-17 02:06:07 install success: 1.6.0 -> 1.7.1 launchedPid=110904 health=7s
