@@ -34,7 +34,10 @@ public static class LauncherCoreProbe
         }
         if (command == "precheck" && args.Length >= 3)
         {
-            PrecheckResult result = LauncherCore.Precheck(args[1], args[2]);
+            long freeOverride = -1;
+            if (args.Length >= 4) long.TryParse(args[3], out freeOverride);
+            string programFilesOverride = args.Length >= 5 ? args[4] : null;
+            PrecheckResult result = LauncherCore.Precheck(args[1], args[2], freeOverride, programFilesOverride);
             Console.WriteLine(PrecheckJson(result));
             return result.Ok ? 0 : 3;
         }

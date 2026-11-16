@@ -84,7 +84,8 @@ UI → 启动器：
 - 失败 code：`apply-missing`、`apply-json`、`apply-schema`、`apply-invalid`、
   `staging-outside-data`、`staging-missing`、`staging-incomplete`、`version-mismatch`、
   `helper-missing`、`helper-path`、`helper-sha256`、`program-files`、`program-readonly`、
-  `precheck-error`；P2-11R 另有 `helper-start-failed`、`service-stop-timeout`；
+  `disk-low`、`disk-check-failed`、`precheck-error`；P2-11R 另有 `helper-start-failed`、
+  `service-stop-timeout`；
 - 预检失败/启动器拒绝 → UI 保持窗口并显示错误，不关闭；
 - 预检成功才允许启动 helper；P2-11R 负责启动与关闭时序。
 
@@ -102,7 +103,10 @@ UI → 启动器：
 
 预检（P2-10R 基础版）：apply.schema=1、staging 在 `data/` 内、staging 的
 `PaperLibrary.exe`/`version.json` 存在且版本一致、包外 helper 部署与 SHA-256 一致、
-程序目录可写且不在 Program Files（磁盘阈值/占用重试由 P2-18 补全）。
+程序目录可写且不在 Program Files。
+
+P2-18 完整版新增磁盘估算：zip + staging + 程序备份 + data(不含 updates) + 300 MB
+必须小于所在盘可用空间，否则返回 `disk-low`，不启动 helper、不关闭窗口。
 
 ## 7. UI 立即安装流程（P2-09R）
 

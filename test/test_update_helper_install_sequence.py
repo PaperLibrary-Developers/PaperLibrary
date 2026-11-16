@@ -314,6 +314,9 @@ class InstallSequenceTest(unittest.TestCase):
             "--health-interval", str(health_interval),
             "--health-successes", str(health_successes),
             "--health-request-timeout", "1000",
+            # 测试把 P2-18 的占用重试缩短，避免文件锁用例等 21 秒；生产默认 300ms/21s。
+            "--file-retry-max-ms", "300",
+            "--file-retry-delay-ms", "50",
             "--log", str(self.log),
         ]
         # 用文件而不是管道接收输出：helper 会启动新应用，管道句柄可能被孙进程继承，
@@ -497,7 +500,12 @@ class InstallSequenceTest(unittest.TestCase):
         self.start_locker(self.staging / "vendor" / "lib.js")
         proc, data = self.install()
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
-        self.assertEqual(data["code"], "replace-failed")
+        self.assertEqual(data["code"], "file-lock-timeout")
+        state = self.state()
+        self.assertEqual(state["code"], "file-lock-timeout")
+        self.assertIn("文件被占用", state["error"])
+        self.assertTrue(state["log"])
+        self.assertTrue((self.data / "updates" / "apply.json").exists(), "失败保留 apply 供重试/下次启动提示")
         self.assertTrue(data["restored"], data)
         self.assertEqual(json.loads((self.program / "version.json").read_text(encoding="utf-8"))["version"],
                          "1.6.0")

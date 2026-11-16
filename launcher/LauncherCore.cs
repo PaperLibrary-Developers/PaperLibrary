@@ -263,6 +263,18 @@ public static class LauncherCore
 
     public static PrecheckResult Precheck(string baseDir, string updaterHome)
     {
+        return Precheck(baseDir, updaterHome, -1, null);
+    }
+
+    // freeBytesOverride < 0 时读取真实磁盘剩余空间；programFilesRootOverride 仅用于自动化测试。
+    public static PrecheckResult Precheck(string baseDir, string updaterHome, long freeBytesOverride)
+    {
+        return Precheck(baseDir, updaterHome, freeBytesOverride, null);
+    }
+
+    public static PrecheckResult Precheck(string baseDir, string updaterHome,
+                                          long freeBytesOverride, string programFilesRootOverride)
+    {
         PrecheckResult result = new PrecheckResult();
         try
         {
@@ -302,13 +314,33 @@ public static class LauncherCore
             if (helper.Length == 0)
                 return Fail(result, helperCode, helperMessage);
 
-            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            string programFiles = programFilesRootOverride ?? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string programFilesX86 = programFilesRootOverride ?? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
             if (IsWithin(programFiles, baseDir) || IsWithin(programFilesX86, baseDir))
                 return Fail(result, "program-files", "程序位于 Program Files，第一阶段不支持提权安装，请放到用户可写目录");
 
             if (!IsWritable(baseDir))
                 return Fail(result, "program-readonly", "程序目录不可写，无法替换：" + baseDir);
+
+            long stagingBytes = DirectoryBytes(staging);
+            long programBytes = DirectoryBytesExcluding(baseDir, "data");
+            long userDataBytes = DirectoryBytesExcluding(data, "updates");
+            long zipBytes = ZipBytes(updates);
+            long required = stagingBytes + programBytes + userDataBytes + zipBytes + 300L * 1024 * 1024;
+            long available;
+            try
+            {
+                available = freeBytesOverride >= 0
+                    ? freeBytesOverride
+                    : new DriveInfo(Path.GetPathRoot(Path.GetFullPath(baseDir))).AvailableFreeSpace;
+            }
+            catch (Exception ex)
+            {
+                return Fail(result, "disk-check-failed", "无法读取磁盘剩余空间：" + ex.Message);
+            }
+            if (available < required)
+                return Fail(result, "disk-low", "磁盘空间不足：需要约 " + FormatMb(required)
+                    + "，当前可用约 " + FormatMb(available) + "（含 300 MB 余量）");
 
             result.Ok = true;
             result.Code = "ok";
@@ -333,6 +365,61 @@ public static class LauncherCore
         result.Code = code;
         result.Message = message;
         return result;
+    }
+
+    private static long DirectoryBytes(string dir)
+    {
+        long total = 0;
+        try
+        {
+            foreach (string file in Directory.GetFiles(dir))
+            {
+                try { total += new FileInfo(file).Length; } catch (Exception) { }
+            }
+            foreach (string child in Directory.GetDirectories(dir))
+                total += DirectoryBytes(child);
+        }
+        catch (Exception) { }
+        return total;
+    }
+
+    private static long DirectoryBytesExcluding(string root, string excludedTopName)
+    {
+        long total = 0;
+        try
+        {
+            foreach (string file in Directory.GetFiles(root))
+            {
+                try { total += new FileInfo(file).Length; } catch (Exception) { }
+            }
+            foreach (string child in Directory.GetDirectories(root))
+            {
+                if (string.Equals(Path.GetFileName(child), excludedTopName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                total += DirectoryBytes(child);
+            }
+        }
+        catch (Exception) { }
+        return total;
+    }
+
+    private static long ZipBytes(string root)
+    {
+        long total = 0;
+        try
+        {
+            foreach (string file in Directory.GetFiles(root, "*.zip", SearchOption.AllDirectories))
+            {
+                try { total += new FileInfo(file).Length; } catch (Exception) { }
+            }
+        }
+        catch (Exception) { }
+        return total;
+    }
+
+    private static string FormatMb(long bytes)
+    {
+        return (bytes / (1024.0 * 1024.0)).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
     }
 
     private static bool IsWritable(string dir)

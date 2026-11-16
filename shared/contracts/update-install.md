@@ -237,7 +237,19 @@ UI 确认后，启动器执行：
 6. 手动关窗且存在 pending apply 时走同一路径；无 pending 时行为不变；
 7. 启动器 Mutex 贯穿；helper 创建 `data/updates/install.lock`，双开被 Mutex/锁拦截。
 
-## 9. 与后续步骤的边界
+## 9. 安装期文件占用重试（P2-18，已冻结）
+
+只对 Windows 共享/锁冲突重试：
+
+- 可重试：`ERROR_SHARING_VIOLATION(32)`、`ERROR_LOCK_VIOLATION(33)`；
+- 不重试：`ACCESS_DENIED(5)`、路径不存在、磁盘满等权限/结构错误，直接失败；
+- 按文件重试，每 **300 ms** 一次，单文件最多 **21 秒**；
+- 适用于 `backup-data` 的复制、`backup-program` 的 Move、`replace-program` 的 Copy；
+- 超时抛 `file-lock-timeout`：安装中止、按 P2-13 回滚旧版、保留 `apply.json`；
+  `state.json` 写具体 code/error/log，下次启动由 P2-10R 弹窗提示失败原因；
+- 安装前的端口/文件锁等待仍按 30 秒、超时只中止，不强制结束残留进程。
+
+## 10. 与后续步骤的边界
 
 - P2-15（已完成）：数据备份到 `data/backups/update-<newVersion>/`；失败中止安装。
 - P2-13（已完成）：安装锁 + 等待 + 数据/程序备份 + 替换 + 启动 + 健康检查 + 失败回滚。
@@ -245,8 +257,9 @@ UI 确认后，启动器执行：
   分阶段强杀恢复、程序备份保留最近一个；`backup.json` 是回滚依据。
 - P2-17（已完成）：健康检查错误分类与具体失败码；失败仍回滚。
 - P2-10R/P2-11R（已完成）：启动器预检/启动判定、WebView2 握手、helper 启动与关闭时序。
+- P2-18（已完成）：300 MB 余量/Program Files/磁盘预检；安装期共享/锁冲突 300ms×21s 按文件重试，
+  超时中止/回滚并写 state。
 
-## 10. 待确认（不猜值）
+## 11. 待确认（不猜值）
 
-1. 杀软/索引器占用导致 `Directory.Move`/`File.Copy` 失败时的安装期重试参数：P2-18 确定
-   （端口/文件锁等待已按 30 秒确认，超时只中止）。
+无。P2-18 占用重试参数已于 2026-11-17 确认，见第 9 节。

@@ -77,6 +77,14 @@ internal static class UpdaterHelper
     [STAThread]
     private static int Main(string[] args)
     {
+        try
+        {
+            Console.OutputEncoding = new UTF8Encoding(false);
+        }
+        catch (Exception)
+        {
+            // 重定向/无控制台时可能不支持设置编码；日志仍用 UTF-8 写入。
+        }
         Dictionary<string, string> options;
         List<string> positional;
         string error;
@@ -382,6 +390,10 @@ internal static class UpdaterHelper
                 || keep < 1 || keep > 50))
             throw new HelperFailure("invalid-argument", "--keep must be 1-50");
 
+        int retryMaxMs;
+        int retryDelayMs;
+        ReadFileRetryOptions(options, out retryMaxMs, out retryDelayMs);
+
         string dataDir = System.IO.Path.Combine(programRoot, "data");
         if (!Directory.Exists(dataDir))
             throw new HelperFailure("data-missing", "数据目录不存在：" + dataDir);
@@ -443,7 +455,8 @@ internal static class UpdaterHelper
                     continue;
                 }
                 string target = System.IO.Path.Combine(tempDir, name);
-                File.Copy(source, target, false);
+                RetryIo(delegate { File.Copy(source, target, false); }, source, "backup-data",
+                        retryMaxMs, retryDelayMs, log);
                 string sourceHash = FileSha256(source);
                 string targetHash = FileSha256(target);
                 if (sourceHash.Length == 0 || sourceHash != targetHash)
@@ -469,7 +482,8 @@ internal static class UpdaterHelper
 
             if (Directory.Exists(finalDir))
                 throw new HelperFailure("data-backup-exists", "数据备份目录已存在：" + finalDir);
-            Directory.Move(tempDir, finalDir);
+            RetryIo(delegate { Directory.Move(tempDir, finalDir); }, tempDir, "backup-data",
+                    retryMaxMs, retryDelayMs, log);
         }
         catch (HelperFailure)
         {
@@ -645,6 +659,10 @@ internal static class UpdaterHelper
         if (Directory.Exists(backupDir) && Directory.GetFileSystemEntries(backupDir).Length > 0)
             throw new HelperFailure("backup-exists", "备份目录已存在且非空：" + backupDir);
 
+        int retryMaxMs;
+        int retryDelayMs;
+        ReadFileRetryOptions(options, out retryMaxMs, out retryDelayMs);
+
         string dataDir = System.IO.Path.Combine(programRoot, "data");
         bool hadData = Directory.Exists(dataDir);
         List<string> moved = new List<string>();
@@ -669,7 +687,8 @@ internal static class UpdaterHelper
                 {
                     if (File.Exists(target) || Directory.Exists(target))
                         throw new HelperFailure("backup-target-exists", "备份目标已存在：" + target);
-                    Directory.Move(entry, target);
+                    RetryIo(delegate { Directory.Move(entry, target); }, entry, "backup-program",
+                            retryMaxMs, retryDelayMs, log);
                     entries.Add(Obj(J("name", name), J("type", "dir"),
                                     J("files", counts.Files), J("bytes", counts.Bytes)));
                 }
@@ -677,7 +696,8 @@ internal static class UpdaterHelper
                 {
                     if (File.Exists(target) || Directory.Exists(target))
                         throw new HelperFailure("backup-target-exists", "备份目标已存在：" + target);
-                    File.Move(entry, target);
+                    RetryIo(delegate { File.Move(entry, target); }, entry, "backup-program",
+                            retryMaxMs, retryDelayMs, log);
                     entries.Add(Obj(J("name", name), J("type", "file"),
                                     J("files", 1), J("bytes", counts.Bytes)));
                 }
@@ -748,6 +768,10 @@ internal static class UpdaterHelper
         ValidateProgramRoot(programRoot);
         string version = ValidateStaging(staging, programRoot, newVersion);
 
+        int retryMaxMs;
+        int retryDelayMs;
+        ReadFileRetryOptions(options, out retryMaxMs, out retryDelayMs);
+
         string dataDir = System.IO.Path.Combine(programRoot, "data");
         bool hadData = Directory.Exists(dataDir);
         foreach (string entry in Directory.GetFileSystemEntries(programRoot))
@@ -772,10 +796,12 @@ internal static class UpdaterHelper
                 if (File.Exists(target) || Directory.Exists(target))
                     throw new HelperFailure("target-exists", "替换目标已存在：" + target);
                 if (Directory.Exists(source))
-                    CopyDirectory(source, target, ref copiedFiles, ref copiedBytes);
+                    CopyDirectory(source, target, ref copiedFiles, ref copiedBytes,
+                                  retryMaxMs, retryDelayMs, log);
                 else
                 {
-                    File.Copy(source, target, false);
+                    RetryIo(delegate { File.Copy(source, target, false); }, source, "replace",
+                            retryMaxMs, retryDelayMs, log);
                     copiedFiles++;
                     copiedBytes += new FileInfo(target).Length;
                 }
@@ -847,6 +873,9 @@ internal static class UpdaterHelper
     private const int DefaultHealthIntervalMs = 1000;
     private const int DefaultHealthRequestMs = 2000;
     private const int DefaultHealthSuccesses = 2;
+    // P2-18（2026-11-17 确认）：安装期只重试共享/锁冲突，按文件每 300ms 一次，最多 21 秒。
+    private const int DefaultFileRetryMaxMs = 21000;
+    private const int DefaultFileRetryDelayMs = 300;
 
     private static int InstallCommand(Dictionary<string, string> options, HelperLog log)
     {
@@ -886,6 +915,8 @@ internal static class UpdaterHelper
         int healthRequest = IntOption(options, "health-request-timeout", DefaultHealthRequestMs, 100, 60000);
         int healthSuccesses = IntOption(options, "health-successes", DefaultHealthSuccesses, 1, 10);
         int phaseDelayMs = IntOption(options, "phase-delay-ms", 0, 0, 60000);
+        int fileRetryMaxMs = IntOption(options, "file-retry-max-ms", DefaultFileRetryMaxMs, 0, 600000);
+        int fileRetryDelayMs = IntOption(options, "file-retry-delay-ms", DefaultFileRetryDelayMs, 10, 5000);
         string exitAfterPhase = Opt(options, "exit-after-phase");  // test-only fault injection
         string dataBackupDir = System.IO.Path.Combine(programRoot, "data", "backups", "update-" + newVersion);
 
@@ -945,16 +976,28 @@ internal static class UpdaterHelper
                 MaybeExitAfterPhase(exitAfterPhase, "backup", log);
 
                 int rc = RunSelf("backup-data", log, "--program-root", programRoot,
-                                 "--new-version", newVersion, "--log", log.Path);
+                                 "--new-version", newVersion, "--log", log.Path,
+                                 "--file-retry-max-ms", fileRetryMaxMs.ToString(CultureInfo.InvariantCulture),
+                                 "--file-retry-delay-ms", fileRetryDelayMs.ToString(CultureInfo.InvariantCulture));
                 if (rc != 0)
+                {
+                    if (LastSubcommandCode == "file-lock-timeout")
+                        throw new HelperFailure("file-lock-timeout", LastSubcommandError);
                     throw new HelperFailure("data-backup-failed", "数据备份失败（backup-data 退出码 " + rc + "）");
+                }
                 CheckBudget(total, totalSeconds, "backup-data");
 
                 rc = RunSelf("backup-program", log, "--program-root", programRoot,
-                             "--backup", backupDir, "--old-version", oldVersion, "--log", log.Path);
+                             "--backup", backupDir, "--old-version", oldVersion, "--log", log.Path,
+                             "--file-retry-max-ms", fileRetryMaxMs.ToString(CultureInfo.InvariantCulture),
+                             "--file-retry-delay-ms", fileRetryDelayMs.ToString(CultureInfo.InvariantCulture));
                 if (rc != 0)
+                {
+                    if (LastSubcommandCode == "file-lock-timeout")
+                        throw new HelperFailure("file-lock-timeout", LastSubcommandError);
                     throw new HelperFailure("program-backup-failed",
                         "程序文件备份失败（backup-program 退出码 " + rc + "）");
+                }
                 programBackupDone = true;
                 CheckBudget(total, totalSeconds, "backup-program");
 
@@ -964,9 +1007,15 @@ internal static class UpdaterHelper
                 MaybeExitAfterPhase(exitAfterPhase, "replace", log);
 
                 rc = RunSelf("replace-program", log, "--program-root", programRoot,
-                             "--staging", staging, "--new-version", newVersion, "--log", log.Path);
+                             "--staging", staging, "--new-version", newVersion, "--log", log.Path,
+                             "--file-retry-max-ms", fileRetryMaxMs.ToString(CultureInfo.InvariantCulture),
+                             "--file-retry-delay-ms", fileRetryDelayMs.ToString(CultureInfo.InvariantCulture));
                 if (rc != 0)
+                {
+                    if (LastSubcommandCode == "file-lock-timeout")
+                        throw new HelperFailure("file-lock-timeout", LastSubcommandError);
                     throw new HelperFailure("replace-failed", "程序文件替换失败（replace-program 退出码 " + rc + "）");
+                }
                 replaceDone = true;
 
                 WriteJournal(journalPath, "verify", newVersion, oldVersion, backupDir,
@@ -1205,8 +1254,13 @@ internal static class UpdaterHelper
                 "安装超出总预算（" + totalSeconds + " 秒），阶段：" + phase);
     }
 
+    private static string LastSubcommandCode = "";
+    private static string LastSubcommandError = "";
+
     private static int RunSelf(string command, HelperLog log, params string[] args)
     {
+        LastSubcommandCode = "";
+        LastSubcommandError = "";
         string exe = ExePath();
         StringBuilder commandLine = new StringBuilder(command);
         foreach (string arg in args)
@@ -1219,6 +1273,8 @@ internal static class UpdaterHelper
         info.CreateNoWindow = true;
         info.RedirectStandardOutput = true;
         info.RedirectStandardError = true;
+        info.StandardOutputEncoding = new UTF8Encoding(false);
+        info.StandardErrorEncoding = new UTF8Encoding(false);
         info.WorkingDirectory = System.IO.Path.GetDirectoryName(exe);
         try
         {
@@ -1229,6 +1285,11 @@ internal static class UpdaterHelper
                 process.WaitForExit();
                 if (!string.IsNullOrEmpty(stdout.Trim())) log.Write("[" + command + "] " + stdout.Trim());
                 if (!string.IsNullOrEmpty(stderr.Trim())) log.Write("[" + command + "] stderr: " + stderr.Trim());
+                if (process.ExitCode != 0 && !string.IsNullOrEmpty(stdout))
+                {
+                    LastSubcommandCode = RegexString(stdout, "code");
+                    LastSubcommandError = RegexString(stdout, "error");
+                }
                 return process.ExitCode;
             }
         }
@@ -2014,20 +2075,65 @@ internal static class UpdaterHelper
         return counts;
     }
 
-    private static void CopyDirectory(string source, string target, ref long files, ref long bytes)
+    private static void ReadFileRetryOptions(Dictionary<string, string> options,
+                                             out int retryMaxMs, out int retryDelayMs)
+    {
+        retryMaxMs = IntOption(options, "file-retry-max-ms", DefaultFileRetryMaxMs, 0, 600000);
+        retryDelayMs = IntOption(options, "file-retry-delay-ms", DefaultFileRetryDelayMs, 10, 5000);
+    }
+
+    private static bool IsRetryableLock(Exception ex)
+    {
+        if (!(ex is IOException)) return false;
+        int code = ex.HResult & 0xFFFF;
+        return code == 32 || code == 33;  // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION
+    }
+
+    private static void RetryIo(Action action, string path, string phase,
+                                int retryMaxMs, int retryDelayMs, HelperLog log)
+    {
+        Stopwatch watch = Stopwatch.StartNew();
+        int attempt = 0;
+        while (true)
+        {
+            try
+            {
+                action();
+                if (attempt > 0)
+                    log.Write("retry " + phase + " recovered after " + attempt + " retries: " + path);
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (!IsRetryableLock(ex)) throw;
+                attempt++;
+                if (watch.ElapsedMilliseconds >= retryMaxMs)
+                    throw new HelperFailure("file-lock-timeout",
+                        phase + " 文件被占用超过 " + (retryMaxMs / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)
+                        + " 秒：" + path + "（" + ex.Message + "）");
+                log.Write("retry " + phase + " attempt=" + attempt + " wait=" + retryDelayMs
+                          + "ms path=" + path + " error=" + ex.Message);
+                Thread.Sleep(retryDelayMs);
+            }
+        }
+    }
+
+    private static void CopyDirectory(string source, string target, ref long files, ref long bytes,
+                                      int retryMaxMs, int retryDelayMs, HelperLog log)
     {
         Directory.CreateDirectory(target);
         foreach (string file in Directory.GetFiles(source))
         {
             string destination = System.IO.Path.Combine(target, System.IO.Path.GetFileName(file));
-            File.Copy(file, destination, false);
+            RetryIo(delegate { File.Copy(file, destination, false); }, file, "replace",
+                    retryMaxMs, retryDelayMs, log);
             files++;
             bytes += new FileInfo(destination).Length;
         }
         foreach (string dir in Directory.GetDirectories(source))
         {
             CopyDirectory(dir, System.IO.Path.Combine(target, System.IO.Path.GetFileName(dir)),
-                          ref files, ref bytes);
+                          ref files, ref bytes, retryMaxMs, retryDelayMs, log);
         }
     }
 

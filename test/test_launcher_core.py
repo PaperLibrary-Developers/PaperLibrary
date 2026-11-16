@@ -134,6 +134,23 @@ class LauncherCoreTest(unittest.TestCase):
         self.assertEqual(Path(data["helperPath"]), self.helper.resolve())
         self.assertTrue(data["logPath"].endswith("install-1.7.1.log"))
 
+    def test_precheck_requires_300mb_margin(self):
+        code, data = self.probe_json("precheck", self.base, self.home, "1")
+        self.assertEqual(code, 3, data)
+        self.assertEqual(data["code"], "disk-low")
+        self.assertIn("300 MB", data["message"])
+
+        code, data = self.probe_json("precheck", self.base, self.home, str(10 * 1024 * 1024 * 1024))
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["code"], "ok")
+
+    def test_precheck_rejects_program_files(self):
+        code, data = self.probe_json("precheck", self.base, self.home,
+                                     str(10 * 1024 * 1024 * 1024), "C:\\")
+        self.assertEqual(code, 3, data)
+        self.assertEqual(data["code"], "program-files")
+        self.assertIn("Program Files", data["message"])
+
     def test_precheck_rejects_invalid_apply(self):
         self.apply_path.unlink()
         code, data = self.precheck()
