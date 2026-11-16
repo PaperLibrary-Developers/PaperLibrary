@@ -1,6 +1,6 @@
 """组装发布包 dist/PaperLibrary-<date>/ 并实测体积（目标 ≤120MB）。
 
-包含：public/ shared/ paperlib/ vendor/ tools/ 使用说明.txt runtime/portable/
+包含：public/ shared/ paperlib/ vendor/ tools/ launcher/ 使用说明.txt runtime/portable/
       （唯一用户入口 PaperLibrary.exe 由 make_launcher.ps1 现场编译，并嵌入 public/paperlibrary.ico）
 排除：data/ docs/ test/ .git/ __pycache__/ dist/ runtime/build runtime/*.exe
 用法：python tools/release.py [--out dist] [--skip-portable]
@@ -31,7 +31,7 @@ if str(ROOT) not in sys.path:
 
 from paperlib.version import VersionError, build_record, dumps as dump_version  # noqa: E402
 
-INCLUDE = ["public", "shared", "paperlib", "vendor", "tools",
+INCLUDE = ["public", "shared", "paperlib", "vendor", "tools", "launcher",
            "使用说明.txt", "README.md", "requirements.txt"]
 SKIP_DIRS = {"__pycache__", ".git", "node_modules"}
 LIMIT_KB = 120 * 1024
