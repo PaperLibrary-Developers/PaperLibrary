@@ -14,7 +14,8 @@ helper 新增 `backup-data --program-root DIR --new-version X [--keep N]`：
   失败清理临时目录，不留半份备份；
 - 幂等：同版本备份与当前源文件哈希一致 → `idempotent=true`；源数据已变 → 
   `data-backup-exists`，不覆盖旧备份；
-- 保留策略：默认保留最近 3 份 `update-*`（`--keep 1..50`），当前新备份始终保留。
+- 保留策略：默认**只保留最近 1 份** `update-*`（产品确认，2026-11-16；`--keep 1..50` 可调），
+  当前新备份始终保留。
 
 契约：`shared/contracts/update-install.md` 第 4 节（备份清单、data-backup.json 字段、
 失败/幂等/保留规则、恢复方式）。
@@ -89,13 +90,13 @@ abort exit code: 3
 1.7.5 backup created: False
 ```
 
-## 3. 单测（test/test_update_helper_data_backup.py，11 条）
+## 3. 单测（test/test_update_helper_data_backup.py，12 条）
 
 - 真实 SQLite DB + 3 个设置文件的备份、逐文件哈希一致、fulltext 不复制；
 - 缺可选设置记入 missing；缺 `library.db`/缺 `data` 中止且不留备份目录；
 - 备份项为目录 → `data-backup-failed` 且清理临时目录；
 - 幂等重跑；数据变化后拒绝覆盖；WAL/SHM 存在时一并备份；
-- 保留最近 N 份；恢复后 SQLite 可查询；非法版本号拒绝。
+- 默认只保留最近一份（不传 `--keep`）；保留最近 N 份；恢复后 SQLite 可查询；非法版本号拒绝。
 
 ## 4. 验收对照
 
@@ -107,13 +108,13 @@ abort exit code: 3
 
 ## 5. 测试
 
-- `python -m unittest test.test_update_helper_data_backup -v` → **11 tests OK**；
-- 全量：**678 tests OK（1 skip）**（P2-14 后 667 + 11，无新增失败）；
+- `python -m unittest test.test_update_helper_data_backup -v` → **12 tests OK**；
+- 全量：**679 tests OK（1 skip）**（P2-14 后 667 + 12，无新增失败）；
 - 契约：**PASS 61 / FAIL 0 / SKIP 13（共 74）**，无回归；
 - 版本：`python tools/version_check.py` 通过。
 
 ## 6. 未做与待确认
 
 - 本步不做完整安装时序（P2-13）、journal/自动恢复（P2-16）、健康检查（P2-17）、启动器集成；
-- 待确认：数据备份保留数量/时长（当前默认最近 3 份，可 `--keep` 调整）；真实用户数据
-  （约 143.6 MB）未在本步触碰，真实安装验收留待 P2-13/P2-17 在临时程序目录完成。
+- 已确认（2026-11-16）：数据备份默认只保留最近 1 份（`--keep` 可调），减少磁盘占用。
+- 真实用户数据（约 143.6 MB）未在本步触碰，真实安装验收留待 P2-13/P2-17 在临时程序目录完成。

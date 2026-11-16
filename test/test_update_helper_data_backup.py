@@ -186,6 +186,13 @@ class DataBackupTest(unittest.TestCase):
         self.assertEqual(sha256(self.backup_dir() / "library.db-wal"),
                          sha256(self.data / "library.db-wal"))
 
+    def test_default_retention_keeps_only_latest(self):
+        for version in ("1.7.1", "1.7.2"):
+            proc = self.backup(version)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        names = sorted(path.name for path in (self.data / "backups").iterdir() if path.is_dir())
+        self.assertEqual(names, ["update-1.7.2"], "默认只保留最近一份数据备份")
+
     def test_retention_keeps_last_n(self):
         for version in ("1.7.1", "1.7.2", "1.7.3", "1.7.4"):
             proc = self.backup(version, "--keep", "2")

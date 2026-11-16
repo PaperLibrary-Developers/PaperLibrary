@@ -368,7 +368,7 @@ internal static class UpdaterHelper
         ValidateVersionText(newVersion, "new-version");
         ValidateProgramRoot(programRoot);
 
-        int keep = 3;
+        int keep = 1;  // 产品确认（2026-11-16）：默认只保留最近一份，减少磁盘占用；--keep 可调
         string rawKeep = Opt(options, "keep");
         if (!string.IsNullOrEmpty(rawKeep)
             && (!int.TryParse(rawKeep, NumberStyles.Integer, CultureInfo.InvariantCulture, out keep)
@@ -1250,7 +1250,7 @@ internal static class UpdaterHelper
         Console.Error.WriteLine("  replace-program --program-root DIR --staging DIR [--new-version X]");
         Console.Error.WriteLine("                                  copy staging over the empty program root");
         Console.Error.WriteLine("  backup-data --program-root DIR --new-version X [--keep N]");
-        Console.Error.WriteLine("                                  copy library.db + settings into data/backups/update-X (default keep 3)");
+        Console.Error.WriteLine("                                  copy library.db + settings into data/backups/update-X (default keep 1)");
         Console.Error.WriteLine("options:");
         Console.Error.WriteLine("  --updater-home DIR   override %LOCALAPPDATA%\\PaperLibrary\\updater");
         Console.Error.WriteLine("  --log FILE           log file (default <updater-home>\\logs\\updater.log)");

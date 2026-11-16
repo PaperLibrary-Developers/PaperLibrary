@@ -93,7 +93,8 @@ PaperLibraryUpdater.exe backup-data --program-root DIR --new-version X [--keep N
   一次性改名；失败清理临时目录，不留半份备份；
 - 幂等：已有同版本备份且与当前源文件哈希完全一致 → `idempotent=true`，不重写；
   源数据已变化 → `data-backup-exists`，不覆盖旧备份（由用户/后续流程决策）；
-- 保留策略：默认保留最近 3 份 `update-*`，当前新备份始终保留（`--keep 1..50`）；
+- 保留策略：默认**只保留最近 1 份** `update-*`（产品确认，2026-11-16，减少磁盘占用），
+  当前新备份始终保留（`--keep 1..50` 可调）；
 - `data-backup.json` 字段：schema/product/newVersion/programRoot/backupDir/files/bytes/
   databaseIncluded/missing/items[{name,bytes,sha256}]/createdAt；
 - 恢复方式：把备份目录内文件复制回 `data/`（P2-16 在回滚时自动执行），文件哈希与
@@ -110,6 +111,6 @@ PaperLibraryUpdater.exe backup-data --program-root DIR --new-version X [--keep N
 
 ## 6. 待确认（不猜值）
 
-1. 备份保留时长/数量（原文建议 1–7 天或一个旧版本）：程序备份在 P2-16 定；数据备份当前
-   默认保留最近 3 份（`--keep` 可调），待产品确认。
+1. 备份保留时长/数量（原文建议 1–7 天或一个旧版本）：数据备份已确认默认保留最近 1 份
+   （`--keep` 可调）；程序备份的保留策略在 P2-16 确定。
 2. 杀软/索引器占用导致 `Directory.Move`/`File.Copy` 失败时的等待/重试参数（P2-13/P2-18 定）。
