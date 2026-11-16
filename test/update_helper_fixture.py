@@ -42,8 +42,10 @@ class FakeApp
     static string AppName = "literature-vault";
     static string Product = "PaperLibrary";
     static bool FailHealth;
+    static bool OkFirstOnly;
     static bool BadJson;
     static bool BadVersionJson;
+    static int HealthRequests;
     static string BaseDir = "";
 
     static void Main(string[] args)
@@ -57,6 +59,7 @@ class FakeApp
         Match product = Regex.Match(config, "\"product\"\\s*:\\s*\"([^\"]*)\"");
         if (product.Success) Product = product.Groups[1].Value;
         FailHealth = Regex.IsMatch(config, "\"failHealth\"\\s*:\\s*true");
+        OkFirstOnly = Regex.IsMatch(config, "\"okFirstOnly\"\\s*:\\s*true");
         BadJson = Regex.IsMatch(config, "\"badJson\"\\s*:\\s*true");
         BadVersionJson = Regex.IsMatch(config, "\"badVersionJson\"\\s*:\\s*true");
         Match status = Regex.Match(config, "\"httpStatus\"\\s*:\\s*(\\d+)");
@@ -114,7 +117,9 @@ class FakeApp
                         Write(stream, 200, "not-a-json");
                         return;
                     }
-                    string body = "{\"ok\":" + (FailHealth ? "false" : "true")
+                    HealthRequests++;
+                    bool healthy = !FailHealth && !(OkFirstOnly && HealthRequests > 1);
+                    string body = "{\"ok\":" + (healthy ? "true" : "false")
                         + ",\"app\":\"" + AppName + "\",\"version\":1,\"pid\":"
                         + Process.GetCurrentProcess().Id + ",\"port\":" + Port + "}";
                     Write(stream, 200, body);

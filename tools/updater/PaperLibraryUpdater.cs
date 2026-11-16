@@ -919,6 +919,8 @@ internal static class UpdaterHelper
             bool programBackupDone = false;
             bool replaceDone = false;
             Process newProc = null;
+            int healthChecks = 0;
+            int healthSeconds = 0;
             try
             {
                 if (!WaitForPidExit(launcherPid, pidWait, 200, log))
@@ -982,13 +984,12 @@ internal static class UpdaterHelper
                 CheckBudget(total, totalSeconds, "launch");
 
                 string healthDetail;
-                int healthChecks;
                 if (!WaitForHealthy(port, newVersion, healthTimeout, healthInterval, healthRequest,
                                     healthSuccesses, total, totalSeconds, log,
                                     out healthDetail, out healthChecks))
-                    throw new HelperFailure("health-failed", "新版本健康检查失败：" + healthDetail);
+                    throw new HelperFailure(healthDetail, "新版本健康检查失败：" + healthDetail);
 
-                int healthSeconds = (int)(total.ElapsedMilliseconds / 1000);
+                healthSeconds = (int)(total.ElapsedMilliseconds / 1000);
                 WriteJournal(journalPath, "success", newVersion, oldVersion, backupDir,
                              dataBackupDir, staging, launcherPid, startedAt, newProc.Id, "", "", log);
                 WriteState(statePath, "success", newVersion, oldVersion, staging, dataBackupDir,
@@ -1063,7 +1064,8 @@ internal static class UpdaterHelper
                                  dataBackupDir, staging, launcherPid, startedAt, failedPid,
                                  failCode, failMessage, log);
                     WriteState(statePath, "failed", newVersion, oldVersion, staging, dataBackupDir,
-                               backupDir, failedPid, oldPid, restored, false, 0, 0,
+                               backupDir, failedPid, oldPid, restored, false,
+                               (int)(total.ElapsedMilliseconds / 1000), healthChecks,
                                startedAt, failCode, failMessage, log.Path, log);
                 }
                 catch (Exception ex)
@@ -1337,8 +1339,10 @@ internal static class UpdaterHelper
         }
     }
 
-    private static string HttpGet(string url, int timeoutMs)
+    private static bool TryHttpGet(string url, int timeoutMs, out string body, out string error)
     {
+        body = "";
+        error = "";
         try
         {
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
@@ -1349,43 +1353,69 @@ internal static class UpdaterHelper
             request.KeepAlive = false;
             using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
             {
-                if ((int)response.StatusCode != 200) return null;
+                if ((int)response.StatusCode != 200)
+                {
+                    error = "health-http";
+                    return false;
+                }
                 using (Stream stream = response.GetResponseStream())
                 {
-                    if (stream == null) return null;
+                    if (stream == null)
+                    {
+                        error = "health-http";
+                        return false;
+                    }
                     using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
                     {
                         char[] buffer = new char[65536];
                         int read = reader.Read(buffer, 0, buffer.Length);
-                        return read <= 0 ? "" : new string(buffer, 0, read);
+                        body = read <= 0 ? "" : new string(buffer, 0, read);
+                        return true;
                     }
                 }
             }
         }
+        catch (WebException ex)
+        {
+            error = ex.Status == WebExceptionStatus.Timeout ? "health-timeout" : "health-http";
+            return false;
+        }
         catch (Exception)
         {
-            return null;
+            error = "health-http";
+            return false;
         }
     }
 
-    private static bool HealthCheck(int port, string targetVersion, int requestMs, out string detail)
+    // 返回空字符串表示健康；否则返回已冻结的失败码之一：
+    // health-timeout / health-http / health-json / health-not-ok / health-app / health-version
+    private static string HealthCheck(int port, string targetVersion, int requestMs)
     {
-        detail = "";
-        string health = HttpGet("http://127.0.0.1:" + port + "/api/health", requestMs);
-        if (health == null) { detail = "health-unreachable"; return false; }
-        if (!Regex.IsMatch(health, "\"ok\"\\s*:\\s*true")) { detail = "health-not-ok"; return false; }
-        if (!Regex.IsMatch(health, "\"app\"\\s*:\\s*\"literature-vault\""))
-        { detail = "health-app-mismatch"; return false; }
+        string body;
+        string error;
+        if (!TryHttpGet("http://127.0.0.1:" + port + "/api/health", requestMs, out body, out error))
+            return error;
 
-        string versionJson = HttpGet("http://127.0.0.1:" + port + "/api/version", requestMs);
-        if (versionJson == null) { detail = "version-unreachable"; return false; }
-        if (!Regex.IsMatch(versionJson, "\"product\"\\s*:\\s*\"PaperLibrary\""))
-        { detail = "version-product-mismatch"; return false; }
-        Match match = Regex.Match(versionJson, "\"version\"\\s*:\\s*\"([^\"]*)\"");
-        if (!match.Success || match.Groups[1].Value != targetVersion)
-        { detail = "version-mismatch"; return false; }
-        detail = "ok";
-        return true;
+        Match ok = Regex.Match(body, "\"ok\"\\s*:\\s*(true|false)");
+        if (!ok.Success) return "health-json";
+        if (ok.Groups[1].Value != "true") return "health-not-ok";
+
+        Match app = Regex.Match(body, "\"app\"\\s*:\\s*\"([^\"]*)\"");
+        if (!app.Success) return "health-json";
+        if (app.Groups[1].Value != "literature-vault") return "health-app";
+
+        if (!TryHttpGet("http://127.0.0.1:" + port + "/api/version", requestMs, out body, out error))
+            return error;
+
+        Match product = Regex.Match(body, "\"product\"\\s*:\\s*\"([^\"]*)\"");
+        if (!product.Success) return "health-json";
+        if (product.Groups[1].Value != "PaperLibrary") return "health-version";
+
+        Match version = Regex.Match(body, "\"version\"\\s*:\\s*\"([^\"]*)\"");
+        if (!version.Success) return "health-json";
+        if (version.Groups[1].Value != targetVersion) return "health-version";
+
+        return "";
     }
 
     private static bool WaitForHealthy(int port, string targetVersion, int timeoutSeconds,
@@ -1401,8 +1431,8 @@ internal static class UpdaterHelper
         {
             CheckBudget(total, totalSeconds, "health");
             attempts++;
-            string detail;
-            if (HealthCheck(port, targetVersion, requestMs, out detail))
+            string code = HealthCheck(port, targetVersion, requestMs);
+            if (code.Length == 0)
             {
                 streak++;
                 log.Write("health attempt " + attempts + ": ok (streak " + streak + "/" + successes + ")");
@@ -1411,11 +1441,12 @@ internal static class UpdaterHelper
             else
             {
                 streak = 0;
-                lastDetail = detail;
-                log.Write("health attempt " + attempts + ": " + detail);
+                lastDetail = code;
+                log.Write("health attempt " + attempts + ": " + code);
             }
             Thread.Sleep(intervalMs);
         }
+        if (lastDetail.Length == 0) lastDetail = "health-timeout";
         return false;
     }
 

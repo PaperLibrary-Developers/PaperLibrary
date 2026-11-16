@@ -461,7 +461,7 @@ class InstallSequenceTest(unittest.TestCase):
         self.make_staging("1.7.1", fail_health=True)
         proc, data = self.install(health_timeout=3, health_interval=200)
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
-        self.assertEqual(data["code"], "health-failed")
+        self.assertEqual(data["code"], "health-not-ok")
         self.assertTrue(data["restored"], data)
         state = self.state()
         self.assertEqual(state["phase"], "failed")
@@ -486,7 +486,7 @@ class InstallSequenceTest(unittest.TestCase):
         self.make_staging("1.7.1", reported_version="1.7.0")
         proc, data = self.install(health_timeout=3, health_interval=200)
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
-        self.assertEqual(data["code"], "health-failed")
+        self.assertEqual(data["code"], "health-version")
         self.assertTrue(data["restored"])
         self.assertEqual(json.loads((self.program / "version.json").read_text(encoding="utf-8"))["version"],
                          "1.6.0")
