@@ -108,42 +108,104 @@ PaperLibraryUpdater.exe backup-data --program-root DIR --new-version X [--keep N
 
 ## 5. 完整安装时序（P2-13）
 
-\`install\` 由启动器在用户确认后调用（P2-10R/P2-11R），helper 已在包外（LOCALAPPDATA）：
+`install` 由启动器在用户确认后调用（P2-10R/P2-11R），helper 已在包外（LOCALAPPDATA）：
 
-1. 校验 staging/版本；创建 \`data/updates/install.lock\`（已存在 → \`install-locked\`，不覆盖）；
-   写 \`journal.json\`（阶段 \`prepare\`）；
+1. 校验 staging/版本；创建 `data/updates/install.lock`（已存在 → `install-locked`，不覆盖）；
+   写 `journal.json`（阶段 `prepare`）；
 2. 等待启动器 PID 退出（**60 秒**，200 ms 轮询）、4321 端口释放（**30 秒**，250 ms）、
    关键文件锁释放（**30 秒**，500 ms 重试：exe/config/WebView2 DLL/runtime python）；
    超时**只中止并写失败状态，不强制结束残留进程**，程序文件未动；
 3. 数据备份（P2-15）→ 程序文件备份（P2-14）→ staging 替换（P2-14）→ 校验
-   \`PaperLibrary.exe\`/\`version.json\`/文件数；
-4. 启动新 \`PaperLibrary.exe\`；
-5. 健康检查（口径 B）：\`/api/health\` HTTP 200 + \`ok=true\` + \`app=="literature-vault"\`，
-   再 \`GET /api/version\` 要求 \`product=="PaperLibrary"\` 且 \`version==目标版本\`；
+   `PaperLibrary.exe`/`version.json`/文件数；
+4. 启动新 `PaperLibrary.exe`；
+5. 健康检查（口径 B）：`/api/health` HTTP 200 + `ok=true` + `app=="literature-vault"`，
+   再 `GET /api/version` 要求 `product=="PaperLibrary"` 且 `version==目标版本`；
    单次请求 **2 秒**、间隔 **1 秒**、总超时 **60 秒**、**连续成功 2 次**；
-6. 成功：写 \`state.json\`（phase=success）、清理 \`apply.json\`、保留备份、释放安装锁；
-7. 失败：先 \`POST /api/shutdown\`，**5 秒**后仍未退出则强制结束**本次新启动的**
-   启动器/Python 进程树；恢复程序备份 → 启动旧版本 → 写 \`state.json\`（phase=failed，
-   含 code/error/restored/oldLaunchedPid）；恢复失败保留 journal/备份；\`apply.json\` 保留供重试。
+6. 成功：写 `state.json`（phase=success）、清理 `apply.json`、保留备份、释放安装锁；
+7. 失败：先 `POST /api/shutdown`，**5 秒**后仍未退出则强制结束**本次新启动的**
+   启动器/Python 进程树；恢复程序备份 → 启动旧版本 → 写 `state.json`（phase=failed，
+   含 code/error/restored/oldLaunchedPid）；恢复失败保留 journal/备份；`apply.json` 保留供重试。
 
 整体安装预算 **5 分钟**：未开始替换 → 中止；已开始替换 → 回滚。测试可用
-\`--timeout-* / --health-*\` 覆盖（生产启动器不传，使用上述固定默认）。
-失败码：\`launcher-timeout\`、\`port-timeout\`、\`file-lock-timeout\`、\`total-timeout\`、
-\`data-backup-failed\`、\`program-backup-failed\`、\`replace-failed\`、\`verify-failed\`、
-\`health-failed\`、\`launch-failed\`、\`install-locked\`。
+`--timeout-* / --health-*` 覆盖（生产启动器不传，使用上述固定默认）。
+失败码：`launcher-timeout`、`port-timeout`、`file-lock-timeout`、`total-timeout`、
+`data-backup-failed`、`program-backup-failed`、`replace-failed`、`verify-failed`、
+`health-failed`、`launch-failed`、`install-locked`。
 
-## 6. 与后续步骤的边界
+## 6. journal、state 与安装锁（P2-16，已冻结）
+
+### journal.json
+
+\`install\` 从 \`prepare\` 到终态逐阶段原子写 \`data/updates/journal.json\`：
+
+\`\`\`text
+prepare → backup → replace → verify → launch → success
+                                              ↘ failed
+\`\`\`
+
+字段（schema=1）：
+
+| 字段 | 说明 |
+|---|---|
+| schema / product | 固定 \`1\` / \`PaperLibrary\` |
+| phase | \`prepare/backup/replace/verify/launch/success/failed\` |
+| version / fromVersion | 目标版本 / 旧版本 |
+| staging / dataBackupDir / backupDir | 绝对路径（均在 data 内） |
+| launcherPid | 启动器 PID（0 表示未传） |
+| startedAt / updatedAt | UTC ISO8601 |
+| launchedPid | 启动的新应用 PID（launch 阶段起） |
+| code / error | 失败码与可读原因（成功为空） |
+| log | helper 日志路径 |
+
+### state.json
+
+终态（成功/失败/恢复）写 \`data/updates/state.json\`，字段：
+
+\`schema/product/phase(success|failed)/version/fromVersion/staging/dataBackupDir/backupDir/
+launchedPid/oldLaunchedPid/restored/recovered/healthSeconds/healthChecks/startedAt/finishedAt/
+code/error/log\`。
+
+\`recovered=true\` 表示该状态由 \`recover\` 恢复写入；失败时 \`apply.json\` 保留供重试。
+
+### install.lock
+
+\`data/updates/install.lock\` 字段：\`schema/product/pid/launcherPid/version/fromVersion/createdAt\`。
+
+- 创建：\`FileMode.CreateNew\`，已存在且未过期 → \`install-locked\`（不覆盖）；
+- **过期判定**：记录 PID 不存在，**或**锁文件年龄 > **30 分钟** → 过期；\`install\`/\`recover\`
+  可安全清理后继续；
+- 安装成功/失败/恢复结束都清理本 helper 创建的锁；不删除他人仍有效的锁。
+
+### recover
+
+\`\`\`text
+PaperLibraryUpdater.exe recover --program-root DIR [--log FILE]
+\`\`\`
+
+- 无 journal 或 journal phase=success → no-op（\`recovered=false\`）；
+- 锁仍有效 → \`install-locked\`，拒绝并发恢复；
+- journal phase=prepare/backup：有备份则恢复程序文件，无备份则确认旧程序仍在；
+- phase=replace/verify/launch：停止 journal 记录的 \`launchedPid\`（若存活），恢复程序备份，
+  启动旧版本；
+- 恢复后写 \`state.json\`：\`phase=failed, recovered=true, code="recovered"\`；
+  journal 置 \`failed\`；清理过期锁；保留 \`apply.json\`；
+- 恢复失败：\`phase=failed, recovered=false, code="recovery-failed"\`，保留 journal/备份，
+  退出码 3。
+
+### 程序备份保留
+
+产品确认（2026-11-16）：**只保留最近一个** \`app-<oldVersion>\` 程序备份；安装成功或 recover
+成功后清理更早的 \`app-*\`，数据备份 \`data/backups/update-*\` 不受影响。
+
+## 7. 与后续步骤的边界
 
 - P2-15（已完成）：数据备份到 `data/backups/update-<newVersion>/`；失败中止安装。
-- P2-13（已完成）：安装锁 + 等待 + 数据/程序备份 + 替换 + 启动 + 健康检查 + 失败回滚；
-  journal 仅 `prepare/success/failed`。
-- P2-16：把 journal 扩展为 `prepare → backup → replace → verify → launch → success/fail`，
-  增加安装锁过期/启动恢复/分阶段强杀恢复；本契约的 `backup.json` 是回滚依据。
-- P2-17：细化健康检查错误分类/重试（P2-13 已按口径 B 实现）；失败仍回滚。
+- P2-13（已完成）：安装锁 + 等待 + 数据/程序备份 + 替换 + 启动 + 健康检查 + 失败回滚。
+- P2-16（已完成）：journal 完整状态机、state schema、安装锁过期、`recover` 启动恢复、
+  分阶段强杀恢复、程序备份保留最近一个；`backup.json` 是回滚依据。
+- P2-17：健康检查错误分类与具体失败码；失败仍回滚。
 
-## 7. 待确认（不猜值）
+## 8. 待确认（不猜值）
 
-1. 程序备份保留时长/数量（原文建议 1–7 天或一个旧版本；数据备份已确认保留最近 1 份，
-   `--keep` 可调）：在 P2-16 确定。
-2. 杀软/索引器占用导致 `Directory.Move`/`File.Copy` 失败时的安装期重试参数：P2-18 确定
+1. 杀软/索引器占用导致 `Directory.Move`/`File.Copy` 失败时的安装期重试参数：P2-18 确定
    （端口/文件锁等待已按 30 秒确认，超时只中止）。

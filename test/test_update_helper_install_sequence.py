@@ -506,7 +506,11 @@ class InstallSequenceTest(unittest.TestCase):
 
     def test_install_lock_blocks(self):
         before = tree_hashes(self.program)
-        (self.data / "updates" / "install.lock").write_text("{}", encoding="utf-8")
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        (self.data / "updates" / "install.lock").write_text(json.dumps({
+            "schema": 1, "product": "PaperLibrary", "pid": os.getpid(),
+            "launcherPid": 0, "version": "1.7.1", "fromVersion": "1.6.0", "createdAt": now,
+        }), encoding="utf-8")
         proc, data = self.install()
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
         self.assertEqual(data["code"], "install-locked")
