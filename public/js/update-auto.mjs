@@ -24,6 +24,11 @@ export function autoCheckEnabled (prefs) {
   return !prefs || prefs.updateAutoCheck !== false
 }
 
+/** 自动下载：默认关，只有用户显式开启（prefs.updateAutoDownload === true）才启用。 */
+export function autoDownloadEnabled (prefs) {
+  return !!(prefs && prefs.updateAutoDownload === true)
+}
+
 /** 启动后首次检查的延迟（10–30 秒，含端点） */
 export function startupDelay (random) {
   const r = typeof random === 'function' ? random() : Math.random()
@@ -62,6 +67,9 @@ export function createAutoChecker (options) {
   const check = o.check
   const notify = o.notify || (() => {})
   const onError = o.onError || (() => {})
+  const autoDownload = o.autoDownload || (() => false)
+  const download = o.download
+  const onAutoDownload = o.onAutoDownload || (() => {})
 
   if (typeof check !== 'function') throw new Error('createAutoChecker 需要 check()')
 
@@ -95,7 +103,16 @@ export function createAutoChecker (options) {
       saveLastCheckAt(now())
       if (result && result.available && result.latest && result.latest.tag &&
           result.latest.tag !== getSkipped()) {
-        notify(result.latest)
+        if (autoDownload() && typeof download === 'function') {
+          try {
+            await download()
+            onAutoDownload(result.latest)
+          } catch (err) {
+            try { onError(err) } catch {}
+          }
+        } else {
+          notify(result.latest)
+        }
       }
       return 'checked'
     } catch (err) {

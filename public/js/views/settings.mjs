@@ -3,7 +3,7 @@ import * as util from '../util.mjs'
 import { api } from '../api.mjs'
 import { getState } from '../state/store.mjs'
 import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
-import { autoCheckEnabled } from '../update-auto.mjs'
+import { autoCheckEnabled, autoDownloadEnabled } from '../update-auto.mjs'
 import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update-install.mjs'
 
   const { h, toast, rich, confirmDialog, fileSize, formatDate } = util
@@ -1388,6 +1388,18 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
         toast(on ? '已开启自动检查（只通知，不下载）' : '已关闭自动检查')
       }
     })
+    const autoDownloadOn = autoDownloadEnabled(state.prefs)
+    const autoDownloadToggle = h('input', {
+      id: 'update-auto-download-toggle',
+      type: 'checkbox',
+      checked: autoDownloadOn,
+      onchange: ev => {
+        const on = !!ev.target.checked
+        savePrefs({ updateAutoDownload: on }, { silent: true })
+        toast(on ? '已开启自动下载：发现新版本后自动下载，仍需手动点击立即安装'
+          : '已关闭自动下载')
+      }
+    })
     const skippedTag = state.prefs.updateSkippedVersion || ''
     const skippedBox = h('div.update-skipped', { id: 'update-skipped' },
       skippedTag
@@ -1418,9 +1430,11 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
         skippedBox,
         h('label.update-auto', autoToggle,
           h('span', '启动后自动检查更新（只通知，不下载）')),
+        h('label.update-auto', autoDownloadToggle,
+          h('span', '自动下载更新（默认关；下载后仍需点击立即安装）')),
         h('div.hint',
-          '下载与安装需要你手动确认；下载完成后不会自动替换程序。' +
-          '自动检查默认开启（只通知，不下载）：启动约 10–30 秒检查一次、之后每 24 小时最多一次，失败静默；可随时关闭。')
+          '自动检查默认开启（只通知，不下载）：启动约 10–30 秒检查一次、之后每 24 小时最多一次，失败静默；可随时关闭。' +
+          '自动下载默认关闭；开启后只自动下载，不会静默安装，下载完成仍需点击「立即安装」。')
       ))
 
     // 进入设置页时恢复正在进行的下载/已准备好的状态（只读查询，不启动任务）

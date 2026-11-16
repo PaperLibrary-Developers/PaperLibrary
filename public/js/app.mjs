@@ -27,7 +27,7 @@ import { copilotSideEntry, mountCopilotDock } from './copilot.mjs'
 import { copilotHandler } from './views/copilot.mjs'
 // 文件夹分类：侧栏树、导入选目录、管理器共用的组件
 import * as foldersUi from './folders.mjs'
-import { autoCheckEnabled, createAutoChecker } from './update-auto.mjs'
+import { autoCheckEnabled, autoDownloadEnabled, createAutoChecker } from './update-auto.mjs'
 
 const { h, toast, debounce } = util
 
@@ -823,6 +823,10 @@ const { h, toast, debounce } = util
       check: () => api.checkUpdate(),
       notify: latest => toast('发现新版本 ' + (latest && latest.tag ? latest.tag : '') +
         '，可在「设置 → 关于与更新」查看'),
+      autoDownload: () => autoDownloadEnabled(getState().prefs),
+      download: () => api.startUpdateDownload(),
+      onAutoDownload: latest => toast('已开始自动下载 ' + (latest && latest.tag ? latest.tag : '') +
+        '，完成后请在设置页点击「立即安装」（不会静默安装）'),
       enabled: () => autoCheckEnabled(getState().prefs),
       getLastCheckAt: () => Number(getState().prefs.updateLastCheckAt) || 0,
       saveLastCheckAt: ts => {

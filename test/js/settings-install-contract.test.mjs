@@ -22,6 +22,13 @@ test('confirmation copy covers immediate close, auto reopen, data and AI interru
   assert.match(settings, /okText: '立即安装并关闭'/)
 })
 
+test('auto-download toggle exists, defaults off and never auto-installs', () => {
+  assert.match(settings, /id: 'update-auto-download-toggle'/)
+  assert.match(settings, /autoDownloadEnabled\(state\.prefs\)/)
+  assert.match(settings, /自动下载默认关闭/)
+  assert.match(settings, /不会静默安装/)
+})
+
 test('apply happens before install request and browser preview has fallback', () => {
   const applyAt = settings.indexOf('await api.applyUpdate()')
   const requestAt = settings.indexOf('await requestInstall(')

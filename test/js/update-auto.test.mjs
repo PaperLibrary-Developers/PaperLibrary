@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import {
   STARTUP_MIN_MS, STARTUP_MAX_MS, INTERVAL_MS,
-  startupDelay, withinInterval, autoCheckEnabled, createAutoChecker
+  startupDelay, withinInterval, autoCheckEnabled, autoDownloadEnabled, createAutoChecker
 } from '../../public/js/update-auto.mjs'
 
 let passed = 0
@@ -14,7 +14,8 @@ function test (name, fn) {
 }
 
 function harness (opts) {
-  const state = { now: 1_700_000_000_000, last: 0, enabled: true, skipped: '', checks: [], notified: [], errors: [] }
+  const state = { now: 1_700_000_000_000, last: 0, enabled: true, skipped: '',
+    checks: [], notified: [], errors: [], downloads: [], autoDownloaded: [] }
   const timers = new Map()
   let seq = 0
   const api = {
@@ -28,6 +29,9 @@ function harness (opts) {
     check: opts && opts.check ? () => opts.check(state) : () => { state.checks.push(true); return Promise.resolve({ available: false }) },
     notify: latest => { state.notified.push(latest.tag) },
     onError: err => { state.errors.push(err) },
+    autoDownload: opts && opts.autoDownload ? () => opts.autoDownload(state) : () => false,
+    download: opts && opts.download ? () => opts.download(state) : undefined,
+    onAutoDownload: latest => { state.autoDownloaded.push(latest.tag) },
     random: () => 0.5
   }
   const checker = createAutoChecker(api)
@@ -121,6 +125,59 @@ await test('已是最新版本不通知', async () => {
   const h = harness({ check: () => Promise.resolve({ available: false, reason: 'current', latest: { tag: 'v1.0.0' } }) })
   await h.checker.runNow()
   assert.equal(h.state.notified.length, 0)
+})
+
+await test('自动下载默认关；只有显式 true 开启', () => {
+  assert.equal(autoDownloadEnabled(undefined), false)
+  assert.equal(autoDownloadEnabled({}), false)
+  assert.equal(autoDownloadEnabled({ updateAutoDownload: false }), false)
+  assert.equal(autoDownloadEnabled({ updateAutoDownload: true }), true)
+})
+
+await test('开启自动下载：发现新版本调用 download，不走普通通知', async () => {
+  const h = harness({
+    autoDownload: () => true,
+    download: state => { state.downloads.push('started'); return Promise.resolve({ phase: 'downloading' }) },
+    check: () => Promise.resolve({ available: true, latest: { tag: 'v9.9.9' } })
+  })
+  await h.checker.runNow()
+  assert.deepEqual(h.state.downloads, ['started'])
+  assert.deepEqual(h.state.notified, [])
+  assert.deepEqual(h.state.autoDownloaded, ['v9.9.9'])
+})
+
+await test('关闭自动下载：仍只通知，不下载', async () => {
+  const h = harness({
+    autoDownload: () => false,
+    download: state => { state.downloads.push('started'); return Promise.resolve({}) },
+    check: () => Promise.resolve({ available: true, latest: { tag: 'v9.9.9' } })
+  })
+  await h.checker.runNow()
+  assert.deepEqual(h.state.downloads, [])
+  assert.deepEqual(h.state.notified, ['v9.9.9'])
+})
+
+await test('跳过版本不自动下载', async () => {
+  const h = harness({
+    autoDownload: () => true,
+    download: state => { state.downloads.push('started'); return Promise.resolve({}) },
+    check: () => Promise.resolve({ available: true, latest: { tag: 'v9.9.9' } })
+  })
+  h.state.skipped = 'v9.9.9'
+  await h.checker.runNow()
+  assert.deepEqual(h.state.downloads, [])
+  assert.deepEqual(h.state.notified, [])
+})
+
+await test('自动下载失败静默走 onError', async () => {
+  const h = harness({
+    autoDownload: () => true,
+    download: () => Promise.reject(new Error('offline')),
+    check: () => Promise.resolve({ available: true, latest: { tag: 'v9.9.9' } })
+  })
+  assert.equal(await h.checker.runNow(), 'checked')
+  assert.equal(h.state.errors.length, 1)
+  assert.deepEqual(h.state.notified, [])
 })
 
 await test('stop 清除定时器，stop 后不再检查', async () => {
