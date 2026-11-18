@@ -28,3 +28,4 @@ update-signing-key*.json
 /tools/updater/*.exe
 /tools/updater/helper.json
 /tools/updater/*.g.cs
+ReadBeforeCoding.md
