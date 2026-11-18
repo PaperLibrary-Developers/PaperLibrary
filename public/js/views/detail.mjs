@@ -8,7 +8,7 @@ import { getState } from '../state/store.mjs'
 import { filterByTag, go, lookupTitle, refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
 import * as foldersUi from '../folders.mjs'
 
-  const { h, toast, confirmDialog, typeLabel, authorsText, relTime, formatDate, starsHtml } = util
+  const { h, confirmDialog, typeLabel, authorsText, relTime, formatDate, starsHtml } = util
   const { starsNode, folderGlyph } = components
   
   function metaCell (key, value, options) {
@@ -21,17 +21,70 @@ import * as foldersUi from '../folders.mjs'
   }
 
   async function detailHandler (ctx) {
-    const { outlet, routeParams, isStale } = ctx
+    const { outlet, routeParams, isStale, signal } = ctx
     const id = routeParams.id
-    // 换一篇文献时先把上一个阅读器释放掉（worker 和 canvas 都不便宜）
-    disposePdfViewer()
-    resetAnnotationBridge()
+    const toast = (...args) => { if (!isStale()) util.toast(...args) }
+    const timers = new Set()
+    let scrollFrame = null
+    let activePdfViewer = null
+
+    function later (callback, delay) {
+      if (isStale()) return null
+      const timer = setTimeout(() => {
+        timers.delete(timer)
+        callback()
+      }, delay)
+      timers.add(timer)
+      return timer
+    }
+
+    function cancelLater (timer) {
+      clearTimeout(timer)
+      timers.delete(timer)
+    }
+
+    function scrollChatToEnd () {
+      if (isStale()) return
+      if (scrollFrame !== null) window.cancelAnimationFrame(scrollFrame)
+      scrollFrame = window.requestAnimationFrame(() => {
+        scrollFrame = null
+        chatBody.scrollTop = chatBody.scrollHeight
+      })
+    }
+
+    signal.addEventListener('abort', () => {
+      timers.forEach(clearTimeout)
+      timers.clear()
+      if (scrollFrame !== null) window.cancelAnimationFrame(scrollFrame)
+      activePdfViewer = null
+    }, { once: true })
+
+    function showOverlay (node, onClose = () => {}) {
+      function close () {
+        node.remove()
+        document.removeEventListener('keydown', onKey, true)
+        signal.removeEventListener('abort', close)
+        onClose()
+      }
+      function onKey (ev) {
+        if (ev.key !== 'Escape') return
+        ev.stopImmediatePropagation()
+        close()
+      }
+      document.body.appendChild(node)
+      document.addEventListener('keydown', onKey, true)
+      signal.addEventListener('abort', close, { once: true })
+      return close
+    }
+
+    const confirm = options => confirmDialog({ ...options, signal })
     outlet.replaceChildren(h('div.content', h('div.empty', h('div.big', '正在打开文献…'))))
 
     let data
     try {
-      data = await api.getPaper(id)
+      data = await api.getPaper(id, signal)
     } catch (err) {
+      if (isStale()) return
       outlet.replaceChildren(h('div.content', h('div.empty',
         h('div.big', '找不到这条文献'),
         h('p', { text: err.message }),
@@ -56,7 +109,9 @@ import * as foldersUi from '../folders.mjs'
     let annotLoaded = false              // 是否真的读到了服务端那一份（读失败时不能拿空表去覆盖）
     if (pdfOk) {
       try {
-        const res = await api.getAnnotations(paper.id)
+        await pendingAnnotationSaves.get(paper.id)
+        if (isStale()) return
+        const res = await api.getAnnotations(paper.id, signal)
         pdfAnnotations = Array.isArray(res && res.items) ? res.items : []
         annotLoaded = true
       } catch (err) {
@@ -73,7 +128,6 @@ import * as foldersUi from '../folders.mjs'
     }
 
     // 串行写：连着标两处时，两个 PUT 按顺序落地，慢的那个不会把新的覆盖掉
-    let annotSaveChain = Promise.resolve()
     let annotKnownIds = pdfAnnotations.map(item => item.id)   // 上一次「服务端确实存住了」的 id 集合
     let annotWarned = false                                   // 同类错误只提醒一次
 
@@ -87,7 +141,7 @@ import * as foldersUi from '../folders.mjs'
       const list = Array.isArray(items) ? items : []
       const ids = list.map(item => item && item.id).filter(Boolean)
       const removed = annotKnownIds.filter(id => ids.indexOf(id) < 0)
-      annotSaveChain = annotSaveChain
+      const saving = (pendingAnnotationSaves.get(paper.id) || Promise.resolve())
         .then(() => api.saveAnnotations(paper.id, list))
         .then(() => {
           annotKnownIds = ids
@@ -96,7 +150,7 @@ import * as foldersUi from '../folders.mjs'
         })
         .catch(err => {
           writeAnnotDraft(paper.id, list, removed)   // 兜底：先存本机，下次打开自动补
-          if (opts.silent || annotWarned) return
+          if (isStale() || opts.silent || annotWarned) return
           annotWarned = true
           if (err && err.status === 404) {
             // 404 = 这台服务还没有批注接口：几乎都是「后台进程还是旧代码」（路由表在启动时
@@ -106,6 +160,10 @@ import * as foldersUi from '../folders.mjs'
             toast('批注保存失败：' + err.message + '（已暂存在本机，下次打开会自动重试）', 'error')
           }
         })
+        .finally(() => {
+          if (pendingAnnotationSaves.get(paper.id) === saving) pendingAnnotationSaves.delete(paper.id)
+        })
+      pendingAnnotationSaves.set(paper.id, saving)
     }
     // 上次留下的草稿：静默补写一次。服务端已支持就当场同步掉；还是旧进程就继续留草稿，不再打扰。
     if (hasAnnotDraft && annotLoaded) savePdfAnnotations(pdfAnnotations, { silent: true })
@@ -129,6 +187,7 @@ import * as foldersUi from '../folders.mjs'
     function openCiteDialog () {
       const textBox = h('div.cite-text', { text: '加载中…' })
       let current = 'gb'
+      let query = null
       const buttons = {}
       const formatRow = h('div.cite-format-row')
       for (const [key, label, hint] of CITE_FORMATS) {
@@ -144,12 +203,15 @@ import * as foldersUi from '../folders.mjs'
       }
       syncButtons()
       async function load () {
+        if (query) query.abort()
+        const request = new AbortController()
+        query = request
         textBox.textContent = '加载中…'
         try {
-          const res = await api.cite(paper.id, current)
-          textBox.textContent = res.text
+          const res = await api.cite(paper.id, current, request.signal)
+          if (!request.signal.aborted) textBox.textContent = res.text
         } catch (err) {
-          textBox.textContent = '生成失败：' + err.message
+          if (!request.signal.aborted) textBox.textContent = '生成失败：' + err.message
         }
       }
       load()
@@ -164,21 +226,19 @@ import * as foldersUi from '../folders.mjs'
           formatRow,
           textBox,
           h('div.actions',
-            h('button.btn', { type: 'button', onclick: close }, '关闭'),
+            h('button.btn', { type: 'button', onclick: () => close() }, '关闭'),
             h('button.btn.primary', {
               type: 'button',
               onclick: async () => {
                 const ok = await util.copyText(textBox.textContent)
-                toast(ok ? '已复制到剪贴板' : '复制失败，请手动选择文本', ok ? '' : 'error')
+                if (!isStale()) toast(ok ? '已复制到剪贴板' : '复制失败，请手动选择文本', ok ? '' : 'error')
               }
             }, '复制')
           )
         )
       )
-      function close () { back.remove() }
-      document.body.appendChild(back)
-      document.addEventListener('keydown', function onKey (ev) {
-        if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey) }
+      const close = showOverlay(back, () => {
+        if (query) query.abort()
       })
     }
 
@@ -199,7 +259,7 @@ import * as foldersUi from '../folders.mjs'
           type: 'button',
           onclick: async () => {
             panel.hidden = true
-            const ok = await confirmDialog({
+            const ok = await confirm({
               title: '删除这条文献？',
               body: '记录会从文献库中移除' + (paper.pdfFile ? '，关联的 PDF 文件也会被删除' : '') + '，此操作不可撤销。',
               okText: '删除',
@@ -208,10 +268,11 @@ import * as foldersUi from '../folders.mjs'
             if (!ok) return
             try {
               await api.deletePaper(paper.id)
+              if (isStale()) return
               toast('已删除')
               refreshMeta()
               go('#/')
-            } catch (err) { toast(err.message, 'error') }
+            } catch (err) { if (!isStale()) toast(err.message, 'error') }
           }
         }, '🗑 删除文献')
       )
@@ -226,7 +287,7 @@ import * as foldersUi from '../folders.mjs'
       // 点别处自动收起
       document.addEventListener('click', ev => {
         if (!wrap.contains(ev.target)) panel.hidden = true
-      })
+      }, { signal })
       return wrap
     }
 
@@ -304,14 +365,14 @@ import * as foldersUi from '../folders.mjs'
           if (!unit.isConnected) { setMenu(false); return }
           if (!wrap.contains(ev.target)) setMenu(false)
         }
-        document.addEventListener('click', outside)
-        document.addEventListener('keydown', onEsc, true)
+        document.addEventListener('click', outside, { signal })
+        document.addEventListener('keydown', onEsc, { capture: true, signal })
         try { menuItem.focus({ preventScroll: true }) } catch (err) { /* 老浏览器忽略 */ }
       }
 
       function onEsc (ev) {
         if (ev.key !== 'Escape') return
-        // 捕获阶段先于详情页 document.onkeydown 的「Esc 返回首页」执行：
+        // 捕获阶段先于详情页的「Esc 返回首页」执行：
         // 菜单开着时 Esc 只收菜单，不把人送回首页。
         ev.stopImmediatePropagation()
         setMenu(false)
@@ -322,8 +383,8 @@ import * as foldersUi from '../folders.mjs'
         status.textContent = text
         status.classList.toggle('is-warn', !!warn)
         status.hidden = false
-        if (statusTimer) clearTimeout(statusTimer)
-        statusTimer = setTimeout(() => { status.hidden = true }, 8000)
+        cancelLater(statusTimer)
+        statusTimer = later(() => { status.hidden = true }, 8000)
       }
 
       async function reextract () {
@@ -343,15 +404,17 @@ import * as foldersUi from '../folders.mjs'
         status.hidden = true
         try {
           const res = await api.extractFigures(paper.id, { force: true })
+          if (isStale()) return
           let n = res && typeof res.extracted === 'number'
             ? res.extracted
             : (res && Array.isArray(res.figures) ? res.figures.length : 0)
           // 回读一次服务端列表：以「刷新后实际存下的张数」为准，也确认覆盖写入已落库。
           // 画廊本身没有前端缓存，每次打开都重新拉，点胶囊过去看到的就是这批新数据。
           try {
-            const fresh = await api.paperFigures(paper.id)
+            const fresh = await api.paperFigures(paper.id, signal)
             if (fresh && Array.isArray(fresh.figures)) n = fresh.figures.length
           } catch (err) { /* 回读失败就退回提取接口给的 extracted */ }
+          if (isStale()) return
           if (n) {
             toast('已从 PDF 重新提取 ' + n + ' 张图表')
             showStatus('已更新 ' + n + ' 张图表 · 查看 →')
@@ -386,6 +449,7 @@ import * as foldersUi from '../folders.mjs'
           h('span.star-wrap', { title: '收藏：把这篇放进「我的收藏」' },
             components.starButton(paper, {
               onChange: on => {
+                if (isStale()) return
                 toast(on ? '已加入收藏' : '已取消收藏')
                 if (getState().query.starred && !on) render()
               }
@@ -396,6 +460,7 @@ import * as foldersUi from '../folders.mjs'
             onChange: async value => {
               try {
                 await api.updatePaper(paper.id, { rating: value })
+                if (isStale()) return
                 paper.rating = value
                 toast(value ? '已打 ' + value + ' 分' : '已清除评分')
                 render()
@@ -456,6 +521,7 @@ import * as foldersUi from '../folders.mjs'
     function changeFolderFromDetail () {
       foldersUi.openFolderPicker({
         current: paper.folder || '',
+        signal,
         onPick: async path => {
           if ((paper.folder || '') === path) {
             toast('分类没有变化')
@@ -464,6 +530,7 @@ import * as foldersUi from '../folders.mjs'
           try {
             await api.movePapers([paper.id], path)
             foldersUi.notifyChanged()
+            if (isStale()) return
             toast('已移到「' + (path ? path.split('/').pop() : foldersUi.ROOT_LABEL) + '」')
             render()
           } catch (err) {
@@ -592,6 +659,7 @@ import * as foldersUi from '../folders.mjs'
      */
     async function exportPdf () {
       try { await refreshChat() } catch {}
+      if (isStale()) return
       const chat = Array.isArray(paper.chat) ? paper.chat : []
       const pairs = []
       chat.forEach(msg => {
@@ -643,6 +711,7 @@ import * as foldersUi from '../folders.mjs'
       document.body.appendChild(doc)
       document.body.classList.add('exporting')
       let cleaned = false
+      let printTimer = null
       const cleanup = () => {
         if (cleaned) return
         cleaned = true
@@ -650,8 +719,12 @@ import * as foldersUi from '../folders.mjs'
         if (doc.parentNode) doc.parentNode.removeChild(doc)
         document.title = oldTitle
         window.removeEventListener('afterprint', cleanup)
+        signal.removeEventListener('abort', cleanup)
+        cancelLater(printTimer)
       }
       window.addEventListener('afterprint', cleanup)
+      signal.addEventListener('abort', cleanup, { once: true })
+      printTimer = later(cleanup, 60000)
       toast('已生成导出视图：在打印窗口把「目标打印机」选成「另存为 PDF」')
       try {
         window.print()
@@ -659,7 +732,6 @@ import * as foldersUi from '../folders.mjs'
         cleanup()
         toast('这台浏览器不支持直接打印：' + err.message, 'error')
       }
-      setTimeout(cleanup, 60000)   // 有的浏览器不触发 afterprint，兜底清理
     }
 
 
@@ -717,6 +789,7 @@ import * as foldersUi from '../folders.mjs'
       summaryZhMeta.style.color = ''
       try {
         const res = await api.translateSummary(paper.id)
+        if (isStale()) return
         paper.summaryZh = res.paper ? res.paper.summaryZh : ''
         paper.summaryZhAt = res.paper ? res.paper.summaryZhAt : ''
         paper.summaryZhModel = res.paper ? res.paper.summaryZhModel : ''
@@ -780,10 +853,11 @@ import * as foldersUi from '../folders.mjs'
       onchange: async ev => {
         const file = ev.target.files && ev.target.files[0]
         if (!file) return
-        const hint = toast('正在上传 ' + file.name + ' …')
+        toast('正在上传 ' + file.name + ' …')
         try {
           const res = await api.uploadPdf(file, paper.id, ratio => { /* 进度可用于调试 */ })
           await api.updatePaper(paper.id, { pdfFile: res.pdfFile })
+          if (isStale()) return
           // 上传时服务端会顺手提取正文，这里把结果告诉用户
           if (res.extract && res.extract.ok) {
             toast('PDF 已关联，并已提取正文 ' + res.extract.chars + ' 字')
@@ -794,7 +868,7 @@ import * as foldersUi from '../folders.mjs'
           }
           // 刷新统计并重绘当前页，避免还显示「还没有关联 PDF」
           await refreshMeta()
-          render()
+          if (!isStale()) render()
         } catch (err) {
           toast(err.message, 'error')
         }
@@ -813,7 +887,7 @@ import * as foldersUi from '../folders.mjs'
           paper.pdfFile ? h('button.btn.sm.danger', {
             type: 'button',
             onclick: async () => {
-              const ok = await confirmDialog({
+              const ok = await confirm({
                 title: '取消关联这个 PDF？',
                 body: '只会取消关联并删除副本，不会影响你磁盘上其他位置的原始文件。',
                 okText: '取消关联',
@@ -822,6 +896,7 @@ import * as foldersUi from '../folders.mjs'
               if (!ok) return
               try {
                 await api.updatePaper(paper.id, { pdfFile: '' })
+                if (isStale()) return
                 toast('已取消关联')
                 render()
               } catch (err) { toast(err.message, 'error') }
@@ -901,7 +976,7 @@ import * as foldersUi from '../folders.mjs'
       }
       const total = typeof viewer.getPageCount === 'function' ? viewer.getPageCount() : 0
       if (!total) { toast('读不到页数，稍后再试', 'warn'); return }
-      const ok = await confirmDialog({
+      const ok = await confirm({
         title: '用识图模型识别全文？',
         body: '会把每一页渲染成图片发给模型抄录，共 ' + total + ' 页（也就是 ' + total +
           ' 次模型调用，扫描件大约几角钱）。识别完成后会存成这篇文献的正文，之后能全文检索、生成总结与问答。',
@@ -913,10 +988,12 @@ import * as foldersUi from '../folders.mjs'
       const parts = []
       try {
         for (let n = 1; n <= total; n++) {
+          if (isStale()) return
           ocrButton.textContent = '识别中 ' + n + '/' + total + '…'
           ftStatus.textContent = '正在识别第 ' + n + ' / ' + total + ' 页…'
           ftStatus.style.color = ''
           const dataUrl = await viewer.capturePage(n, { scale: 2, format: 'image/jpeg', quality: 0.85 })
+          if (isStale()) return
           if (!dataUrl) { parts.push('（第 ' + n + ' 页渲染失败）'); continue }
           const res = await api.transcribeImage(paper.id, dataUrl, n)
           const text = String((res && res.text) || '').trim()
@@ -924,6 +1001,7 @@ import * as foldersUi from '../folders.mjs'
         }
         const merged = parts.join('\n\n')
         const saved = await api.saveFulltextText(paper.id, merged)
+        if (isStale()) return
         ftReady = true
         renderFtState()
         ftStatus.textContent = '✓ 识图完成，已存为正文 ' + saved.chars + ' 字（可全文检索，也会用于 AI 总结）'
@@ -946,6 +1024,7 @@ import * as foldersUi from '../folders.mjs'
       ftStatus.style.color = ''
       try {
         const res = await api.extractFulltext(paper.id)
+        if (isStale()) return
         ftReady = true
         toast(`已提取 ${res.pages} 页 / ${res.chars} 字`)
         ftStatus.textContent = '✓ 已提取 ' + res.chars + ' 字（可被全文检索，也会用于 AI 总结）'
@@ -974,6 +1053,7 @@ import * as foldersUi from '../folders.mjs'
         await api.aiSummarizeStream(paper.id, {
           save: true,
           onStart: info => {
+            if (isStale()) return
             coverage = info.fullRead || null
             if (info.autoExtract && info.autoExtract.ok) {
               ftReady = true
@@ -993,15 +1073,18 @@ import * as foldersUi from '../folders.mjs'
             }
           },
           onProgress: info => {
+            if (isStale()) return
             if (coverage && coverage.mode === 'map-reduce') {
               aiStatus.textContent = `正在读取全文（${info.done || 0}/${info.total || coverage.chunks} 段）…`
             }
           },
           onDelta: chunk => {
+            if (isStale()) return
             acc += chunk
             aiBody.innerHTML = md.render(acc, { byTitle: lookupTitle })
           }
         })
+        if (isStale()) return
         aiStatus.textContent = '已生成并保存 ✓'
         aiStatus.style.color = 'var(--accent-text)'
         const miss = coverage && coverage.missing && coverage.missing.length
@@ -1080,7 +1163,11 @@ import * as foldersUi from '../folders.mjs'
       if (!file || !/^image\//.test(file.type || '')) return false
       if (pendingImages.length >= 4) { toast('一次最多带 4 张图', 'warn'); return false }
       const reader = new FileReader()
+      const abort = () => reader.abort()
+      signal.addEventListener('abort', abort, { once: true })
+      reader.addEventListener('loadend', () => signal.removeEventListener('abort', abort), { once: true })
       reader.onload = () => {
+        if (isStale()) return
         pendingImages.push({ dataUrl: String(reader.result || ''), name: file.name || '图片' })
         renderChatThumbs()
       }
@@ -1206,7 +1293,7 @@ import * as foldersUi from '../folders.mjs'
             title: '删除这一问一答',
             onclick: async ev => {
               ev.stopPropagation()
-              const ok = await confirmDialog({
+              const ok = await confirm({
                 title: '删除这条提问？',
                 body: '「' + (pair.question.length > 30 ? pair.question.slice(0, 30) + '…' : pair.question) + '」以及它的回答会一起删掉。',
                 okText: '删除',
@@ -1226,10 +1313,7 @@ import * as foldersUi from '../folders.mjs'
       }
 
       // 自动定位到最新的一问一答（反馈：以前问完还要自己拖滚动条）
-      if (list.length) {
-        const raf = (typeof window !== 'undefined' && window.requestAnimationFrame) || (fn => setTimeout(fn, 0))
-        raf(() => { chatBody.scrollTop = chatBody.scrollHeight })
-      }
+      if (list.length) scrollChatToEnd()
     }
 
     /** 点提问历史：把对应的问答滚到视野里并高亮一下 */
@@ -1259,7 +1343,7 @@ import * as foldersUi from '../folders.mjs'
       for (const item of chatQList.childNodes || []) {
         if (item.classList) item.classList.toggle('active', item.getAttribute('data-pair-index') === want)
       }
-      if (target && target.classList) setTimeout(() => target.classList.remove('hl'), 1600)
+      if (target && target.classList) later(() => target.classList.remove('hl'), 1600)
     }
     renderChat(paper.chat)
 
@@ -1279,6 +1363,7 @@ import * as foldersUi from '../folders.mjs'
       const label = String(opts.label || (pics.length ? '含 ' + pics.length + ' 张图' : ''))
       const readinessNote = h('div.chat-msg.ai', { id: 'chat-stream-wrap' }, h('div.chat-meta', 'AI'),
         h('div.chat-text', { id: 'chat-stream' }, '…'))
+      const streamText = readinessNote.querySelector('.chat-text')
       streaming = true
       sendButton.setAttribute('disabled', '')
       chatStatus.textContent = pics.length ? '正在把图片发给模型…' : '正在准备资料…'
@@ -1293,6 +1378,7 @@ import * as foldersUi from '../folders.mjs'
       try {
         const hooks = {
           onStart: info => {
+            if (isStale()) return
             coverage = info.fullRead || null
             const fr = coverage
             chatStatus.textContent = pics.length
@@ -1306,14 +1392,15 @@ import * as foldersUi from '../folders.mjs'
             }
           },
           onProgress: info => {
+            if (isStale()) return
             if (!pics.length && coverage && coverage.mode === 'map-reduce') {
               chatStatus.textContent = `正在读取全文（${info.done || 0}/${info.total || coverage.chunks} 段）…`
             }
           },
           onDelta: chunk => {
+            if (isStale()) return
             acc += chunk
-            const el = document.getElementById('chat-stream')
-            if (el) el.innerHTML = md.render(acc, { byTitle: lookupTitle })
+            streamText.innerHTML = md.render(acc, { byTitle: lookupTitle })
             chatBody.scrollTop = chatBody.scrollHeight
           }
         }
@@ -1327,12 +1414,14 @@ import * as foldersUi from '../folders.mjs'
           // 不带图时走对话接口：勾了「联网搜索」才用 Exa（花钱），否则和以前一样用免费的学术检索
           await api.paperChatStream(paper.id, q, Object.assign({ web: !!(webToggle && webToggle.checked) }, hooks))
         }
+        if (isStale()) return
         chatStatus.textContent = coverage && coverage.totalChars
           ? '已基于正文与 SI 全文回答，并保存到对话历史'
           : '已保存到这篇文献的对话历史'
         chatStatus.style.color = 'var(--accent-text)'
         await refreshChat()
       } catch (err) {
+        if (isStale()) return
         chatStatus.textContent = '失败：' + err.message
         chatStatus.style.color = 'var(--danger)'
         toast('提问失败：' + err.message, 'error')
@@ -1356,7 +1445,9 @@ import * as foldersUi from '../folders.mjs'
 
     async function refreshChat () {
       try {
-        const res = await api.getChat(paper.id)
+        if (isStale()) return
+        const res = await api.getChat(paper.id, signal)
+        if (isStale()) return
         paper.chat = res.messages || []
         renderChat(paper.chat)
       } catch {}
@@ -1395,11 +1486,8 @@ import * as foldersUi from '../folders.mjs'
           h('div.actions', sendBtn, closeBtn)
         )
       )
-      const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey) }
-      const onKey = ev => { if (ev.key === 'Escape') close() }
-      document.addEventListener('keydown', onKey)
+      const close = showOverlay(overlay)
       closeBtn.addEventListener('click', close)
-      overlay.addEventListener('click', ev => { if (ev.target === overlay) close() })
 
       sendBtn.addEventListener('click', async () => {
         const question = String(input.value || '').trim() || '解释这张图/表说明了什么。'
@@ -1415,14 +1503,16 @@ import * as foldersUi from '../folders.mjs'
             label: pageLabel
           }, {
             onDelta: chunk => {
+              if (isStale() || !overlay.isConnected) return
               acc += chunk
               answerBox.innerHTML = md.render(acc, { byTitle: lookupTitle })
             }
           })
+          if (isStale()) return
           status.textContent = '已保存到这篇文献的对话历史'
           status.style.color = 'var(--accent-text)'
           await refreshChat()
-          setReadMode('chat')
+          if (!isStale()) setReadMode('chat')
         } catch (err) {
           status.textContent = '失败：' + err.message
           status.style.color = 'var(--danger)'
@@ -1430,7 +1520,6 @@ import * as foldersUi from '../folders.mjs'
           sendBtn.removeAttribute('disabled')
         }
       })
-      document.body.appendChild(overlay)
       if (typeof input.focus === 'function') input.focus()
     }
 
@@ -1475,8 +1564,7 @@ import * as foldersUi from '../folders.mjs'
       tabSummary.classList.toggle('active', !chat)
       tabChat.classList.toggle('active', chat)
       if (chat) {
-        const raf = (typeof window !== 'undefined' && window.requestAnimationFrame) || (fn => setTimeout(fn, 0))
-        raf(() => { chatBody.scrollTop = chatBody.scrollHeight })
+        scrollChatToEnd()
         // 注意要 preventScroll：直接 focus() 会让浏览器把输入框滚进视野，
         // 于是「点一下与文献对话，整页就跳到最底部」（反馈 #12）。
         try { chatInput.focus({ preventScroll: true }) } catch { chatInput.focus() }
@@ -1531,7 +1619,9 @@ import * as foldersUi from '../folders.mjs'
 
     async function loadAttachments () {
       try {
-        const res = await api.listAttachments(paper.id)
+        if (isStale()) return
+        const res = await api.listAttachments(paper.id, signal)
+        if (isStale()) return
         const list = res.attachments || []
         paper.attachments = list
         if (!list.length) {
@@ -1553,7 +1643,7 @@ import * as foldersUi from '../folders.mjs'
             type: 'button',
             title: '删除这个补充材料',
             onclick: async () => {
-              const ok = await confirmDialog({
+              const ok = await confirm({
                 title: '删除这个补充材料？',
                 body: '「' + att.originalName + '」会从这篇文献上移除。',
                 okText: '删除',
@@ -1622,35 +1712,37 @@ import * as foldersUi from '../folders.mjs'
       readGrid.style.setProperty('--read-ratio', String(savedRatio))
     }
 
-    let dragging = false
+    let dragStyles = null
     function onDragStart (ev) {
-      dragging = true
+      if (dragStyles) return
+      dragStyles = { userSelect: document.body.style.userSelect, cursor: document.body.style.cursor }
       resizer.classList.add('dragging')
       document.body.style.userSelect = 'none'
       document.body.style.cursor = 'col-resize'
       ev.preventDefault()
     }
     function onDragMove (ev) {
-      if (!dragging) return
+      if (!dragStyles) return
       const rect = readGrid.getBoundingClientRect()
       if (!rect.width) return
       const ratio = Math.min(0.78, Math.max(0.35, (ev.clientX - rect.left) / rect.width))
       readGrid.style.setProperty('--read-ratio', String(Math.round(ratio * 1000) / 1000))
     }
-    function onDragEnd () {
-      if (!dragging) return
-      dragging = false
+    function finishDrag (persist) {
+      if (!dragStyles) return
       resizer.classList.remove('dragging')
-      document.body.style.userSelect = ''
-      document.body.style.cursor = ''
+      document.body.style.userSelect = dragStyles.userSelect
+      document.body.style.cursor = dragStyles.cursor
+      dragStyles = null
       const current = Number(readGrid.style.getPropertyValue('--read-ratio'))
-      if (Number.isFinite(current) && current > 0) {
+      if (persist && Number.isFinite(current) && current > 0) {
         savePrefs({ readRatio: current }, { silent: true })
       }
     }
     resizer.addEventListener('mousedown', onDragStart)
-    document.addEventListener('mousemove', onDragMove)
-    document.addEventListener('mouseup', onDragEnd)
+    document.addEventListener('mousemove', onDragMove, { signal })
+    document.addEventListener('mouseup', () => finishDrag(true), { signal })
+    signal.addEventListener('abort', () => finishDrag(false), { once: true })
     // 也支持键盘微调（无障碍）
     resizer.addEventListener('keydown', ev => {
       const current = Number(readGrid.style.getPropertyValue('--read-ratio')) || 0.68
@@ -1664,7 +1756,8 @@ import * as foldersUi from '../folders.mjs'
 
     /* ---------- 组装 ---------- */
 
-    readGrid.replaceChildren(pdfPanel, resizer, h('div.read-side', mergedPanel, morePanel))
+    const readSide = h('div.read-side', mergedPanel, morePanel)
+    readGrid.replaceChildren(pdfPanel, resizer, readSide)
 
     outlet.replaceChildren(h('div.content.detail',
       header,
@@ -1678,97 +1771,46 @@ import * as foldersUi from '../folders.mjs'
 
     /* ---------- 内置 PDF 阅读器（失败自动回退到浏览器自带查看器） ---------- */
 
-    currentPaperId = paper.id
-    // 阅读器里「框选提问」的回调：框完把图交给这个函数弹窗提问
-    currentRegionHandler = openRegionAsk
-    // 批注：把这次读到的批注交给阅读器，改完走 savePdfAnnotations 落库
-    currentAnnotations = pdfAnnotations
-    currentAnnotationsHandler = savePdfAnnotations
-    if (pdfOk) mountPdfViewer()
+    if (pdfOk) {
+      const url = api.pdfUrl(paper.id)
+      mountPdfViewer(pdfHost, {
+        url,
+        signal,
+        title: 'PDF 原文',
+        downloadUrl: url,
+        annotations: pdfAnnotations,
+        onAnnotationsChange: items => { if (!isStale()) savePdfAnnotations(items) },
+        onRegionSelected: (dataUrl, info) => { if (!isStale()) openRegionAsk(dataUrl, info || {}) }
+      }).then(viewer => {
+        if (!isStale()) activePdfViewer = viewer
+      })
+    }
 
     // 右列高度对齐左边 PDF 框：CSS 里两边已经用了同一个 --read-h，
     // 这里再按实测像素补一次（阅读器加载完成后尺寸可能变），保证任何窗口尺寸下都齐平。
-    bindReadColumnHeightSync()
+    function syncHeight () {
+      if (window.innerWidth <= 1200) {
+        readSide.style.height = ''
+        return
+      }
+      const height = pdfPanel.getBoundingClientRect().height || pdfPanel.offsetHeight
+      if (height >= 160) readSide.style.height = Math.round(height) + 'px'
+    }
+    syncHeight()
+    for (const delay of [120, 400, 1000, 2000]) later(syncHeight, delay)
+    let resizeTimer = null
+    window.addEventListener('resize', () => {
+      cancelLater(resizeTimer)
+      resizeTimer = later(syncHeight, 60)
+    }, { signal })
 
     // 详情页快捷键：e 编辑，Esc 返回
-    document.onkeydown = ev => {
+    document.addEventListener('keydown', ev => {
       const tag = (ev.target.tagName || '').toLowerCase()
-      if (tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return
+      if (ev.defaultPrevented || tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return
       if (ev.key === 'e') go('#/edit/' + encodeURIComponent(paper.id))
       if (ev.key === 'Escape') go('#/')
-    }
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* 右列与 PDF 面板等高                                                 */
-  /* ------------------------------------------------------------------ */
-
-  let readHeightTimer = null
-  let readHeightBound = false
-
-  /**
-   * 右列（总结/对话 + 补充材料）高度 = 左边 PDF **面板**（含标题栏）的高度。
-   *
-   * 为什么要用 JS 量：右列里是「总结正文」这种高度不定的内容，
-   * 用 CSS 拉伸（align-items: stretch）会被内容撑高、反而比 PDF 面板长；
-   * 所以这里按 PDF 面板的实测像素给一个**确定的高度**，多出来的内容在模块内部滚动。
-   * （之前对齐的是里面的阅读区，正好矮掉 PDF 标题栏那一截，这是反馈 #7 第二次提到的。）
-   */
-  function syncReadColumnHeight () {
-    if (typeof document === 'undefined') return
-    const side = document.querySelector('.read-side')
-    if (!side) return
-    // 窄屏是上下排列，不锁高度（断点与 CSS 的 .read-grid 保持一致：1200）
-    if (typeof window !== 'undefined' && window.innerWidth && window.innerWidth <= 1200) {
-      side.style.height = ''
-      return
-    }
-    const panel = document.getElementById('pdf-panel')
-    if (!panel) return
-    const rect = typeof panel.getBoundingClientRect === 'function' ? panel.getBoundingClientRect() : null
-    const height = rect && rect.height ? rect.height : panel.offsetHeight
-    if (!height || height < 160) return    // 还没布局好，等下一次
-    side.style.height = Math.round(height) + 'px'
-  }
-
-  function scheduleReadColumnHeightSync () {
-    if (readHeightTimer) clearTimeout(readHeightTimer)
-    readHeightTimer = setTimeout(() => {
-      readHeightTimer = null
-      syncReadColumnHeight()
-    }, 60)
-  }
-
-  function bindReadColumnHeightSync () {
-    syncReadColumnHeight()
-    // 图片/字体加载完、阅读器排版完成后尺寸会变，再补几次
-    for (const delay of [120, 400, 1000, 2000]) setTimeout(syncReadColumnHeight, delay)
-    if (readHeightBound || typeof window === 'undefined') return
-    readHeightBound = true
-    window.addEventListener('resize', scheduleReadColumnHeightSync)
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* PDF 阅读器：优先用自绘的 pdf.js 阅读器（风格统一），不行再用 iframe */
-  /* ------------------------------------------------------------------ */
-
-  let activePdfViewer = null
-  let currentRegionHandler = null
-  let currentAnnotations = []
-  let currentAnnotationsHandler = null
-
-  /** 离开详情页时把 worker / canvas 释放掉，避免来回切换页面越积越多 */
-  function disposePdfViewer () {
-    if (activePdfViewer && typeof activePdfViewer.destroy === 'function') {
-      try { activePdfViewer.destroy() } catch (err) { console.warn('[pdf] 释放阅读器失败：', err) }
-    }
-    activePdfViewer = null
-  }
-
-  /** 断开批注回调（旧实例的回调不能把数据写到下一篇文献上） */
-  function resetAnnotationBridge () {
-    currentAnnotations = []
-    currentAnnotationsHandler = null
+    }, { signal })
   }
 
   /* ------------------------------------------------------------------ */
@@ -1776,6 +1818,7 @@ import * as foldersUi from '../folders.mjs'
   /* ------------------------------------------------------------------ */
 
   const ANNOT_DRAFT_PREFIX = 'lv:annot-draft:'
+  const pendingAnnotationSaves = new Map()
   const ANNOT_DRAFT_MAX = 1024 * 1024        // 单篇草稿上限 1MB，超了就不写（localStorage 只有 5MB）
 
   function annotDraftKey (paperId) {
@@ -1852,49 +1895,22 @@ import * as foldersUi from '../folders.mjs'
     }
     return out
   }
-  if (typeof window !== 'undefined' && !window.__lvPdfCleanupBound) {
-    window.__lvPdfCleanupBound = true
-    window.addEventListener('hashchange', () => {
-      if (!/^#\/paper\//.test(window.location.hash || '')) disposePdfViewer()
-    })
-  }
-
-  async function mountPdfViewer () {
-    const host = document.getElementById('pdf-viewer-host')
-    if (!host) return
-    disposePdfViewer()
-    const url = api.pdfUrl(currentPaperId)
+  async function mountPdfViewer (host, options) {
+    const { signal, url } = options
     const showIframe = reason => {
+      if (signal.aborted) return null
       if (reason) console.warn('[pdf] 使用浏览器自带查看器：' + reason)
       host.classList.add('pdf-fallback')
       host.replaceChildren(h('iframe.pdf-frame', { src: url + '#view=FitH', title: 'PDF 预览' }))
+      signal.addEventListener('abort', () => host.replaceChildren(), { once: true })
+      return null
     }
-    const viewer = pdfviewer
-    if (!viewer || typeof viewer.mount !== 'function') return showIframe('内置阅读器脚本未加载')
     try {
-      const res = await viewer.mount(host, {
-        url,
-        title: 'PDF 原文',
-        downloadUrl: url,
-        // 批注：把这次读到的交给阅读器；它改完（新增/改内容/删除）回调这里落库
-        annotations: currentAnnotations,
-        onAnnotationsChange: items => {
-          currentAnnotations = items
-          if (typeof currentAnnotationsHandler === 'function') currentAnnotationsHandler(items)
-        },
-        // 框选提问：阅读器把框出来的高清图交回来，由详情页弹窗提问
-        onRegionSelected: (dataUrl, info) => {
-          if (typeof currentRegionHandler === 'function') currentRegionHandler(dataUrl, info || {})
-        }
-      })
-      if (res && res.ok) activePdfViewer = res
-      else showIframe(res && res.reason)
+      const res = await pdfviewer.mount(host, options)
+      return res.ok ? res : showIframe(res.reason)
     } catch (err) {
-      showIframe(err && err.message)
+      return showIframe(err && err.message)
     }
   }
-
-  // mountPdfViewer 要知道当前是哪篇文献（详情页可能被重绘多次）
-  let currentPaperId = null
 
   export { detailHandler }

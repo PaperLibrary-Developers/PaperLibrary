@@ -39,9 +39,22 @@ Windows 发布包的唯一入口是双击 `PaperLibrary.exe`：后台启动 Pyth
 ## 测试
 
     python -m unittest discover -s test -v
-    python tools/contract_check.py           # 64 端点契约快照
+    python tools/contract_check.py           # API 契约快照，自动使用独立回环端口
     python tools/e2e.py                      # 端到端（含 Node 参照 diff）
     python tools/bench.py                    # 体积/启动/内存基线
+    python tools/bench_library.py            # 1,000 / 10,000 条文献的数据库装载和评分写入基准
+
+Windows 上安装 Python（含 pip）和 Node 后，可复跑 CI 的完整流程。
+
+    pwsh -File tools/check_windows.ps1
+
+脚本校验便携 Python ZIP 和 Windows x64 wheel 的 SHA-256，运行 Python、Node 和 API 契约，
+构建 Windows ZIP 后解压并再次跑契约。产物和 JSON 结果默认写到 `dist/windows-check/`。
+CI 固定 Python 3.11.9 和 Node 24.21.0，便携依赖记录在 `tools/windows-portable-requirements.txt`。
+
+只需要 ZIP 时，可运行 `pwsh -File tools/check_windows.ps1 -PackageOnly`。它在临时目录
+验证本机便携运行时的副本，构建 ZIP 并验证解压后的包。全量模式另行构建便携运行时，
+并在仓库外的源码副本里执行测试。可通过 `-TempRoot D:\PaperLibraryTemp` 指定可写的仓库外目录。
 
 ## 数据与隐私
 

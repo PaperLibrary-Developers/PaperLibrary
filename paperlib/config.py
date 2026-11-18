@@ -126,6 +126,8 @@ def parse_args(argv=None, root=None) -> Config:
 
     env = os.environ
     port = _pick_port(out.get("port") or env.get("LV_PORT") or env.get("PORT") or DEFAULT_PORT)
+    if out.get("port") == "0" and "stop" not in out["flags"]:
+        port = 0
     host = out.get("host") or env.get("LV_HOST") or env.get("HOST") or DEFAULT_HOST
     raw_dir = out.get("data_dir") or env.get("LV_DATA_DIR") or env.get("DATA_DIR") or "data"
     data_dir = Path(raw_dir)

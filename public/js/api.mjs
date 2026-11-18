@@ -10,7 +10,7 @@
 
   export async function request (method, url, options) {
     const opts = options || {}
-    const init = { method, headers: Object.assign({}, opts.headers) }
+    const init = { method, headers: Object.assign({}, opts.headers), signal: opts.signal }
     if (opts.body instanceof FormData) {
       init.body = opts.body
     } else if (opts.body !== undefined) {
@@ -21,6 +21,7 @@
     try {
       res = await fetch(url, init)
     } catch (err) {
+      if (opts.signal && opts.signal.aborted) throw err
       throw new ApiError('连不上本地服务，请确认文献库服务正在运行（' + err.message + '）', 0)
     }
     const text = await res.text()
@@ -223,12 +224,12 @@
 
     // PDF 批注（荧光笔 / 便签）：整表读写。坐标是「相对该页的 0~1 归一化值」，
     // 缩放 / 适宽 / 换屏幕都不用重算，前端只管按百分比画。
-    getAnnotations: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/annotations'),
+    getAnnotations: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/annotations', { signal }),
     saveAnnotations: (id, items) => request('PUT', '/api/papers/' + encodeURIComponent(id) + '/annotations',
       { body: { items: Array.isArray(items) ? items : [] } }),
 
     // 「更多信息」补充材料
-    listAttachments: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/attachments'),
+    listAttachments: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/attachments', { signal }),
     deleteAttachment: (id, file) => request('DELETE', '/api/papers/' + encodeURIComponent(id) + '/attachments/' + encodeURIComponent(file)),
     attachmentUrl: (id, file) => '/api/papers/' + encodeURIComponent(id) + '/attachments/' + encodeURIComponent(file),
     uploadAttachment: function (id, file) {
@@ -253,7 +254,8 @@
       { body: mode ? { mode: mode } : {} }),
 
     // 与文献对话
-    getChat: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/chat'),    clearChat: id => request('DELETE', '/api/papers/' + encodeURIComponent(id) + '/chat'),
+    getChat: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/chat', { signal }),
+    clearChat: id => request('DELETE', '/api/papers/' + encodeURIComponent(id) + '/chat'),
     // 只删某一条提问（pairIndex = 这条提问在对话数组里的下标）
     deleteChatPair: (id, pairIndex) => request('DELETE',
       '/api/papers/' + encodeURIComponent(id) + '/chat?pair=' + encodeURIComponent(pairIndex)),
@@ -286,7 +288,7 @@
     getFulltext: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/fulltext'),
 
     listPapers: params => request('GET', '/api/papers' + qs(params)),
-    getPaper: id => request('GET', '/api/papers/' + encodeURIComponent(id)),
+    getPaper: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id), { signal }),
     createPaper: paper => request('POST', '/api/papers', { body: paper }),
     updatePaper: (id, patch) => request('PUT', '/api/papers/' + encodeURIComponent(id), { body: patch }),
     deletePaper: id => request('DELETE', '/api/papers/' + encodeURIComponent(id)),
@@ -295,7 +297,7 @@
     associatePdf: (paperId, file) => request('POST', '/api/papers/associate-pdf', { body: { paperId, file } }),
     cleanupDuplicates: files => request('POST', '/api/papers/cleanup-duplicates', { body: { files: files || [] } }),
     tidyPdfNames: () => request('POST', '/api/papers/tidy-pdf-names'),
-    cite: (id, format) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/cite' + qs({ format })),
+    cite: (id, format, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/cite' + qs({ format }), { signal }),
     pdfUrl: id => '/api/papers/' + encodeURIComponent(id) + '/pdf',
 
     fetchDoi: doi => request('POST', '/api/fetch/doi', { body: { doi } }),
@@ -324,7 +326,7 @@
     /** 删除画廊里的一条图表记录（不影响文献 / PDF / 其它图表） */
     deleteFigure: id => request('DELETE', '/api/figures/' + encodeURIComponent(id)),
     /** 某篇文献的图表列表 */
-    paperFigures: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/figures'),
+    paperFigures: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/figures', { signal }),
     /** 从该文献的 PDF 重新提取图表（force=true 覆盖已有记录） */
     extractFigures: (id, options) => request('POST',
       '/api/papers/' + encodeURIComponent(id) + '/figures/extract',

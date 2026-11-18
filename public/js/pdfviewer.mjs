@@ -847,6 +847,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
    */
   async function mount (container, options) {
     const opts = options || {}
+    const signal = opts.signal
     const url = opts.url === null || opts.url === undefined ? '' : String(opts.url).trim()
 
     // 参数问题直接返回，连 DOM 都不碰
@@ -854,6 +855,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       return { ok: false, reason: '内置阅读器没拿到有效的挂载点' }
     }
     if (!url) return { ok: false, reason: '内置阅读器没拿到 PDF 地址' }
+    if (signal && signal.aborted) return { ok: false, reason: '阅读器已关闭' }
 
     /* 每个实例一份状态：mount 被调用两次互不影响（没有全局单例） */
     const state = {
@@ -912,6 +914,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
     function teardown () {
       if (state.tornDown) return
       state.tornDown = true
+      if (signal) signal.removeEventListener('abort', destroy)
 
       // 1) 取消排队中的「重新适宽」
       if (state.rafId) {
@@ -1016,6 +1019,8 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       state.destroyed = true
       teardown()
     }
+
+    if (signal) signal.addEventListener('abort', destroy, { once: true })
 
     /* ------------------------------ 界面行为 ------------------------------ */
 
@@ -3061,10 +3066,12 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       let viewerMod = null
       try {
         pdfjs = await import(pdfUrls.module)
+        if (state.destroyed) return fail('阅读器已关闭')
         viewerMod = await import(pdfUrls.viewer)
       } catch (err) {
         return fail(DEP_HINT + '（' + errText(err) + '）')
       }
+      if (state.destroyed) return fail('阅读器已关闭')
       if (!pdfjs || typeof pdfjs.getDocument !== 'function' ||
         !viewerMod || typeof viewerMod.PDFViewer !== 'function') {
         return fail(DEP_HINT)
@@ -3087,6 +3094,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       } catch (err) {
         return fail(describeError(err))
       }
+      if (state.destroyed) return fail('阅读器已关闭')
       if (ui.total) ui.total.textContent = '/ ' + (pdfDocument.numPages || 0)
       if (ui.statusText) ui.statusText.textContent = '正在排版页面…'
       state.pdfDocument = pdfDocument      // 截图（整页导出）时按页码取页用

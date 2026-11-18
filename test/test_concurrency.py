@@ -138,7 +138,7 @@ class ConcurrencyTest(unittest.TestCase):
     def test_failed_update_is_rolled_back_before_later_commit(self):
         card = self.services.library.create({"title": "Original title", "tags": ["original"]})
         card_id = card["id"]
-        with patch.object(self.store.repo, "_save_attachments",
+        with patch.object(self.store.repo, "_set_meta",
                           side_effect=sqlite3.OperationalError("simulated write failure")):
             with self.assertRaises(sqlite3.OperationalError):
                 self.services.library.update(card_id, {"title": "Changed title", "tags": ["changed"]})

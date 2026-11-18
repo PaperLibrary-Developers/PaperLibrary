@@ -101,11 +101,11 @@ class Store:
         """序列化卡片的读取、业务合并、提交以及索引更新。"""
         return self._lock
 
-    def _persist(self, paper):
+    def _persist(self, paper, previous=None):
         paper_id = paper["id"]
         digest = _hash_paper(paper)
         updated = now_iso()
-        self.repo.write_papers((paper,), updated_at=updated)
+        self.repo.write_papers((paper,), updated_at=updated, previous=previous)
         self._hashes[paper_id] = digest
         self.meta["updatedAt"] = updated
 
@@ -125,7 +125,7 @@ class Store:
             idx = self.index_of(paper_id)
             if idx < 0:
                 return None
-            self._persist(record)
+            self._persist(record, self.papers[idx])
             self.papers[idx] = record
             return record
 
@@ -136,7 +136,7 @@ class Store:
                 return None
             merged = dict(self.papers[idx])
             merged.update(patch or {})
-            self._persist(merged)
+            self._persist(merged, self.papers[idx])
             self.papers[idx] = merged
             return merged
 

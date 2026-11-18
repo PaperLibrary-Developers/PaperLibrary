@@ -76,6 +76,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="dist")
     parser.add_argument("--skip-portable", action="store_true")
+    parser.add_argument("--portable-dir", type=Path, help="复用已验证的便携运行时目录")
     args = parser.parse_args(argv)
 
     # 精确到秒 + pid：并发打包不会撞同名，避免把另一个正在写的包删掉
@@ -105,11 +106,11 @@ def main(argv=None):
     print("[release] version.json 已生成：%s（%s，commit %s）"
           % (version_record["tag"], version_record["version"], version_record["commit"]))
 
-    portable_src = ROOT / "runtime" / "portable"
+    portable_src = args.portable_dir or ROOT / "runtime" / "portable"
     if not args.skip_portable:
         if not portable_src.is_dir():
             raise SystemExit("缺少 runtime/portable；先运行 python tools/make_portable.py")
-        shutil.copytree(portable_src, target / "runtime" / "portable")
+        copy_tree(portable_src, target / "runtime" / "portable")
         # 便携运行时里的项目根路径：release/runtime/portable/../.. = release 根，与 _pth 一致
 
     # 唯一用户入口：无控制台启动器 PaperLibrary.exe（csc 现场编译，图标取 public/paperlibrary.ico）。

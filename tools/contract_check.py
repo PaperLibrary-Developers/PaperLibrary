@@ -4,7 +4,7 @@
 network/skip 行（快照里没有 method 的行）标 SKIP；静态/vendor 行比较 content-type 与状态。
 
 用法：
-    python tools/contract_check.py                    # 自动起服务（端口 4398，临时数据目录）
+    python tools/contract_check.py                    # 自动分配回环端口与临时数据目录
     python tools/contract_check.py --base http://127.0.0.1:4321   # 打已有服务
     python tools/contract_check.py --json out.json    # 机器可读结果
 退出码：0 全部 PASS/SKIP；1 有 FAIL。
@@ -14,8 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -53,24 +51,22 @@ RAW = {
 }
 
 
-def free_port():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def wait_health(base, timeout=20.0):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+def wait_health(proc, data_dir, timeout=20.0):
+    runtime = data_dir / "server.runtime.json"
+    deadline = time.monotonic() + timeout
+    while proc.poll() is None and time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(base + "/api/health", timeout=1) as resp:
-                if resp.status == 200:
-                    return True
-        except Exception:
-            time.sleep(0.15)
-    return False
+            info = json.loads(runtime.read_text(encoding="utf-8"))
+            if info.get("pid") == proc.pid and 0 < info["port"] <= 65535:
+                base = "http://127.0.0.1:%d" % info["port"]
+                with urllib.request.urlopen(base + "/api/health", timeout=1) as resp:
+                    health = json.load(resp)
+                if health.get("ok") is True and health.get("pid") == proc.pid:
+                    return base
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+        time.sleep(0.05)
+    return ""
 
 
 def request(base, method, path, body=None, headers=None, raw=None):
@@ -122,12 +118,14 @@ def top_keys(status, ctype, body):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="")
-    parser.add_argument("--port", type=int, default=4398)
+    parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--data-dir", default="")
     parser.add_argument("--json", default="")
     parser.add_argument("--only", default="")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
+    if not 0 <= args.port <= 65535:
+        parser.error("--port 必须在 0 到 65535 之间")
 
     snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     rows = snapshot["endpoints"]
@@ -136,24 +134,28 @@ def main(argv=None):
         rows = [r for r in rows if r.get("id") in wanted]
 
     proc = None
-    data_dir = None
+    temp_dir = None
     base = args.base.rstrip("/")
-    if not base:
-        base = "http://127.0.0.1:%d" % args.port
-        data_dir = args.data_dir or tempfile.mkdtemp(prefix="pl-contract-")
-        env = dict(os.environ, PAPERLIB_SKIP_MIGRATE="1", PYTHONUTF8="1")
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "paperlib", "--port", str(args.port), "--no-open", "--idle-exit", "0", "--data-dir", data_dir],
-            cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        if not wait_health(base):
-            print("服务启动失败：%s" % base)
-            proc.kill()
-            return 1
-
     results = []
     failures = 0
     try:
+        if not base:
+            if not args.data_dir:
+                temp_dir = tempfile.TemporaryDirectory(prefix="pl-contract-")
+            data_dir = Path(args.data_dir or temp_dir.name).resolve()
+            env = dict(os.environ, PAPERLIB_SKIP_MIGRATE="1", PYTHONUTF8="1")
+            with tempfile.TemporaryFile() as stderr:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "paperlib", "--host", "127.0.0.1", "--port", str(args.port),
+                     "--no-open", "--idle-exit", "0", "--data-dir", str(data_dir)],
+                    cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=stderr,
+                )
+                base = wait_health(proc, data_dir)
+                if not base:
+                    stderr.seek(0)
+                    print("契约服务启动失败（PID %d，端口 %d）。" % (proc.pid, args.port))
+                    print(stderr.read().decode("utf-8", errors="replace").strip())
+                    return 1
         for row in rows:
             rid = row.get("id")
             method = row.get("method")
@@ -198,14 +200,15 @@ def main(argv=None):
             elif args.verbose:
                 print("PASS %-32s %s %s" % (rid, method, path))
     finally:
-        if proc is not None:
+        if proc is not None and proc.poll() is None:
             try:
                 proc.terminate()
                 proc.wait(timeout=5)
-            except Exception:
+            except subprocess.TimeoutExpired:
                 proc.kill()
-        if data_dir:
-            shutil.rmtree(data_dir, ignore_errors=True)
+                proc.wait(timeout=5)
+        if temp_dir:
+            temp_dir.cleanup()
 
     passed = sum(1 for r in results if r["result"] == "PASS")
     skipped = sum(1 for r in results if r["result"] == "SKIP")

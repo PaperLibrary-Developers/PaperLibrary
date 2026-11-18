@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections import defaultdict
 from pathlib import Path
 
 from paperlib.data import schema
@@ -57,7 +58,7 @@ class Repository:
         )
 
     # ------------------------------------------------------------------ 论文
-    def _assemble(self, row):
+    def _assemble(self, row, tags, attachments, chat):
         paper = _loads(row["data"], {})
         paper["id"] = row["id"]
         paper["title"] = row["title"]
@@ -80,61 +81,70 @@ class Repository:
         paper["addedAt"] = row["added_at"]
         paper["updatedAt"] = row["updated_at"]
         stored_tags = paper.get("tags")
-        if isinstance(stored_tags, list) and stored_tags:
-            paper["tags"] = [str(t) for t in stored_tags]
-        else:
-            paper["tags"] = [r["tag"] for r in self.conn.execute(
-                "SELECT tag FROM paper_tags WHERE paper_id = ?", (row["id"],))]
-        paper["attachments"] = [dict(r) for r in self.conn.execute(
-            "SELECT file, original_name, size, kind, has_text, text_chars, added_at "
-            "FROM attachments WHERE paper_id = ? ORDER BY rowid", (row["id"],))]
-        for att in paper["attachments"]:
-            att["originalName"] = att.pop("original_name")
-            att["hasText"] = bool(att.pop("has_text"))
-            att["textChars"] = att.pop("text_chars")
-            att["addedAt"] = att.pop("added_at")
-        paper["chat"] = self._load_chat(row["id"])
+        paper["tags"] = [str(t) for t in stored_tags] if isinstance(stored_tags, list) and stored_tags else tags
+        paper["attachments"] = attachments
+        paper["chat"] = chat
         return paper
 
-    def _load_chat(self, paper_id):
-        out = []
+    def _load_relations(self, paper_id=None):
+        where = "" if paper_id is None else " WHERE paper_id = ?"
+        params = () if paper_id is None else (paper_id,)
+        tags = defaultdict(list)
+        attachments = defaultdict(list)
+        chat = defaultdict(list)
         for r in self.conn.execute(
-                "SELECT role, content, at, model, sources, images, usage "
-                "FROM chat_messages WHERE paper_id = ? ORDER BY id", (paper_id,)):
-            msg = {
+                "SELECT paper_id, tag FROM paper_tags" + where + " ORDER BY paper_id, tag", params):
+            tags[r["paper_id"]].append(r["tag"])
+        for r in self.conn.execute(
+                "SELECT paper_id, file, original_name, size, kind, has_text, text_chars, added_at "
+                "FROM attachments" + where + " ORDER BY rowid", params):
+            attachments[r["paper_id"]].append({
+                "file": r["file"], "originalName": r["original_name"], "size": r["size"],
+                "kind": r["kind"], "hasText": bool(r["has_text"]), "textChars": r["text_chars"],
+                "addedAt": r["added_at"],
+            })
+        for r in self.conn.execute(
+                "SELECT paper_id, role, content, at, model, sources, images, usage "
+                "FROM chat_messages" + where + " ORDER BY id", params):
+            chat[r["paper_id"]].append({
                 "role": r["role"], "content": r["content"], "at": r["at"],
                 "model": r["model"], "sources": _loads(r["sources"], []),
                 "images": int(r["images"] or 0),
-            }
-            usage = _loads(r["usage"], None) if r["usage"] else None
-            msg["usage"] = usage
-            out.append(msg)
-        return out
+                "usage": _loads(r["usage"], None) if r["usage"] else None,
+            })
+        return tags, attachments, chat
 
     def list_papers(self):
         with self._lock:
             rows = self.conn.execute("SELECT * FROM papers ORDER BY added_at DESC, rowid DESC").fetchall()
-            return [self._assemble(r) for r in rows]
+            if not rows:
+                return []
+            tags, attachments, chat = self._load_relations()
+            return [self._assemble(row, tags[row["id"]], attachments[row["id"]], chat[row["id"]])
+                    for row in rows]
 
     def get_paper(self, paper_id):
         with self._lock:
             row = self.conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
-            return self._assemble(row) if row else None
+            if not row:
+                return None
+            tags, attachments, chat = self._load_relations(row["id"])
+            return self._assemble(row, tags[row["id"]], attachments[row["id"]], chat[row["id"]])
 
     def save_paper(self, paper):
         self.write_papers((paper,))
 
-    def write_papers(self, papers=(), removed=(), updated_at=None):
+    def write_papers(self, papers=(), removed=(), updated_at=None, *, previous=None):
         """Commit card records, related rows and library metadata together."""
         with self._lock, self.conn:
             for paper in papers:
-                self._save_paper(paper)
+                self._save_paper(paper, previous)
             for paper_id in removed:
                 self._delete_paper(paper_id)
             if updated_at is not None:
                 self._set_meta("updatedAt", updated_at)
 
-    def _save_paper(self, paper):
+    def _save_paper(self, paper, previous=None):
         data = dict(paper)
         data.pop("attachments", None)
         data.pop("chat", None)
@@ -159,10 +169,13 @@ class Repository:
                 json.dumps(data, ensure_ascii=False),
             ),
         )
-        self._save_tags(paper.get("id"), paper.get("tags") or [])
-        self._save_attachments(paper.get("id"), paper.get("attachments") or [])
-        if "chat" in paper:
-            self._save_chat(paper.get("id"), paper.get("chat") or [])
+        paper_id = paper["id"]
+        if previous is None or paper.get("tags") != previous.get("tags"):
+            self._save_tags(paper_id, paper.get("tags") or [])
+        if previous is None or paper.get("attachments") != previous.get("attachments"):
+            self._save_attachments(paper_id, paper.get("attachments") or [])
+        if "chat" in paper and (previous is None or paper["chat"] != previous.get("chat")):
+            self._save_chat(paper_id, paper["chat"] or [])
 
     def _save_tags(self, paper_id, tags):
         self.conn.execute("DELETE FROM paper_tags WHERE paper_id = ?", (paper_id,))

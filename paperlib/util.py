@@ -85,10 +85,21 @@ def read_json(path, fallback: Any = None) -> Any:
 def write_json_atomic(path, data: Any) -> None:
     p = Path(path)
     ensure_dir(p.parent)
-    tmp = p.with_name(p.name + ".tmp-" + str(os.getpid()))
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, p)
+    tmp = p.with_name(p.name + ".tmp-" + uid())
+    try:
+        with tmp.open("x", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+        for attempt in range(10):
+            try:
+                os.replace(tmp, p)
+                return
+            except PermissionError as exc:
+                # Windows readers may hold the destination without delete sharing.
+                if getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 9:
+                    raise
+                time.sleep(0.02)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def dump_json(data: Any) -> str:

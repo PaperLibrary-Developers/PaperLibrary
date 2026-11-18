@@ -259,13 +259,20 @@ import * as htmlText from '/shared/html-text.mjs'
 
   function confirmDialog (options) {
     const opts = options || {}
+    const signal = opts.signal
+    if (signal && signal.aborted) return Promise.resolve(false)
     return new Promise(resolve => {
       const close = answer => {
         back.remove()
-        document.removeEventListener('keydown', onKey)
+        document.removeEventListener('keydown', onKey, true)
+        if (signal) signal.removeEventListener('abort', onAbort)
         resolve(answer)
       }
+      const onAbort = () => close(false)
       const onKey = ev => {
+        if (ev.key !== 'Escape' && ev.key !== 'Enter') return
+        ev.stopImmediatePropagation()
+        ev.preventDefault()
         if (ev.key === 'Escape') close(false)
         if (ev.key === 'Enter') close(true)
       }
@@ -281,7 +288,8 @@ import * as htmlText from '/shared/html-text.mjs'
         )
       )
       document.body.appendChild(back)
-      document.addEventListener('keydown', onKey)
+      document.addEventListener('keydown', onKey, true)
+      if (signal) signal.addEventListener('abort', onAbort, { once: true })
       const first = back.querySelector('.btn.primary, .btn.danger')
       if (first) first.focus()
     })

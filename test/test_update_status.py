@@ -179,7 +179,8 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(set(seen).issubset(PHASES))
         self.assertTrue(svc.wait_idle(30))
-        self.assertEqual(svc.snapshot()["phase"], "ready")
+        snapshot = svc.snapshot()
+        self.assertEqual(snapshot["phase"], "ready", snapshot)
 
     def test_snapshot_reflects_live_progress_while_downloading(self):
         gate = threading.Event()

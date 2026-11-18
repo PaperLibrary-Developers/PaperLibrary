@@ -130,6 +130,7 @@ export function setShellHooks (hooks) {
   }
 
   let currentRenderToken = 0
+  let activeRender = null
 
   /**
    * 渲染调度：所有「需要重绘」的地方都走这里，避免 hashchange 与主动重绘撞车。
@@ -187,6 +188,9 @@ export function setShellHooks (hooks) {
     const isScheduled = !!(options && options.scheduled)
     if (isScheduled && !options.force && fingerprint === lastFingerprint) return
     lastFingerprint = fingerprint
+    if (activeRender) activeRender.abort()
+    const scope = new AbortController()
+    activeRender = scope
     // 真的离开了书库面板（不是切视图/改筛选/切收藏那些原地重绘）才清批量勾选，
     // 否则用户勾好的文献会被一起带出去
     const panel = panelOf(path)
@@ -201,8 +205,10 @@ export function setShellHooks (hooks) {
       const outlet = document.getElementById('outlet')
       if (!outlet) return
       try {
-        await r.handler({ outlet, params, routeParams, token, path, isStale: () => token !== currentRenderToken })
+        await r.handler({ outlet, params, routeParams, token, path,
+          signal: scope.signal, isStale: () => scope.signal.aborted })
       } catch (err) {
+        if (scope.signal.aborted) return
         console.error(err)
         outlet.replaceChildren(h('div.content', h('div.panel', h('div.panel-body',
           h('h3', '页面出错了'),
@@ -210,7 +216,7 @@ export function setShellHooks (hooks) {
           h('button.btn', { onclick: () => render() }, '重试')
         ))))
       }
-      if (typeof syncChromeHook === 'function') syncChromeHook(path)
+      if (!scope.signal.aborted && typeof syncChromeHook === 'function') syncChromeHook(path)
       return
     }
     setHash('')

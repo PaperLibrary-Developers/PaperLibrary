@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS papers (
   data      TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS papers_updated ON papers(updated_at);
+CREATE INDEX IF NOT EXISTS papers_added ON papers(added_at);
 CREATE INDEX IF NOT EXISTS papers_year ON papers(year);
 CREATE INDEX IF NOT EXISTS papers_doi ON papers(doi);
 

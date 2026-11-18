@@ -170,9 +170,10 @@ def main(argv=None, root=None):
                 update_committed = True
         return not update_committed
 
-    url = "http://%s:%d/" % ("127.0.0.1" if config.host == "0.0.0.0" else config.host, config.port)
-    state = probe_port(config.host, config.port)
+    browser_host = "127.0.0.1" if config.host == "0.0.0.0" else config.host
+    state = probe_port(config.host, config.port) if config.port else "free"
     if state == "ours" and not probe_pid:
+        url = "http://%s:%d/" % (browser_host, config.port)
         print("")
         print("  这个端口上已经有一个文献库在运行了：%s" % url)
         print("  直接为你打开浏览器，不需要重复启动。")
@@ -186,6 +187,9 @@ def main(argv=None, root=None):
     services, router, static_handler, store = build(config, update_probe=bool(probe_pid))
     server = HttpServer(router, static_handler, config.host, config.port, verbose=True,
                         update_pending=update_pending if probe_pid else None)
+    config.port = server.httpd.server_address[1]
+    services.runtime.port = config.port
+    url = "http://%s:%d/" % (browser_host, config.port)
     services.runtime.on_shutdown = server.shutdown
     # 在线监听：页面挂一条 SSE，全部关掉 idle_exit 秒后自动停机（0 = 关掉这个行为）
     services.runtime.presence = PresenceTracker(

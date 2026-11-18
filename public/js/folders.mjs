@@ -231,15 +231,23 @@ import { getState } from './state/store.mjs'
 
   function modal (options) {
     const opts = options || {}
+    const signal = opts.signal
     const overlay = h('div.fld-modal', { role: 'dialog', 'aria-modal': 'true', 'aria-label': opts.title || '文件夹' })
     const panel = h('div.fld-panel' + (opts.wide ? '.fld-panel--wide' : ''))
     const close = () => {
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
+      if (signal) signal.removeEventListener('abort', close)
       overlay.remove()
     }
-    const onKey = ev => { if (ev.key === 'Escape') { ev.preventDefault(); close() } }
+    const onKey = ev => {
+      if (ev.key !== 'Escape') return
+      ev.preventDefault()
+      ev.stopImmediatePropagation()
+      close()
+    }
     overlay.addEventListener('mousedown', ev => { if (ev.target === overlay) close() })
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
+    if (signal) signal.addEventListener('abort', close, { once: true })
     panel.appendChild(h('div.fld-head',
       h('div.fld-title', opts.title || '文件夹'),
       h('button.fld-x', { type: 'button', 'aria-label': '关闭', onclick: close }, '✕')))
@@ -388,7 +396,7 @@ import { getState } from './state/store.mjs'
 
     footer.appendChild(h('span.fld-hint', '点左侧目录选择，「＋ 新建」会在选中的目录下建子文件夹'))
     footer.appendChild(h('span.fld-spacer'))
-    const dialog = modal({ title: '选择分类文件夹', body, footer, wide: true })
+    const dialog = modal({ title: '选择分类文件夹', body, footer, wide: true, signal: opts.signal })
     footer.appendChild(h('button.btn', { type: 'button', onclick: dialog.close }, '取消'))
     footer.appendChild(h('button.btn.primary', {
       type: 'button',
