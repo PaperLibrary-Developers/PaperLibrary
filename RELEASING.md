@@ -90,8 +90,14 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 任一 FAIL 即判定发布失败；WARN 需人工确认（例如历史资产没有 version.json）。
 
-## 5. 当前状态（2026-11-17）
+## 5. 当前状态（2026-11-19）
 
+- **v1.8.2 已发布**（tag v1.8.2 / Release 指向 `9367ed6`，大库装载与详情页生命周期优化 + 写入一致性/升级回滚修复）：
+  - zip `PaperLibrary.v1.8.2.Nexus.zip` 43,498,137 字节，sha256 `d15f9f45f699fe85465d19bfa5ed9be784b0684ec61dca6e11886c7df02ade81`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.2.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、真实下载、SHA-256、zip 无 data/）。
+  - 注意：发布前若已升级 `version.json` 但尚未打 tag，不要直接跑全量测试——旧版
+    `test_update_publish` 会在该窗口真的执行发布；现已改为 tag 不存在时跳过并说明原因。
 - **v1.8.1 已发布**（tag v1.8.1 / Release 指向 `9cd64b6`，修复更新检查 SSL 证书链校验失败）：
   - zip `PaperLibrary.v1.8.1.Nexus.zip` 43,371,547 字节，sha256 `331ef50245f9a4ba7b26f6469ca654bc5e2c364a4c9e68afc3c376e5986618cf`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.1.json`；
