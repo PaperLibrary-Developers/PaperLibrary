@@ -28,6 +28,16 @@ TAG = CURRENT["tag"]
 ASSET = "PaperLibrary.%s.Nexus.zip" % TAG
 
 
+def local_tag_exists() -> bool:
+    """本版本 tag 是否已存在（只读 git，不访问网络）。"""
+    proc = subprocess.run(["git", "tag", "-l", TAG], cwd=str(ROOT), capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    return bool((proc.stdout or "").strip())
+
+
+LOCAL_TAG_EXISTS = local_tag_exists()
+
+
 def make_zip(path: Path, version=VERSION, extra=None):
     entries = {"PaperLibrary.exe": b"MZ", "paperlib/app.py": b"x"}
     if version is not None:
@@ -139,6 +149,10 @@ class PublishCliTest(unittest.TestCase):
         proc = self.run_tool(*args)
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("--yes", proc.stdout + proc.stderr)
+        # 「拒绝已存在 tag」只能在 tag 真的存在时验证：发布窗口期（version.json 已升级、
+        # tag 还没打）跑 --publish --yes 会真的推送 tag 并创建 GitHub Release。
+        if not LOCAL_TAG_EXISTS:
+            self.skipTest("本版本 tag 尚未创建：跳过「拒绝已存在 tag」分支，避免真实发布")
         args = self.base_args() + ["--publish", "--yes"]
         proc = self.run_tool(*args)
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
