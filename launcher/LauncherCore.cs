@@ -467,6 +467,19 @@ public static class LauncherCore
         return (DateTime.UtcNow - createdUtc).TotalMinutes <= InstallLockStaleMinutes;
     }
 
+    public static string UpdateProbeState(string baseDir, int processId)
+    {
+        string updates = Path.Combine(baseDir, "data", "updates");
+        string journal = SafeRead(Path.Combine(updates, "journal.json"));
+        string phase = JsonString(journal, "phase");
+        long launchedPid = JsonLong(journal, "launchedPid", 0);
+        if (phase == "success" && launchedPid == processId) return "committed";
+        if (!IsInstallLockActive(Path.Combine(updates, "install.lock"))) return "";
+        if (phase == "launch" && launchedPid == processId) return "validating";
+        if ((phase == "verify" || phase == "launch") && launchedPid == 0) return "starting";
+        return "";
+    }
+
     public static StartupDecision DecideStartup(string baseDir, string updaterHome)
     {
         StartupDecision decision = new StartupDecision();
@@ -477,6 +490,15 @@ public static class LauncherCore
         string applyPath = Path.Combine(updates, "apply.json");
         string statePath = Path.Combine(updates, "state.json");
 
+        if (IsInstallLockActive(lockPath))
+        {
+            decision.Action = "install-in-progress";
+            decision.Code = "install-locked";
+            decision.Message = "更新助手正在安装新版本，请稍候；不要重复启动应用。";
+            decision.Path = lockPath;
+            return decision;
+        }
+
         if (File.Exists(journalPath))
         {
             string journal = SafeRead(journalPath);
@@ -486,7 +508,12 @@ public static class LauncherCore
                 if (phase == "failed")
                 {
                     string state = SafeRead(statePath);
-                    if (JsonBool(state, "recovered", false))
+                    if (JsonBool(state, "recovered", false)
+                        || (JsonString(state, "phase") == "failed"
+                            && JsonString(state, "version") == JsonString(journal, "version")
+                            && JsonString(state, "code") == JsonString(journal, "code")
+                            && JsonString(state, "code") != "recovery-failed"
+                            && JsonString(state, "code") != "rollback-failed"))
                     {
                         decision.Action = "notice-failed";
                         decision.Code = JsonString(state, "code");
@@ -506,14 +533,6 @@ public static class LauncherCore
 
         if (File.Exists(lockPath))
         {
-            if (IsInstallLockActive(lockPath))
-            {
-                decision.Action = "install-in-progress";
-                decision.Code = "install-locked";
-                decision.Message = "更新助手正在安装新版本，请稍候；不要重复启动应用。";
-                decision.Path = lockPath;
-                return decision;
-            }
             decision.Action = "clean-stale-lock";
             decision.Code = "stale-install-lock";
             decision.Message = "发现过期的安装锁，已清理。";
@@ -562,7 +581,13 @@ public static class LauncherCore
 
     private static string SafeRead(string path)
     {
-        try { return File.ReadAllText(path, Encoding.UTF8); }
+        try
+        {
+            using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                                      FileShare.ReadWrite | FileShare.Delete))
+            using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                return reader.ReadToEnd();
+        }
         catch (Exception) { return ""; }
     }
 

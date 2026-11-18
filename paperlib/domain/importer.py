@@ -255,6 +255,10 @@ class Importer:
         附件摊平放在 data/article/attachments/ 一层里，<文献id>- 前缀既是归属标记，
         也避免不同文献的同名 SI 互相覆盖。on_renamed(paperId, old, new) 用于同步抽取文本。
         """
+        with self.db.paper_writes():
+            return self._tidy_attachment_names(on_renamed)
+
+    def _tidy_attachment_names(self, on_renamed):
         root = Path(str(self.db.attachments_dir))
         results = []
         files = _listdir(root)
@@ -269,9 +273,8 @@ class Importer:
                     taken.discard(name)
         repaired = 0
         for paper in self.db.list_papers():
-            attachments = paper.get("attachments") if isinstance(paper.get("attachments"), list) else []
-            if not attachments:
-                continue
+            paper_id = paper["id"]
+            attachments = [dict(att) for att in (paper.get("attachments") or [])]
             for index, att in enumerate(attachments):
                 old_name = str(att.get("file") or "")
                 repaired_note = ""
@@ -285,7 +288,7 @@ class Importer:
                     repaired_note = "记录与文件对不上，已按 id 前缀认领：" + found
                     att["file"] = found
                     old_name = found
-                    self.db.touch()
+                    self.db.patch_paper(paper_id, {"attachments": [dict(a) for a in attachments]})
                     repaired += 1
                 nxt = next_attachment_name(paper, att, index, taken)
                 if nxt == old_name:
@@ -300,10 +303,14 @@ class Importer:
                     results.append({"old": old_name, "next": nxt, "changed": False,
                                     "paperId": paper.get("id"), "reason": "重命名失败：" + str(exc)})
                     continue
+                att["file"] = nxt
+                try:
+                    self.db.patch_paper(paper_id, {"attachments": [dict(a) for a in attachments]})
+                except Exception:
+                    os.rename(str(root / nxt), str(root / old_name))
+                    raise
                 taken.discard(old_name)
                 taken.add(nxt)
-                att["file"] = nxt
-                self.db.touch()
                 if callable(on_renamed):
                     try:
                         on_renamed(paper.get("id"), old_name, nxt)
@@ -376,8 +383,6 @@ class Importer:
                 else:
                     skipped += 1
             else:
-                self.repository.insert_normalized(norm, {"touch": False})
+                self.repository.insert_normalized(norm)
                 added += 1
-        if added or updated:
-            self.db.touch()
         return {"added": added, "updated": updated, "skipped": skipped, "total": len(incoming)}

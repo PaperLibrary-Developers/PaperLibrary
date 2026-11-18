@@ -90,21 +90,23 @@ PaperLibraryUpdater.exe install         --program-root DIR --staging DIR [--old-
 PaperLibraryUpdater.exe backup-data --program-root DIR --new-version X [--keep N]
 ```
 
-- 备份清单（固定）：`library.db`、`library.db-wal`、`library.db-shm`、
-  `prefs.json`、`settings.json`、`sources.json`；存在的文件逐个复制并校验 SHA-256，
+- 备份清单：`library.db`、`library.db-wal`、`library.db-shm`、`library.db-journal`、
+  `prefs.json`、`settings.json`、`sources.json`、`websearch.json`。存在的文件逐个复制并校验 SHA-256，
   不存在的可选文件记入 `missing`；
 - **`library.db` 缺失 → `library-db-missing`，中止安装**（不能保证可恢复）；
   `data/` 缺失 → `data-missing`；备份项是目录/复制校验失败 → `data-backup-failed`；
 - 先写临时目录 `update-<version>.tmp-<random>`，完成并写 `data-backup.json` 后
   一次性改名；失败清理临时目录，不留半份备份；
-- 幂等：已有同版本备份且与当前源文件哈希完全一致 → `idempotent=true`，不重写；
-  源数据已变化 → `data-backup-exists`，不覆盖旧备份（由用户/后续流程决策）；
+- 独立执行 `backup-data` 时，同版本、同内容的备份返回 `idempotent=true`，内容变化返回
+  `data-backup-exists`。重试安装会先完成并校验一份新快照，再替换该目标版本的旧快照，
+  保留用户在两次尝试之间的编辑。
 - 保留策略：默认**只保留最近 1 份** `update-*`（产品确认，2026-11-16，减少磁盘占用），
   当前新备份始终保留（`--keep 1..50` 可调）；
 - `data-backup.json` 字段：schema/product/newVersion/programRoot/backupDir/files/bytes/
   databaseIncluded/missing/items[{name,bytes,sha256}]/createdAt；
-- 恢复方式：把备份目录内文件复制回 `data/`（P2-16 在回滚时自动执行），文件哈希与
-  `data-backup.json` 一致；不删除旧数据，更新失败可回到旧版本。
+- 已尝试启动新版时，先确认新进程已结束，再校验整份快照，恢复清单上的文件。
+  清单标记缺失的文件在恢复时移除，包括新版新建的 SQLite 边车文件。
+  快照之外的文件仍保留在 `data/`。
 
 ## 5. 完整安装时序（P2-13）
 
@@ -118,14 +120,16 @@ PaperLibraryUpdater.exe backup-data --program-root DIR --new-version X [--keep N
    超时**只中止并写失败状态，不强制结束残留进程**，程序文件未动；
 3. 数据备份（P2-15）→ 程序文件备份（P2-14）→ staging 替换（P2-14）→ 校验
    `PaperLibrary.exe`/`version.json`/文件数；
-4. 启动新 `PaperLibrary.exe`；
+4. 记录 `launch` 阶段并启动新 `PaperLibrary.exe`，随后记录其 PID。验证期间，启动器
+   等待提交结果，后端仅处理健康、版本和关停请求。
 5. 健康检查（口径 B）：`/api/health` HTTP 200 + `ok=true` + `app=="literature-vault"`，
    再 `GET /api/version` 要求 `product=="PaperLibrary"` 且 `version==目标版本`；
    单次请求 **2 秒**、间隔 **1 秒**、总超时 **60 秒**、**连续成功 2 次**；
-6. 成功：写 `state.json`（phase=success）、清理 `apply.json`、保留备份、释放安装锁；
-7. 失败：先 `POST /api/shutdown`，**5 秒**后仍未退出则强制结束**本次新启动的**
-   启动器/Python 进程树；恢复程序备份 → 启动旧版本 → 写 `state.json`（phase=failed，
-   含 code/error/restored/oldLaunchedPid）；恢复失败保留 journal/备份；`apply.json` 保留供重试。
+6. 成功：写 `state.json`，再提交 `journal.json` 的 `success` 阶段，放行读写并打开界面。
+   清理 `apply.json`，保留备份并释放安装锁。
+7. 失败：关停本次启动的新版进程并等待端口释放，恢复数据与程序备份。写入终态并释放安装锁后，
+   重新启动旧版本。恢复失败保留未完成的 journal 和备份，供再次恢复。
+   `apply.json` 保留供重试。
 
 整体安装预算 **5 分钟**：未开始替换 → 中止；已开始替换 → 回滚。测试可用
 `--timeout-* / --health-*` 覆盖（生产启动器不传，使用上述固定默认）。
@@ -156,6 +160,7 @@ prepare → backup → replace → verify → launch → success
 | launcherPid | 启动器 PID（0 表示未传） |
 | startedAt / updatedAt | UTC ISO8601 |
 | launchedPid | 启动的新应用 PID（launch 阶段起） |
+| port | 安装验证使用的服务端口，旧 journal 缺省为 4321 |
 | code / error | 失败码与可读原因（成功为空） |
 | log | helper 日志路径 |
 
@@ -167,7 +172,7 @@ prepare → backup → replace → verify → launch → success
 launchedPid/oldLaunchedPid/restored/recovered/healthSeconds/healthChecks/startedAt/finishedAt/
 code/error/log`。
 
-`recovered=true` 表示该状态由 `recover` 恢复写入；失败时 `apply.json` 保留供重试。
+`recovered=true` 表示中断恢复或安装回滚已完成。失败时 `apply.json` 保留供重试。
 
 ### install.lock
 
@@ -184,11 +189,11 @@ code/error/log`。
 PaperLibraryUpdater.exe recover --program-root DIR [--log FILE]
 ```
 
-- 无 journal 或 journal phase=success → no-op（`recovered=false`）；
+- 无 journal 或 journal 已到达终态 → no-op（`recovered=false`）；
 - 锁仍有效 → `install-locked`，拒绝并发恢复；
-- journal phase=prepare/backup：有备份则恢复程序文件，无备份则确认旧程序仍在；
-- phase=replace/verify/launch：停止 journal 记录的 `launchedPid`（若存活），恢复程序备份，
-  启动旧版本；
+- journal phase=prepare：确认旧程序仍在。phase=backup：移回已备份的程序文件。
+- phase=replace/verify：恢复程序备份。phase=launch：停止新版进程，先恢复数据，再恢复程序。
+  全部恢复成功后启动旧版本。
 - 恢复后写 `state.json`：`phase=failed, recovered=true, code="recovered"`；
   journal 置 `failed`；清理过期锁；保留 `apply.json`；
 - 恢复失败：`phase=failed, recovered=false, code="recovery-failed"`，保留 journal/备份，

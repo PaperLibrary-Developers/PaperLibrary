@@ -5,27 +5,35 @@ query 用它粗筛，启动时全量 rebuild 一次。
 """
 from __future__ import annotations
 
+from threading import RLock
+
 from paperlib.domain.search import SearchIndex
 
 
 class SearchIndexHolder:
     def __init__(self):
+        self._lock = RLock()
         self.current = SearchIndex()
 
     def rebuild(self, papers):
-        self.current = SearchIndex()
-        for paper in papers:
-            self.current.set(paper)
-        return self.current
+        with self._lock:
+            index = SearchIndex()
+            for paper in papers:
+                index.set(paper)
+            self.current = index
+            return index
 
     def set(self, paper):
-        self.current.set(paper)
+        with self._lock:
+            self.current.set(paper)
 
     def remove(self, paper_id):
-        self.current.remove(paper_id)
+        with self._lock:
+            self.current.remove(paper_id)
 
     def search(self, query):
-        return self.current.search(query)
+        with self._lock:
+            return self.current.search(query)
 
 
 def create_search_index():

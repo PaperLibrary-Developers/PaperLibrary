@@ -33,7 +33,8 @@ class Library:
         self.reindex()
 
     def reindex(self):
-        self.index.rebuild(self.db.list_papers())
+        with self.db.paper_writes():
+            self.index.rebuild(self.db.list_papers())
 
     # 卡片读写
     def all(self):

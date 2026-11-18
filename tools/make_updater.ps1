@@ -81,7 +81,7 @@ internal static class HelperInfo
 $versionCs = Join-Path ([System.IO.Path]::GetTempPath()) ("paperlibrary-helper-version-" + [guid]::NewGuid().ToString("N") + ".cs")
 try {
   [System.IO.File]::WriteAllText($versionCs, $versionSource, (New-Object System.Text.UTF8Encoding($true)))
-  & $csc /nologo /target:exe /optimize+ /out:$exe /r:System.dll $source $versionCs
+  & $csc /nologo /target:exe /optimize+ /out:$exe /r:System.dll /r:System.Web.Extensions.dll $source $versionCs
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
     throw "helper compile failed (csc exit code $LASTEXITCODE)"
   }

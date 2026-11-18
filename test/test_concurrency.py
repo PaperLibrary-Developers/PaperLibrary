@@ -12,12 +12,16 @@ import http.client
 import json
 import os
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -26,6 +30,7 @@ os.environ["PYTHONUTF8"] = "1"
 
 from paperlib.app import build  # noqa: E402
 from paperlib.config import Config  # noqa: E402
+from paperlib.domain import repository as card_repository  # noqa: E402
 from paperlib.http.server import HttpServer  # noqa: E402
 
 
@@ -97,6 +102,55 @@ class ConcurrencyTest(unittest.TestCase):
         with self.store.repo._lock:
             integrity = self.store.repo.conn.execute("PRAGMA integrity_check").fetchone()[0]
         self.assertEqual(integrity, "ok")
+
+    def test_parallel_patches_keep_both_fields(self):
+        card = self.services.library.create({"title": "Concurrent patch fixture"})
+        path = "/api/papers/" + card["id"]
+        first_merging = threading.Event()
+        release_first = threading.Event()
+        second_merging = threading.Event()
+        normalize = card_repository.normalize_paper
+
+        def pause_first(fields, current):
+            if "rating" in fields:
+                first_merging.set()
+                if not release_first.wait(5):
+                    raise TimeoutError("first patch did not resume")
+            else:
+                second_merging.set()
+            return normalize(fields, current)
+
+        with patch.object(card_repository, "normalize_paper", pause_first):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(self.call, "PATCH", path, {"rating": 4})
+                try:
+                    self.assertTrue(first_merging.wait(5))
+                    second = pool.submit(self.call, "PATCH", path, {"status": "read"})
+                    self.assertFalse(second_merging.wait(0.2), "second patch read an uncommitted snapshot")
+                finally:
+                    release_first.set()
+                self.assertEqual(first.result()[0], 200)
+                self.assertEqual(second.result()[0], 200)
+
+        saved = self.store.repo.get_paper(card["id"])
+        self.assertEqual((saved["rating"], saved["status"]), (4, "read"))
+
+    def test_failed_update_is_rolled_back_before_later_commit(self):
+        card = self.services.library.create({"title": "Original title", "tags": ["original"]})
+        card_id = card["id"]
+        with patch.object(self.store.repo, "_save_attachments",
+                          side_effect=sqlite3.OperationalError("simulated write failure")):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.services.library.update(card_id, {"title": "Changed title", "tags": ["changed"]})
+
+        self.assertEqual(self.services.library.get(card_id), card)
+        self.assertNotIn(card_id, [hit["id"] for hit in self.services.library.index.search("changed")])
+        self.store.repo.meta_set("unrelated", "committed")
+        with closing(sqlite3.connect(self.store.data_file())) as reader:
+            self.assertEqual(reader.execute("SELECT title FROM papers WHERE id = ?", (card_id,)).fetchone(),
+                             ("Original title",))
+            self.assertEqual(reader.execute("SELECT tag FROM paper_tags WHERE paper_id = ?", (card_id,)).fetchall(),
+                             [("original",)])
 
     def test_range_out_of_bounds_416(self):
         status, _h, body = self.call("POST", "/api/papers",

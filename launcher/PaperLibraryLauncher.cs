@@ -176,19 +176,35 @@ class Launcher
         try
         {
             SetLoading("正在启动文献库服务…");
-            if (!HandleStartupDecision())
+            int processId = Process.GetCurrentProcess().Id;
+            bool updateProbe = await Task.Run(delegate { return WaitForUpdateProbe(processId); });
+            if (closing) return;
+            if (!updateProbe && !HandleStartupDecision())
             {
                 if (!closing) form.Close();
                 return;
             }
             bool ok = false;
-            await Task.Run(delegate { ok = EnsureServer(); });
+            await Task.Run(delegate { ok = EnsureServer(updateProbe ? processId : 0); });
             if (closing) return;
             if (!ok)
             {
-                MessageBox.Show(failure, Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (!updateProbe)
+                    MessageBox.Show(failure, Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 form.Close();
                 return;
+            }
+
+            if (updateProbe)
+            {
+                SetLoading("正在验证更新…");
+                bool committed = await Task.Run(delegate { return WaitForUpdateCommit(processId); });
+                if (closing) return;
+                if (!committed)
+                {
+                    form.Close();
+                    return;
+                }
             }
 
             SetLoading("正在打开文献库…");
@@ -228,14 +244,40 @@ class Launcher
         }
     }
 
-    static bool EnsureServer()
+    static bool WaitForUpdateProbe(int processId)
+    {
+        Stopwatch wait = Stopwatch.StartNew();
+        while (!closing)
+        {
+            string state = LauncherCore.UpdateProbeState(BaseDir, processId);
+            if (state == "validating") return true;
+            if (state != "starting" || wait.ElapsedMilliseconds >= 5000) return false;
+            Thread.Sleep(100);
+        }
+        return false;
+    }
+
+    static bool WaitForUpdateCommit(int processId)
+    {
+        while (!closing)
+        {
+            string state = LauncherCore.UpdateProbeState(BaseDir, processId);
+            if (state == "committed") return true;
+            if (state != "validating") return false;
+            if (server != null && server.HasExited) return false;
+            Thread.Sleep(150);
+        }
+        return false;
+    }
+
+    static bool EnsureServer(int probePid)
     {
         if (closing) return false;
         try
         {
             if (PortOpen())
             {
-                if (WaitForOurs(6))
+                if (probePid == 0 && WaitForOurs(6))
                 {
                     startedServer = false;
                     Log("attached to an already running service");
@@ -245,7 +287,7 @@ class Launcher
                     + "请关闭占用该端口的程序后再试，或释放端口后重新双击启动。";
                 return false;
             }
-            if (!StartServer()) return false;
+            if (!StartServer(probePid)) return false;
             if (closing)
             {
                 StopServer();
@@ -261,18 +303,23 @@ class Launcher
         }
     }
 
-    static bool StartServer()
+    static bool StartServer(int probePid)
     {
         string python = Path.Combine(BaseDir, "runtime", "portable", "python.exe");
         if (!File.Exists(python)) python = Path.Combine(BaseDir, "runtime", "portable", "pythonw.exe");
         if (!File.Exists(python)) python = "python.exe";
 
-        ProcessStartInfo info = new ProcessStartInfo(python, "-m paperlib --port " + Port + " --no-open");
+        string args = "-m paperlib --port " + Port + " --no-open";
+        if (probePid != 0)
+            args += " --data-dir " + LauncherCore.QuoteArgument(Path.Combine(BaseDir, "data"));
+        ProcessStartInfo info = new ProcessStartInfo(python, args);
         info.WorkingDirectory = BaseDir;
         info.UseShellExecute = false;
         info.CreateNoWindow = true;
         info.RedirectStandardOutput = true;
         info.RedirectStandardError = true;
+        if (probePid != 0)
+            info.EnvironmentVariables["PAPERLIB_UPDATE_PROBE_PID"] = probePid.ToString();
 
         try
         {
@@ -551,16 +598,16 @@ class Launcher
         string state = "";
         try { if (File.Exists(statePath)) state = File.ReadAllText(statePath, Encoding.UTF8); }
         catch (Exception) { }
-        if (LauncherCore.JsonBool(state, "recovered", false))
-        {
-            MessageBox.Show("上次更新未完成，已恢复旧版本并重新启动。",
-                Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return false;
-        }
         if (exitCode != 0)
         {
             MessageBox.Show("恢复上次更新失败（" + exitCode + "）。\r\n日志：" + recoverLog,
                 Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+        if (LauncherCore.JsonBool(state, "recovered", false))
+        {
+            MessageBox.Show("上次更新未完成，已恢复旧版本并重新启动。",
+                Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return false;
         }
         if (!TryReacquireMutex())

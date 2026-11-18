@@ -22,7 +22,7 @@ from paperlib.http.server import HttpServer, probe_port
 from paperlib.http.static import StaticHandler
 from paperlib.routes import ROUTES
 from paperlib.services import create_services
-from paperlib.util import ensure_dir, write_json_atomic
+from paperlib.util import ensure_dir, read_json, write_json_atomic
 from paperlib.version import VersionError, load as load_version, ui_label
 
 
@@ -104,16 +104,16 @@ def seed_once_if_needed(config, store):
         print("[init] 无法写入播种标记：%s" % exc)
 
 
-def build(config):
+def build(config, *, update_probe=False):
     """装配（可被测试直接调用）：返回 (services, router, static, http_server)。"""
     store = Store(config.data_dir)
-    store.load()
+    store.load(migrate_legacy_dirs=not update_probe)
     # 旧库迁移（Sci-lib data/library.json、PaperLibrary data/papers.db）——B8 实现，缺失时跳过
     # 只在「默认 data/ 目录」或显式 --migrate 时执行，避免测试临时目录被真实旧库灌入 600MB
     auto_migrate = config.migrate
     if auto_migrate is None:
         auto_migrate = config.data_dir.resolve() == (config.root / "data").resolve()
-    if auto_migrate and os.environ.get("PAPERLIB_SKIP_MIGRATE") != "1":
+    if not update_probe and auto_migrate and os.environ.get("PAPERLIB_SKIP_MIGRATE") != "1":
         try:
             try:
                 from paperlib.migrate import migrate_from_legacy
@@ -127,7 +127,8 @@ def build(config):
             pass
         except Exception as exc:  # noqa: BLE001
             print("[migrate] 迁移失败（继续启动）：" + str(exc))
-    seed_once_if_needed(config, store)
+    if not update_probe:
+        seed_once_if_needed(config, store)
     services = create_services(config, store)
     static_handler = StaticHandler(config.root, config.public_dir, config.shared_dir, config.vendor_dir)
     router = Router(ROUTES, services)
@@ -143,21 +144,48 @@ def main(argv=None, root=None):
         return stop_running(config)
 
     config.started_at = time.time()
-    services, router, static_handler, store = build(config)
+    updates = config.data_dir / "updates"
+    journal_path = updates / "journal.json"
+    journal = read_json(journal_path, {}) if journal_path.exists() else {}
+    phase = journal.get("phase") if isinstance(journal, dict) else None
+    probe_pid = os.environ.get("PAPERLIB_UPDATE_PROBE_PID")
+    if probe_pid:
+        if (phase != "launch" or str(journal.get("launchedPid")) != probe_pid
+                or not (updates / "install.lock").is_file()):
+            print("更新验证窗口已关闭。", file=sys.stderr)
+            return 1
+    elif ((journal_path.exists() and phase not in ("success", "failed"))
+          or ((updates / "install.lock").is_file() and phase != "success")):
+        print("有更新正在安装或等待恢复，暂时不能打开文献库。", file=sys.stderr)
+        return 1
+
+    update_committed = not probe_pid
+
+    def update_pending():
+        nonlocal update_committed
+        if not update_committed:
+            current = read_json(journal_path, {})
+            if (isinstance(current, dict) and current.get("phase") == "success"
+                    and str(current.get("launchedPid")) == probe_pid):
+                update_committed = True
+        return not update_committed
+
     url = "http://%s:%d/" % ("127.0.0.1" if config.host == "0.0.0.0" else config.host, config.port)
     state = probe_port(config.host, config.port)
-    if state == "ours":
+    if state == "ours" and not probe_pid:
         print("")
         print("  这个端口上已经有一个文献库在运行了：%s" % url)
         print("  直接为你打开浏览器，不需要重复启动。")
         if not config.no_open:
             open_browser(url, config.data_dir / "logs")
         return 0
-    if state == "busy":
+    if state != "free":
         print("  [x] 端口 %d 被其它程序占用了，服务无法启动。" % config.port, file=sys.stderr)
         return 1
 
-    server = HttpServer(router, static_handler, config.host, config.port, verbose=True)
+    services, router, static_handler, store = build(config, update_probe=bool(probe_pid))
+    server = HttpServer(router, static_handler, config.host, config.port, verbose=True,
+                        update_pending=update_pending if probe_pid else None)
     services.runtime.on_shutdown = server.shutdown
     # 在线监听：页面挂一条 SSE，全部关掉 idle_exit 秒后自动停机（0 = 关掉这个行为）
     services.runtime.presence = PresenceTracker(
@@ -194,7 +222,7 @@ def main(argv=None, root=None):
 
     server.start_background()
     # 监控线程放在服务就绪之后：启动这几秒不算「空闲」
-    presence_on = services.runtime.presence.start()
+    presence_on = not probe_pid and services.runtime.presence.start()
     config.boot_ms = int((time.time() - config.started_at) * 1000)
     services.runtime.timing["bootMs"] = config.boot_ms
     print("")
@@ -216,10 +244,15 @@ def main(argv=None, root=None):
         print("  空闲自动停机：已关闭（--idle-exit 0）。")
     print("  也可以在网页「设置 → 服务与数据」里点「停止服务」。")
     print("")
-    if not config.no_open:
+    if not config.no_open and not probe_pid:
         open_browser(url, config.data_dir / "logs")
     try:
+        start_presence_after_update = bool(probe_pid)
         while server.thread.is_alive():
+            if start_presence_after_update and not update_pending():
+                services.runtime.presence.touch()
+                services.runtime.presence.start()
+                start_presence_after_update = False
             time.sleep(0.3)
     except KeyboardInterrupt:
         on_signal(None, None)

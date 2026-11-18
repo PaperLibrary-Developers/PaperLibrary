@@ -205,28 +205,45 @@ def attachments_upload(ctx):
     except OSError:
         taken = set()
     index = len(_paper_attachments(paper))
-    file_name = naming.next_attachment_name(paper, {"originalName": original_name}, index, taken)
-    abs_path = safe_path_join(att_dir, file_name)
-    if not abs_path:
-        return ctx.fail(400, "文件名不合法")
-    with open(abs_path, "wb") as fh:
-        fh.write(buf)
+    while True:
+        file_name = naming.next_attachment_name(paper, {"originalName": original_name}, index, taken)
+        abs_path = safe_path_join(att_dir, file_name)
+        if not abs_path:
+            return ctx.fail(400, "文件名不合法")
+        try:
+            output = open(abs_path, "xb")
+            break
+        except FileExistsError:
+            taken.add(file_name)
 
-    extraction = services.extract_attachment_text(abs_path, ext) or {}
-    if extraction.get("ok"):
-        fulltext.save_attachment_text(paper.get("id"), file_name, extraction.get("text") or "")
-    record = {
-        "file": file_name,
-        "originalName": original_name,
-        "size": len(buf),
-        "kind": extraction.get("kind") or "other",
-        "hasText": bool(extraction.get("ok")),
-        "textChars": len(str(extraction.get("text") or "")) if extraction.get("ok") else 0,
-        "addedAt": now_iso(),
-    }
-    updated = services.library.update(paper.get("id"), {
-        "attachments": _paper_attachments(paper) + [record],
-    }) or {}
+    paper_id = paper.get("id")
+    updated = None
+    try:
+        with output:
+            output.write(buf)
+        extraction = services.extract_attachment_text(abs_path, ext) or {}
+        if extraction.get("ok"):
+            fulltext.save_attachment_text(paper_id, file_name, extraction.get("text") or "")
+        record = {
+            "file": file_name,
+            "originalName": original_name,
+            "size": len(buf),
+            "kind": extraction.get("kind") or "other",
+            "hasText": bool(extraction.get("ok")),
+            "textChars": len(str(extraction.get("text") or "")) if extraction.get("ok") else 0,
+            "addedAt": now_iso(),
+        }
+        updated = services.library.update(
+            paper_id, lambda current: {"attachments": _paper_attachments(current) + [record]})
+    finally:
+        if updated is None:
+            fulltext.remove_attachment_text(paper_id, file_name)
+            try:
+                os.unlink(abs_path)
+            except OSError:
+                pass
+    if updated is None:
+        return ctx.fail(404, "找不到这条文献")
     extract = ({"ok": True, "chars": record["textChars"]} if extraction.get("ok")
                else {"ok": False, "error": extraction.get("error") or "未抽取"})
     ctx.json(201, {
@@ -243,7 +260,7 @@ def attachment_download(ctx):
         return None
     wanted = str((ctx.params or {}).get("file") or "")
     record = next((a for a in _paper_attachments(paper) if a.get("file") == wanted), None)
-    if not record:
+    if record is None:
         return ctx.fail(404, "找不到这个附件")
     abs_path = safe_path_join(ctx.services.db.attachments_dir, wanted)
     if not abs_path:
@@ -258,8 +275,14 @@ def attachment_remove(ctx):
     if not paper:
         return None
     wanted = str((ctx.params or {}).get("file") or "")
-    record = next((a for a in _paper_attachments(paper) if a.get("file") == wanted), None)
-    if not record:
+
+    def remove_attachment(current):
+        attachments = _paper_attachments(current)
+        remaining = [a for a in attachments if a.get("file") != wanted]
+        return {"attachments": remaining} if len(remaining) != len(attachments) else None
+
+    updated = services.library.update(paper.get("id"), remove_attachment)
+    if updated is None:
         return ctx.fail(404, "找不到这个附件")
     abs_path = safe_path_join(services.db.attachments_dir, wanted)
     if abs_path and os.path.isfile(abs_path):
@@ -268,9 +291,6 @@ def attachment_remove(ctx):
         except OSError:
             pass
     services.fulltext.remove_attachment_text(paper.get("id"), wanted)
-    updated = services.library.update(paper.get("id"), {
-        "attachments": [a for a in _paper_attachments(paper) if a.get("file") != wanted],
-    }) or {}
     ctx.json(200, {"ok": True, "attachments": updated.get("attachments") or []})
 
 

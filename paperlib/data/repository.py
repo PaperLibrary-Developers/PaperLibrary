@@ -36,10 +36,7 @@ class Repository:
     # ------------------------------------------------------------------ 基础
     def close(self):
         with self._lock:
-            try:
-                self.conn.commit()
-            finally:
-                self.conn.close()
+            self.conn.close()
 
     def meta_get(self, key, default=None):
         with self._lock:
@@ -49,13 +46,15 @@ class Repository:
         return row["value"]
 
     def meta_set(self, key, value):
-        with self._lock:
-            self.conn.execute(
-                "INSERT INTO meta(key, value) VALUES(?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (key, "" if value is None else str(value)),
-            )
-            self.conn.commit()
+        with self._lock, self.conn:
+            self._set_meta(key, value)
+
+    def _set_meta(self, key, value):
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, "" if value is None else str(value)),
+        )
 
     # ------------------------------------------------------------------ 论文
     def _assemble(self, row):
@@ -123,36 +122,47 @@ class Repository:
             return self._assemble(row) if row else None
 
     def save_paper(self, paper):
-        with self._lock:
-            data = dict(paper)
-            data.pop("attachments", None)
-            data.pop("chat", None)
-            self.conn.execute(
-                "INSERT INTO papers(id,title,year,venue,journal,type,status,rating,starred,folder,"
-                "arxiv_id,doi,pdf_file,added_at,updated_at,data) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(id) DO UPDATE SET title=excluded.title, year=excluded.year, "
-                "venue=excluded.venue, journal=excluded.journal, type=excluded.type, "
-                "status=excluded.status, rating=excluded.rating, starred=excluded.starred, "
-                "folder=excluded.folder, arxiv_id=excluded.arxiv_id, doi=excluded.doi, "
-                "pdf_file=excluded.pdf_file, added_at=excluded.added_at, "
-                "updated_at=excluded.updated_at, data=excluded.data",
-                (
-                    paper.get("id"), paper.get("title") or "", paper.get("year"),
-                    paper.get("venue") or "", paper.get("journal") or "",
-                    paper.get("type") or "journal", paper.get("status") or "unread",
-                    int(paper.get("rating") or 0), 1 if paper.get("starred") else 0,
-                    paper.get("folder") or "", paper.get("arxivId") or "",
-                    paper.get("doi") or "", paper.get("pdfFile") or "",
-                    paper.get("addedAt") or "", paper.get("updatedAt") or "",
-                    json.dumps(data, ensure_ascii=False),
-                ),
-            )
-            self._save_tags(paper.get("id"), paper.get("tags") or [])
-            self._save_attachments(paper.get("id"), paper.get("attachments") or [])
-            if "chat" in paper:
-                self.save_chat(paper.get("id"), paper.get("chat") or [])
-            self.conn.commit()
+        self.write_papers((paper,))
+
+    def write_papers(self, papers=(), removed=(), updated_at=None):
+        """Commit card records, related rows and library metadata together."""
+        with self._lock, self.conn:
+            for paper in papers:
+                self._save_paper(paper)
+            for paper_id in removed:
+                self._delete_paper(paper_id)
+            if updated_at is not None:
+                self._set_meta("updatedAt", updated_at)
+
+    def _save_paper(self, paper):
+        data = dict(paper)
+        data.pop("attachments", None)
+        data.pop("chat", None)
+        self.conn.execute(
+            "INSERT INTO papers(id,title,year,venue,journal,type,status,rating,starred,folder,"
+            "arxiv_id,doi,pdf_file,added_at,updated_at,data) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET title=excluded.title, year=excluded.year, "
+            "venue=excluded.venue, journal=excluded.journal, type=excluded.type, "
+            "status=excluded.status, rating=excluded.rating, starred=excluded.starred, "
+            "folder=excluded.folder, arxiv_id=excluded.arxiv_id, doi=excluded.doi, "
+            "pdf_file=excluded.pdf_file, added_at=excluded.added_at, "
+            "updated_at=excluded.updated_at, data=excluded.data",
+            (
+                paper.get("id"), paper.get("title") or "", paper.get("year"),
+                paper.get("venue") or "", paper.get("journal") or "",
+                paper.get("type") or "journal", paper.get("status") or "unread",
+                int(paper.get("rating") or 0), 1 if paper.get("starred") else 0,
+                paper.get("folder") or "", paper.get("arxivId") or "",
+                paper.get("doi") or "", paper.get("pdfFile") or "",
+                paper.get("addedAt") or "", paper.get("updatedAt") or "",
+                json.dumps(data, ensure_ascii=False),
+            ),
+        )
+        self._save_tags(paper.get("id"), paper.get("tags") or [])
+        self._save_attachments(paper.get("id"), paper.get("attachments") or [])
+        if "chat" in paper:
+            self._save_chat(paper.get("id"), paper.get("chat") or [])
 
     def _save_tags(self, paper_id, tags):
         self.conn.execute("DELETE FROM paper_tags WHERE paper_id = ?", (paper_id,))
@@ -178,37 +188,41 @@ class Repository:
             )
 
     def save_chat(self, paper_id, messages):
-        with self._lock:
-            self.conn.execute("DELETE FROM chat_messages WHERE paper_id = ?", (paper_id,))
-            for msg in messages:
-                self.conn.execute(
-                    "INSERT INTO chat_messages(paper_id,role,content,at,model,sources,images,usage) "
-                    "VALUES(?,?,?,?,?,?,?,?)",
-                    (paper_id, msg.get("role") or "user", msg.get("content") or "",
-                     msg.get("at") or "", msg.get("model") or "",
-                     json.dumps(msg.get("sources") or [], ensure_ascii=False),
-                     int(msg.get("images") or 0),
-                     json.dumps(msg.get("usage"), ensure_ascii=False) if msg.get("usage") else ""),
-                )
-            self.conn.commit()
+        with self._lock, self.conn:
+            self._save_chat(paper_id, messages)
+
+    def _save_chat(self, paper_id, messages):
+        self.conn.execute("DELETE FROM chat_messages WHERE paper_id = ?", (paper_id,))
+        for msg in messages:
+            self.conn.execute(
+                "INSERT INTO chat_messages(paper_id,role,content,at,model,sources,images,usage) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (paper_id, msg.get("role") or "user", msg.get("content") or "",
+                 msg.get("at") or "", msg.get("model") or "",
+                 json.dumps(msg.get("sources") or [], ensure_ascii=False),
+                 int(msg.get("images") or 0),
+                 json.dumps(msg.get("usage"), ensure_ascii=False) if msg.get("usage") else ""),
+            )
 
     def delete_paper(self, paper_id):
-        with self._lock:
-            self.conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
-            self.conn.execute("DELETE FROM paper_tags WHERE paper_id = ?", (paper_id,))
-            self.conn.execute("DELETE FROM attachments WHERE paper_id = ?", (paper_id,))
-            self.conn.execute("DELETE FROM chat_messages WHERE paper_id = ?", (paper_id,))
-            self.conn.execute("DELETE FROM figures WHERE paper_id = ?", (paper_id,))
-            self.conn.execute("DELETE FROM analysis WHERE paper_id = ?", (paper_id,))
-            self.conn.execute("DELETE FROM paper_text WHERE paper_id = ?", (paper_id,))
-            self.conn.commit()
+        self.write_papers(removed=(paper_id,))
+
+    def _delete_paper(self, paper_id):
+        self.conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
+        self.conn.execute("DELETE FROM paper_tags WHERE paper_id = ?", (paper_id,))
+        self.conn.execute("DELETE FROM attachments WHERE paper_id = ?", (paper_id,))
+        self.conn.execute("DELETE FROM chat_messages WHERE paper_id = ?", (paper_id,))
+        self.conn.execute("DELETE FROM figures WHERE paper_id = ?", (paper_id,))
+        self.conn.execute("DELETE FROM analysis WHERE paper_id = ?", (paper_id,))
+        self.conn.execute("DELETE FROM paper_text WHERE paper_id = ?", (paper_id,))
 
     def count_papers(self):
         with self._lock:
             return int(self.conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0])
 
     def updated_at(self):
-        row = self.conn.execute("SELECT MAX(updated_at) AS t FROM papers").fetchone()
+        with self._lock:
+            row = self.conn.execute("SELECT MAX(updated_at) AS t FROM papers").fetchone()
         return (row["t"] if row and row["t"] else "") or now_iso()
 
     # ------------------------------------------------------------------ 文件夹（库内分类）
@@ -235,27 +249,25 @@ class Repository:
         return {r["folder"] or "": int(r["n"]) for r in rows}
 
     def save_folder(self, path, name, parent, sort=0):
-        with self._lock:
+        with self._lock, self.conn:
             self.conn.execute(
                 "INSERT INTO folders(path, name, parent, sort, created_at) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(path) DO UPDATE SET name = excluded.name, parent = excluded.parent, "
                 "sort = excluded.sort",
                 (path, name, parent, int(sort), now_iso()))
-            self.conn.commit()
 
     def delete_folder_rows(self, prefix):
         """删掉 path == prefix 及其所有子孙（只删文件夹行，不动文献）。"""
-        with self._lock:
+        with self._lock, self.conn:
             self.conn.execute("DELETE FROM folders WHERE path = ? OR path LIKE ?",
                               (prefix, prefix + "/%"))
-            self.conn.commit()
 
     def rename_folder_prefix(self, old, new):
         """把 old 及其子树整体改名成 new：文件夹行与 papers.folder 同步迁移。
 
         返回受影响的文献条数。调用方需先校验 new 未被占用。
         """
-        with self._lock:
+        with self._lock, self.conn:
             rows = self.conn.execute(
                 "SELECT path, name, parent FROM folders WHERE path = ? OR path LIKE ?",
                 (old, old + "/%")).fetchall()
@@ -278,17 +290,15 @@ class Repository:
                 "WHERE folder = ? OR folder LIKE ?",
                 (new, len(old) + 1, old, old + "/%"))
             affected = cur.rowcount or 0
-            self.conn.commit()
         return affected
 
     def move_folder_papers(self, prefix, dest):
         """把 prefix 子树里所有文献挪到 dest，返回条数。"""
-        with self._lock:
+        with self._lock, self.conn:
             cur = self.conn.execute(
                 "UPDATE papers SET folder = ? WHERE folder = ? OR folder LIKE ?",
                 (dest or "", prefix, prefix + "/%"))
             count = cur.rowcount or 0
-            self.conn.commit()
         return count
 
     def set_paper_folders(self, ids, path):
@@ -296,12 +306,11 @@ class Repository:
         ids = [str(i) for i in (ids or []) if str(i)]
         if not ids:
             return 0
-        with self._lock:
+        with self._lock, self.conn:
             marks = ",".join("?" * len(ids))
             cur = self.conn.execute("UPDATE papers SET folder = ? WHERE id IN (%s)" % marks,
                                     tuple([path or ""] + ids))
             count = cur.rowcount or 0
-            self.conn.commit()
         return count
 
     def papers_in_folder(self, prefix):
@@ -319,19 +328,17 @@ class Repository:
 
     def set_text(self, key, text, updated_at=None):
         text = str(text or "")
-        with self._lock:
+        with self._lock, self.conn:
             self.conn.execute(
                 "INSERT INTO paper_text(paper_id,text,chars,updated_at) VALUES(?,?,?,?) "
                 "ON CONFLICT(paper_id) DO UPDATE SET text=excluded.text, chars=excluded.chars, "
                 "updated_at=excluded.updated_at",
                 (key, text, len(text), updated_at or now_iso()),
             )
-            self.conn.commit()
 
     def delete_text(self, key):
-        with self._lock:
+        with self._lock, self.conn:
             self.conn.execute("DELETE FROM paper_text WHERE paper_id = ?", (key,))
-            self.conn.commit()
 
     def text_chars(self, key):
         with self._lock:
@@ -357,7 +364,7 @@ class Repository:
             return int(self.conn.execute("SELECT COUNT(*) FROM figures").fetchone()[0])
 
     def insert_figures(self, paper_id, figures, replace=True):
-        with self._lock:
+        with self._lock, self.conn:
             if replace:
                 self.conn.execute("DELETE FROM figures WHERE paper_id = ?", (paper_id,))
             for fig in figures:
@@ -369,18 +376,16 @@ class Repository:
                      fig.get("aiDescription") or "", fig.get("figureType") or "",
                      fig.get("aiConclusion") or "", fig.get("createdAt") or now_iso()),
                 )
-            self.conn.commit()
 
     def delete_figure(self, figure_id):
         """删一条图表记录，返回被删的行（找不到返回 None）。"""
-        with self._lock:
+        with self._lock, self.conn:
             row = self.conn.execute(
                 "SELECT * FROM figures WHERE id = ?", (figure_id,)).fetchone()
             if row is None:
                 return None
             deleted = dict(row)
             self.conn.execute("DELETE FROM figures WHERE id = ?", (figure_id,))
-            self.conn.commit()
         return deleted
 
     def figures_for_export(self):
@@ -394,14 +399,13 @@ class Repository:
         return _loads(row["payload"], None) if row else None
 
     def save_analysis(self, paper_id, kind, payload):
-        with self._lock:
+        with self._lock, self.conn:
             self.conn.execute(
                 "INSERT INTO analysis(paper_id,kind,payload,updated_at) VALUES(?,?,?,?) "
                 "ON CONFLICT(paper_id,kind) DO UPDATE SET payload=excluded.payload, "
                 "updated_at=excluded.updated_at",
                 (paper_id, kind, json.dumps(payload, ensure_ascii=False), now_iso()),
             )
-            self.conn.commit()
 
     def list_analysis(self, kind=None, limit=100):
         with self._lock:
@@ -418,12 +422,11 @@ class Repository:
 
     # ------------------------------------------------------------------ 旧 id / 任务
     def set_legacy_id(self, legacy_id, paper_id, source="paperlibrary"):
-        with self._lock:
+        with self._lock, self.conn:
             self.conn.execute(
                 "INSERT OR REPLACE INTO legacy_ids(legacy_id,paper_id,source) VALUES(?,?,?)",
                 (str(legacy_id), paper_id, source),
             )
-            self.conn.commit()
 
     def get_legacy_id(self, legacy_id):
         with self._lock:
@@ -432,7 +435,7 @@ class Repository:
         return row["paper_id"] if row else None
 
     def save_job(self, job_id, kind, status, payload=None):
-        with self._lock:
+        with self._lock, self.conn:
             self.conn.execute(
                 "INSERT INTO jobs(id,kind,status,payload,created_at,updated_at) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET status=excluded.status, payload=excluded.payload, "
@@ -440,7 +443,6 @@ class Repository:
                 (job_id, kind, status, json.dumps(payload or {}, ensure_ascii=False),
                  now_iso(), now_iso()),
             )
-            self.conn.commit()
 
     def get_job(self, job_id):
         with self._lock:

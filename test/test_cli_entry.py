@@ -7,12 +7,18 @@
 """
 from __future__ import annotations
 
+import http.client
+import json
 import os
 import socket
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
+
+from paperlib.util import write_json_atomic
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -57,6 +63,57 @@ class CliEntryTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("rc= 0", proc.stdout)          # 没在跑也算成功（幂等）
         self.assertIn("app_loaded= False", proc.stdout)
+
+    def test_update_probe_blocks_ui_and_writes_until_commit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data = Path(temp)
+            update_dir = data / "updates"
+            journal = update_dir / "journal.json"
+            launcher_pid = os.getpid()
+            write_json_atomic(journal, {"phase": "launch", "launchedPid": launcher_pid})
+            write_json_atomic(update_dir / "install.lock", {"pid": launcher_pid})
+            port = free_port()
+            command = [sys.executable, "-B", "-m", "paperlib", "--no-open", "--idle-exit", "0",
+                       "--host", "127.0.0.1", "--port", str(port), "--data-dir", str(data)]
+            env = dict(os.environ, PAPERLIB_UPDATE_PROBE_PID=str(launcher_pid))
+
+            def request(method, path, body=None):
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+                try:
+                    headers = {"Content-Type": "application/json"} if body is not None else {}
+                    conn.request(method, path, body=body, headers=headers)
+                    response = conn.getresponse()
+                    return response.status, response.read()
+                finally:
+                    conn.close()
+
+            with subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL) as proc:
+                try:
+                    deadline = time.monotonic() + 10
+                    while time.monotonic() < deadline and proc.poll() is None:
+                        try:
+                            self.assertEqual(request("GET", "/api/health")[0], 200)
+                            break
+                        except OSError:
+                            time.sleep(0.05)
+                    else:
+                        self.fail("update probe service did not start")
+
+                    self.assertEqual(request("GET", "/api/version")[0], 200)
+                    self.assertEqual(request("GET", "/")[0], 503)
+                    body = json.dumps({"title": "Update gate fixture"})
+                    self.assertEqual(request("POST", "/api/papers", body)[0], 503)
+                    write_json_atomic(journal, {"phase": "success", "launchedPid": launcher_pid + 1})
+                    self.assertEqual(request("POST", "/api/papers", body)[0], 503)
+                    write_json_atomic(journal, {"phase": "success", "launchedPid": launcher_pid})
+                    self.assertEqual(request("GET", "/")[0], 200)
+                    self.assertEqual(request("POST", "/api/papers", body)[0], 201)
+                    self.assertEqual(request("POST", "/api/shutdown", "{}")[0], 200)
+                    self.assertEqual(proc.wait(timeout=5), 0)
+                finally:
+                    if proc.poll() is None:
+                        proc.terminate()
 
 
 if __name__ == "__main__":

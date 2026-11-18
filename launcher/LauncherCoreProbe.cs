@@ -55,6 +55,12 @@ public static class LauncherCoreProbe
             Console.WriteLine("{\"active\":" + (LauncherCore.IsInstallLockActive(args[1]) ? "true" : "false") + "}");
             return 0;
         }
+        if (command == "update-probe" && args.Length >= 3)
+        {
+            string state = LauncherCore.UpdateProbeState(args[1], int.Parse(args[2]));
+            Console.WriteLine("{\"state\":\"" + LauncherCore.Escape(state) + "\"}");
+            return 0;
+        }
         if (command == "helper" && args.Length >= 2)
         {
             string code;

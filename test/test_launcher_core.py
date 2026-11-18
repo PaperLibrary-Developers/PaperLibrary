@@ -251,6 +251,23 @@ class LauncherCoreTest(unittest.TestCase):
         self.assertIn("health-version", data["message"])
         self.assertIn("data/logs/install.log", data["message"])
 
+    def test_only_recorded_candidate_can_probe_before_commit(self):
+        pid = os.getpid()
+        (self.updates / "install.lock").write_text(json.dumps({
+            "pid": pid, "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }), encoding="utf-8")
+        journal = self.updates / "journal.json"
+        journal.write_text(json.dumps({"phase": "launch", "launchedPid": 0}), encoding="utf-8")
+        self.assertEqual(self.probe_json("update-probe", self.base, pid)[1]["state"], "starting")
+
+        journal.write_text(json.dumps({"phase": "launch", "launchedPid": pid}), encoding="utf-8")
+        self.assertEqual(self.probe_json("update-probe", self.base, pid)[1]["state"], "validating")
+        self.assertEqual(self.probe_json("update-probe", self.base, pid + 1)[1]["state"], "")
+        self.assertEqual(self.startup()[1]["action"], "install-in-progress")
+
+        journal.write_text(json.dumps({"phase": "success", "launchedPid": pid}), encoding="utf-8")
+        self.assertEqual(self.probe_json("update-probe", self.base, pid)[1]["state"], "committed")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -56,7 +56,6 @@ def chat_delete(ctx):
     if not ctx.has_query("pair") or str(raw).strip() == "":
         library.update(paper.get("id"), {"chat": []})
         return ctx.json(200, {"ok": True, "messages": []})
-    messages = list((library.get(paper.get("id")) or {}).get("chat") or [])
     try:
         number = float(str(raw).strip())
     except (TypeError, ValueError):
@@ -64,14 +63,23 @@ def chat_delete(ctx):
     if not number.is_integer():
         return ctx.fail(400, "要删除的提问不存在")
     index = int(number)
-    if index < 0 or index >= len(messages):
+    removed = 0
+
+    def remove_pair(current):
+        nonlocal removed
+        messages = list(current.get("chat") or [])
+        if index < 0 or index >= len(messages):
+            return None
+        end = index + 1
+        while end < len(messages) and (messages[end].get("role") or "user") != "user":
+            end += 1
+        removed = end - index
+        return {"chat": messages[:index] + messages[end:]}
+
+    updated = library.update(paper.get("id"), remove_pair)
+    if updated is None:
         return ctx.fail(400, "要删除的提问不存在")
-    end = index + 1
-    while end < len(messages) and (messages[end].get("role") or "user") != "user":
-        end += 1
-    library.update(paper.get("id"), {"chat": list(messages[:index]) + list(messages[end:])})
-    fresh = list((library.get(paper.get("id")) or {}).get("chat") or [])
-    return ctx.json(200, {"ok": True, "messages": fresh, "removed": end - index})
+    return ctx.json(200, {"ok": True, "messages": updated.get("chat") or [], "removed": removed})
 
 
 # POST /api/papers/:id/chat  { question, useLocal?, useExternal?, web? } —— SSE

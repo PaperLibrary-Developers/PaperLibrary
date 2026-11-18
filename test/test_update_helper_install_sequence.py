@@ -14,12 +14,14 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 import urllib.request
+from contextlib import closing
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,6 +69,14 @@ class FakeApp
         Version = Regex.Match(config, "\"version\"\\s*:\\s*\"([^\"]*)\"").Groups[1].Value;
         FailHealth = Regex.IsMatch(config, "\"failHealth\"\\s*:\\s*true");
         Append("start pid=" + Process.GetCurrentProcess().Id + " version=" + Version + " port=" + Port);
+        string migrated = Path.Combine(BaseDir, "migrated.db");
+        if (File.Exists(migrated))
+        {
+            string data = Path.Combine(BaseDir, "data");
+            File.Copy(migrated, Path.Combine(data, "library.db"), true);
+            File.WriteAllText(Path.Combine(data, "library.db-wal"), "new sidecar");
+            File.WriteAllText(Path.Combine(data, "websearch.json"), "new settings");
+        }
         TcpListener listener = new TcpListener(IPAddress.Loopback, Port);
         listener.Start();
         while (true)
@@ -462,6 +472,17 @@ class InstallSequenceTest(unittest.TestCase):
 
     def test_health_failure_rolls_back_and_relaunches_old(self):
         self.make_staging("1.7.1", fail_health=True)
+        db = self.data / "library.db"
+        db.unlink()
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.executescript("CREATE TABLE papers (title TEXT); INSERT INTO papers VALUES ('saved paper');"
+                               "PRAGMA user_version = 1;")
+        migrated = self.staging / "migrated.db"
+        shutil.copyfile(db, migrated)
+        with closing(sqlite3.connect(migrated)) as conn, conn:
+            conn.executescript("ALTER TABLE papers RENAME TO updated_papers; PRAGMA user_version = 2;")
+        marker = self.data / "keep-this.pdf"
+        marker.write_bytes(b"user attachment")
         proc, data = self.install(health_timeout=3, health_interval=200)
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
         self.assertEqual(data["code"], "health-not-ok")
@@ -472,7 +493,12 @@ class InstallSequenceTest(unittest.TestCase):
         self.assertGreater(state["oldLaunchedPid"], 0, "回滚后应重新启动旧版本")
         self.assertEqual(json.loads((self.program / "version.json").read_text(encoding="utf-8"))["version"],
                          "1.6.0")
-        self.assertEqual((self.data / "library.db").read_text(encoding="utf-8"), "user database")
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT title FROM papers").fetchall(), [("saved paper",)])
+        self.assertFalse((self.data / "library.db-wal").exists())
+        self.assertFalse((self.data / "websearch.json").exists())
+        self.assertEqual(marker.read_bytes(), b"user attachment")
         self.assertTrue((self.data / "updates" / "apply.json").exists(), "失败保留 apply.json 供重试")
         self.assertTrue((self.data / "updates" / "backups" / "app-1.6.0" / "backup.json").is_file(),
                         "回滚后备份目录保留 backup.json 元数据")
@@ -495,6 +521,20 @@ class InstallSequenceTest(unittest.TestCase):
                          "1.6.0")
         self.assertGreater(self.state()["oldLaunchedPid"], 0)
         self.pids.append(self.state()["oldLaunchedPid"])
+
+    def test_retry_snapshots_user_edits_made_after_rollback(self):
+        self.make_staging("1.7.1", fail_health=True)
+        proc, data = self.install(health_timeout=2)
+        self.assertEqual((proc.returncode, data["code"]), (3, "health-not-ok"))
+        kill_pid(data["oldLaunchedPid"])
+
+        prefs = '{"theme":"light"}'
+        (self.data / "prefs.json").write_text(prefs, encoding="utf-8")
+        self.make_staging("1.7.1")
+        proc, data = self.install()
+        self.assertEqual(proc.returncode, 0, data)
+        saved = self.data / "backups" / "update-1.7.1" / "prefs.json"
+        self.assertEqual(saved.read_text(encoding="utf-8"), prefs)
 
     def test_replace_failure_rolls_back(self):
         self.start_locker(self.staging / "vendor" / "lib.js")

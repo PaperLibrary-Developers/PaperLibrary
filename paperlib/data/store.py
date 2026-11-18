@@ -1,12 +1,11 @@
 """存储层（对应 Node 的 server/store.js + store/accessors.js）。
 
 SQLite 是唯一真源：启动时把 papers 全量装配进内存（检索/排序走内存），
-所有写操作经这里落库；嵌套字段（attachments/chat）被外部改动后调 touch()，
-touch() 用内容哈希找出确实变了的卡片再落库（省掉无意义的写）。
+卡片修改先提交到数据库，再更新内存缓存。
 
 约定与 Node 版一致：
   · 访问器是唯一写入口，不做业务规则（规整字段/生成 id 在 domain/repository.py）；
-  · 写方法内部已落库，调用方不要再手动 touch()；批量写可用 {touch: False} 后统一 touch()；
+  · 写方法内部已落库，调用方不要再手动 touch()；
   · find_paper 返回库里那一份记录（引用），只读使用时最省事。
 """
 from __future__ import annotations
@@ -47,7 +46,7 @@ class Store:
         self._loaded = False
 
     # ------------------------------------------------------------------ 读/装配
-    def load(self):
+    def load(self, *, migrate_legacy_dirs=True):
         with self._lock:
             ensure_dir(self.data_dir)
             ensure_dir(self.papers_dir)
@@ -59,7 +58,8 @@ class Store:
             self.meta = {"createdAt": created, "updatedAt": self.repo.meta_get("updatedAt") or now_iso()}
             self.papers = self.repo.list_papers()
             self._hashes = {p["id"]: _hash_paper(p) for p in self.papers}
-            self.migrate_legacy_dirs()
+            if migrate_legacy_dirs:
+                self.migrate_legacy_dirs()
             self._loaded = True
             return self.papers
 
@@ -97,26 +97,27 @@ class Store:
         return str(self.repo.db_path)
 
     # ------------------------------------------------------------------ 写
-    def _persist(self, paper):
-        self.repo.save_paper(paper)
-        self._hashes[paper["id"]] = _hash_paper(paper)
+    def paper_writes(self):
+        """序列化卡片的读取、业务合并、提交以及索引更新。"""
+        return self._lock
 
-    def _commit(self, options=None, touched_ids=None):
-        if options and options.get("touch") is False:
-            self.meta["updatedAt"] = now_iso()
-            return
-        self.touch()
+    def _persist(self, paper):
+        paper_id = paper["id"]
+        digest = _hash_paper(paper)
+        updated = now_iso()
+        self.repo.write_papers((paper,), updated_at=updated)
+        self._hashes[paper_id] = digest
+        self.meta["updatedAt"] = updated
 
     def insert_paper(self, paper, options=None):
         if not paper or not paper.get("id"):
             raise ValueError("insert_paper：卡片必须有 id")
         with self._lock:
+            self._persist(paper)
             if options and options.get("append") is True:
                 self.papers.append(paper)
             else:
                 self.papers.insert(0, paper)
-            self._persist(paper)
-            self._commit(options)
             return paper
 
     def replace_paper(self, paper_id, record, options=None):
@@ -124,9 +125,8 @@ class Store:
             idx = self.index_of(paper_id)
             if idx < 0:
                 return None
-            self.papers[idx] = record
             self._persist(record)
-            self._commit(options)
+            self.papers[idx] = record
             return record
 
     def patch_paper(self, paper_id, patch, options=None):
@@ -136,9 +136,8 @@ class Store:
                 return None
             merged = dict(self.papers[idx])
             merged.update(patch or {})
-            self.papers[idx] = merged
             self._persist(merged)
-            self._commit(options)
+            self.papers[idx] = merged
             return merged
 
     def remove_paper(self, paper_id, options=None):
@@ -146,41 +145,43 @@ class Store:
             idx = self.index_of(paper_id)
             if idx < 0:
                 return None
-            paper = self.papers.pop(idx)
-            self.repo.delete_paper(paper["id"])
+            paper = self.papers[idx]
+            updated = now_iso()
+            self.repo.write_papers(removed=(paper["id"],), updated_at=updated)
+            self.papers.pop(idx)
             self._hashes.pop(paper["id"], None)
-            self._commit(options)
+            self.meta["updatedAt"] = updated
             return paper
 
     def replace_all(self, papers):
         with self._lock:
-            self.papers = list(papers or [])
-            for paper in self.papers:
-                self._persist(paper)
-            ids = {p.get("id") for p in self.papers}
-            for stale in [pid for pid in self._hashes if pid not in ids]:
-                self.repo.delete_paper(stale)
-                self._hashes.pop(stale, None)
-            self.meta["updatedAt"] = now_iso()
-            self.repo.meta_set("updatedAt", self.meta["updatedAt"])
+            records = list(papers or [])
+            hashes = {p["id"]: _hash_paper(p) for p in records}
+            updated = now_iso()
+            self.repo.write_papers(records, self._hashes.keys() - hashes.keys(), updated)
+            self.papers = records
+            self._hashes = hashes
+            self.meta["updatedAt"] = updated
 
     def touch(self):
         """把内存里改过的卡片落库（内容哈希比对，只写变了的）。"""
         with self._lock:
-            changed = 0
+            changed = []
+            hashes = {}
             for paper in self.papers:
                 pid = paper.get("id")
                 if not pid:
                     continue
-                if _hash_paper(paper) == self._hashes.get(pid):
-                    continue
-                self.repo.save_paper(paper)
-                self._hashes[pid] = _hash_paper(paper)
-                changed += 1
+                digest = _hash_paper(paper)
+                if digest != self._hashes.get(pid):
+                    changed.append(paper)
+                    hashes[pid] = digest
             if changed:
-                self.meta["updatedAt"] = now_iso()
-                self.repo.meta_set("updatedAt", self.meta["updatedAt"])
-            return changed
+                updated = now_iso()
+                self.repo.write_papers(changed, updated_at=updated)
+                self._hashes.update(hashes)
+                self.meta["updatedAt"] = updated
+            return len(changed)
 
     def save_now(self):
         self.touch()
@@ -272,24 +273,27 @@ class Store:
         return changed
 
     def rename_folder_prefix(self, old, new):
-        ids = self.repo.papers_in_folder(old)
-        count = self.repo.rename_folder_prefix(old, new)
-        self._sync_folder_memory(ids)
-        return count
+        with self._lock:
+            ids = self.repo.papers_in_folder(old)
+            count = self.repo.rename_folder_prefix(old, new)
+            self._sync_folder_memory(ids)
+            return count
 
     def move_folder_papers(self, prefix, dest):
-        ids = self.repo.papers_in_folder(prefix)
-        count = self.repo.move_folder_papers(prefix, dest)
-        self._sync_folder_memory(ids)
-        return count
+        with self._lock:
+            ids = self.repo.papers_in_folder(prefix)
+            count = self.repo.move_folder_papers(prefix, dest)
+            self._sync_folder_memory(ids)
+            return count
 
     def delete_folder_rows(self, prefix):
         self.repo.delete_folder_rows(prefix)
 
     def set_paper_folders(self, ids, path):
-        count = self.repo.set_paper_folders(ids, path)
-        self._sync_folder_memory(ids)
-        return count
+        with self._lock:
+            count = self.repo.set_paper_folders(ids, path)
+            self._sync_folder_memory(ids)
+            return count
 
     def papers_in_folder(self, prefix):
         return self.repo.papers_in_folder(prefix)

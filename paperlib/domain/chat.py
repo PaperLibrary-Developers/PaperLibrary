@@ -352,9 +352,9 @@ def _auto_extract(services, paper):
 
 
 def _append_chat(services, paper, messages):
-    services.library.update(paper.get("id"), {"chat": list(messages)})
-    fresh = services.library.get(paper.get("id")) or {}
-    return list(fresh.get("chat") or [])
+    saved = services.library.update(
+        paper.get("id"), lambda current: {"chat": list(current.get("chat") or []) + messages})
+    return list((saved or {}).get("chat") or [])
 
 
 CHAT_MAP_SYSTEM = (
@@ -436,7 +436,7 @@ def chat_stream(services, paper, body, stream):
     fresh = services.library.get(paper.get("id")) or paper
     current = list(fresh.get("chat") or [])
     history = current[-12:]
-    _append_chat(services, paper, current + [
+    _append_chat(services, paper, [
         {"role": "user", "content": question, "at": now_iso()},
     ])
 
@@ -479,9 +479,7 @@ def chat_stream(services, paper, body, stream):
         result = llm.chat_stream(on_delta, {"messages": messages})
         answer = str((result or {}).get("text") or "".join(collected)).strip()
         if answer:
-            latest = services.library.get(paper.get("id")) or paper
-            history_now = list(latest.get("chat") or [])
-            _append_chat(services, paper, history_now + [{
+            _append_chat(services, paper, [{
                 "role": "assistant",
                 "content": answer,
                 "at": now_iso(),
@@ -554,8 +552,7 @@ def vision_stream(services, paper, body, stream):
         return {"ok": True}
 
     answer = "".join(collected).strip()
-    fresh = services.library.get(paper.get("id")) or paper
-    messages = list(fresh.get("chat") or []) + [
+    messages = [
         {"role": "user", "content": question + (("\n（" + label + "）") if label else ""),
          "at": now_iso(), "images": len(images)},
         {"role": "assistant", "content": answer, "at": now_iso(),

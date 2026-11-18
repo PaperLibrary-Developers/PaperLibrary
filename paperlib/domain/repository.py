@@ -248,60 +248,58 @@ class Repository:
         self.index = index
 
     def create(self, input_data):
-        paper = normalize_paper(input_data, None)
-        self.db.insert_paper(paper)
-        self.index.set(paper)
-        return paper
+        return self.insert_normalized(normalize_paper(input_data, None))
 
     def update(self, paper_id, input_data):
-        existing = self.db.find_paper(paper_id)
-        if not existing:
-            return None
-        merged = normalize_paper(input_data, existing)
-        saved = self.db.replace_paper(paper_id, merged)
-        if not saved:
-            return None
-        self.index.set(saved)
-        return merged
+        """Apply fields, or calculate a patch from the latest card under the write lock."""
+        with self.db.paper_writes():
+            existing = self.db.find_paper(paper_id)
+            if not existing:
+                return None
+            if callable(input_data):
+                input_data = input_data(existing)
+                if input_data is None:
+                    return None
+            merged = normalize_paper(input_data, existing)
+            self.db.replace_paper(paper_id, merged)
+            self.index.set(merged)
+            return merged
 
     def remove(self, paper_id):
-        paper = self.db.remove_paper(paper_id)
-        if not paper:
-            return False
-        self.index.remove(paper.get("id"))
-        pdf_file = paper.get("pdfFile")
-        if pdf_file:
-            still_used = any(p.get("pdfFile") == pdf_file for p in self.db.list_papers())
-            if not still_used:
+        with self.db.paper_writes():
+            paper = self.db.remove_paper(paper_id)
+            if not paper:
+                return False
+            self.index.remove(paper.get("id"))
+            pdf_file = paper.get("pdfFile")
+            if pdf_file and not any(p.get("pdfFile") == pdf_file for p in self.db.list_papers()):
                 abs_path = self.db.path_for_paper_file(pdf_file)
                 if abs_path and os.path.isfile(abs_path):
                     try:
                         os.unlink(abs_path)
                     except OSError:
                         pass
-        return True
+            return True
 
     def bulk(self, ids, patch):
+        add = to_string_array(patch.get("tags"))
+        drop = {t.lower() for t in to_string_array(patch.get("removeTags") or patch.get("untags"))}
+
+        def merge(existing):
+            tags = to_string_array(list(existing.get("tags") or []) + add)
+            return {
+                "tags": [t for t in tags if t.lower() not in drop],
+                "status": patch.get("status"),
+                "rating": patch.get("rating"),
+                "starred": patch.get("starred"),
+                "type": patch.get("type"),
+            }
+
         changed = []
         for paper_id in to_string_array(ids):
-            existing = self.get(paper_id)
-            if not existing:
-                continue
-            add = to_string_array(patch.get("tags"))
-            remove = to_string_array(patch.get("removeTags") or patch.get("untags"))
-            tags = list(existing.get("tags") or [])
-            if add:
-                tags = to_string_array(tags + add)
-            if remove:
-                drop = {t.lower() for t in remove}
-                tags = [t for t in tags if t.lower() not in drop]
-            changed.append(self.update(paper_id, {
-                "tags": tags,
-                "status": patch.get("status") or existing.get("status"),
-                "rating": patch.get("rating") if patch.get("rating") is not None else existing.get("rating"),
-                "starred": bool(patch.get("starred")) if patch.get("starred") is not None else existing.get("starred"),
-                "type": patch.get("type") or existing.get("type"),
-            }))
+            saved = self.update(paper_id, merge)
+            if saved is not None:
+                changed.append(saved)
         return changed
 
     def rename_tag(self, source, target):
@@ -309,27 +307,25 @@ class Repository:
         new_tag = str(target or "").strip()
         if not old_tag or not new_tag:
             raise ValueError("标签名不能为空")
-        changed = 0
-        for paper in self.db.list_papers():
+        def rename(paper):
             tags = paper.get("tags") or []
             if not any(t.lower() == old_tag.lower() for t in tags):
-                continue
-            nxt = [new_tag if t.lower() == old_tag.lower() else t for t in tags]
-            self.update(paper["id"], {"tags": nxt})
-            changed += 1
+                return None
+            return {"tags": [new_tag if t.lower() == old_tag.lower() else t for t in tags]}
+
+        changed = sum(self.update(paper["id"], rename) is not None for paper in self.db.list_papers())
         return {"changed": changed, "from": old_tag, "to": new_tag}
 
     def remove_tag(self, name):
         target = str(name or "").strip().lower()
         if not target:
             raise ValueError("标签名不能为空")
-        changed = 0
-        for paper in self.db.list_papers():
+        def remove(paper):
             tags = paper.get("tags") or []
-            if not any(t.lower() == target for t in tags):
-                continue
-            self.update(paper["id"], {"tags": [t for t in tags if t.lower() != target]})
-            changed += 1
+            remaining = [t for t in tags if t.lower() != target]
+            return {"tags": remaining} if len(remaining) != len(tags) else None
+
+        changed = sum(self.update(paper["id"], remove) is not None for paper in self.db.list_papers())
         return {"changed": changed, "name": str(name).strip()}
 
     def get(self, paper_id):
@@ -349,6 +345,7 @@ class Repository:
         return None
 
     def insert_normalized(self, paper, options=None):
-        self.db.insert_paper(paper, options)
-        self.index.set(paper)
-        return paper
+        with self.db.paper_writes():
+            self.db.insert_paper(paper, options)
+            self.index.set(paper)
+            return paper

@@ -274,6 +274,38 @@ class RecoverTest(unittest.TestCase):
         self.assertEqual(names, ["app-1.6.0"])
         self.pids.append(self.state()["launchedPid"])
 
+    def test_launch_recovery_refuses_bad_snapshot_and_can_retry(self):
+        self.kill_at_phase("launch")
+        db = self.data / "library.db"
+        backup = self.data / "backups" / "update-1.7.1" / "library.db"
+        original = backup.read_bytes()
+        db.write_bytes(b"new version changed the database")
+        backup.write_bytes(b"damaged backup")
+
+        code, data = self.recover()
+        self.assertEqual((code, data["code"]), (3, "recovery-failed"))
+        self.assertEqual(self.journal()["phase"], "launch")
+        self.assertEqual(db.read_bytes(), b"new version changed the database")
+        self.assertEqual(self.state()["oldLaunchedPid"], 0)
+
+        backup.write_bytes(original)
+        code, data = self.recover()
+        self.assertEqual(code, 0, data)
+        self.assertEqual(db.read_bytes(), original)
+        self.assertEqual(self.journal()["phase"], "failed")
+
+    def test_recover_interrupted_program_backup_keeps_unmoved_files(self):
+        self.kill_at_phase("backup")
+        backup = self.updates / "backups" / "app-1.6.0"
+        backup.mkdir(parents=True)
+        (self.program / "PaperLibrary.exe").rename(backup / "PaperLibrary.exe")
+        before = (self.program / "public" / "index.html").read_bytes()
+
+        code, data = self.recover()
+        self.assertEqual(code, 0, data)
+        self.assertTrue((self.program / "PaperLibrary.exe").is_file())
+        self.assertEqual((self.program / "public" / "index.html").read_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -210,6 +210,7 @@ class Handler(BaseHTTPRequestHandler):
     verbose = True
     router = None
     static_handler = None
+    update_pending = None
 
     def log_message(self, fmt, *args):
         return
@@ -254,6 +255,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             split = urlsplit(self.path)
             pathname = unquote(split.path)
+            allowed_during_update = (
+                (self.command == "GET" and pathname in ("/api/health", "/api/version"))
+                or (self.command == "POST" and pathname == "/api/shutdown")
+            )
+            if not allowed_during_update and self.update_pending and self.update_pending():
+                self.close_connection = True
+                return ctx.fail(503, "正在验证更新，完成后即可访问文献库")
             if pathname.startswith("/api/"):
                 self.router.handle(ctx)
             elif self.command not in ("GET", "HEAD"):
@@ -284,7 +292,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class HttpServer:
-    def __init__(self, router, static_handler, host, port, verbose=True):
+    def __init__(self, router, static_handler, host, port, verbose=True, *, update_pending=None):
         self.router = router
         self.static_handler = static_handler
         self.host = host
@@ -293,6 +301,7 @@ class HttpServer:
             "router": router,
             "static_handler": static_handler,
             "verbose": verbose,
+            "update_pending": staticmethod(update_pending) if update_pending else None,
         })
         # socketserver 默认 backlog=5：浏览器并行加载 mjs/Range/缩略图时会触发 ECONNREFUSED。
         # 提到 128（对齐 Node http server 的默认 511 量级，128 对本地单用户足够）。
