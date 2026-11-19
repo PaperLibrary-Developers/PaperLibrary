@@ -145,11 +145,21 @@ class LauncherCoreTest(unittest.TestCase):
         self.assertEqual(data["code"], "ok")
 
     def test_precheck_rejects_program_files(self):
+        # 注入的“Program Files 根”必须真的包含程序目录：GitHub Windows runner 的 %TEMP% 在
+        # D:\a\_temp\...，写死 C:\ 会让断言在本机（C:）通过、在 CI（D:）失败。
+        drive_root = str(Path(self.base.anchor))          # 本机 "C:\\"，CI "D:\\"
         code, data = self.probe_json("precheck", self.base, self.home,
-                                     str(10 * 1024 * 1024 * 1024), "C:\\")
+                                     str(10 * 1024 * 1024 * 1024), drive_root)
         self.assertEqual(code, 3, data)
         self.assertEqual(data["code"], "program-files")
         self.assertIn("Program Files", data["message"])
+
+        # 反向对照：注入的根不包含程序目录时不得误判为 Program Files
+        outside = self.work / "not-program-files"
+        code, data = self.probe_json("precheck", self.base, self.home,
+                                     str(10 * 1024 * 1024 * 1024), str(outside))
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["code"], "ok")
 
     def test_precheck_rejects_invalid_apply(self):
         self.apply_path.unlink()
