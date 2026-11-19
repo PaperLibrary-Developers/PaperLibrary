@@ -90,8 +90,16 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 任一 FAIL 即判定发布失败；WARN 需人工确认（例如历史资产没有 version.json）。
 
-## 5. 当前状态（2026-11-19）
+## 5. 当前状态（2026-11-20）
 
+- **v1.8.3 已发布**（tag `v1.8.3`（annotated `e2761477`）→ **`488fe078`**，更新助手自动部署、安装失败后关窗、更新验证窗口 launchedPid 回填判定修复）：
+  - zip `PaperLibrary.v1.8.3.Nexus.zip` 43,501,773 字节，sha256 `075a45c8b2d09bfa1ac6236442792137796025e402456c3b8473cddceb6afb9c`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.3.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、匿名下载、字节数与 SHA-256、zip 无 `data/`、含 `PaperLibrary.exe`）。
+  - 发布前验证：Python 全量 737 项 / 0 失败（打 tag 前 2 项按设计/环境跳过；打 tag 后 `test_update_publish` **8 项全通过、0 跳过**）；
+    `tools/check_windows.ps1` 完整模式（737 项 + Node 15 项 + API 契约 61/0/13，源码与解包各一次）；
+    空版本更新验证 **27 项全通过**（同一提交只改版本号构建 v1.8.2/v1.8.3，本地 HTTPS 更新源 + 独立测试签名；34 字段一致、
+    数据/程序备份存在、包外助手部署并升级到 1.8.3、整体缺失后自动补建、自动重开）。证据见 `tmp/noop-update-20261120/`。
 - **v1.8.2 已发布**（tag v1.8.2 / Release 指向 `9367ed6`，大库装载与详情页生命周期优化 + 写入一致性/升级回滚修复）：
   - zip `PaperLibrary.v1.8.2.Nexus.zip` 43,498,137 字节，sha256 `d15f9f45f699fe85465d19bfa5ed9be784b0684ec61dca6e11886c7df02ade81`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.2.json`；
