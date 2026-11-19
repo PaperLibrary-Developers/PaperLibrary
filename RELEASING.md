@@ -100,6 +100,10 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
     `tools/check_windows.ps1` 完整模式（737 项 + Node 15 项 + API 契约 61/0/13，源码与解包各一次）；
     空版本更新验证 **27 项全通过**（同一提交只改版本号构建 v1.8.2/v1.8.3，本地 HTTPS 更新源 + 独立测试签名；34 字段一致、
     数据/程序备份存在、包外助手部署并升级到 1.8.3、整体缺失后自动补建、自动重开）。证据见 `tmp/noop-update-20261120/`。
+  - 发布后补记：Windows CI 自加入工作流起一直是红的，原因是 `test_precheck_rejects_program_files` 把注入的
+    Program Files 根写死成 `C:\`，而 GitHub Windows runner 的临时目录在 `D:\a\_temp`；已由 `b4fd2f3` 修复
+    （按程序目录所在盘符注入根 + 反向对照），CI 现为绿（714 项 OK / 契约 61-0-13 ×2 / 打包解包通过）。
+    该提交只改测试，不影响已发布资产。
 - **v1.8.2 已发布**（tag v1.8.2 / Release 指向 `9367ed6`，大库装载与详情页生命周期优化 + 写入一致性/升级回滚修复）：
   - zip `PaperLibrary.v1.8.2.Nexus.zip` 43,498,137 字节，sha256 `d15f9f45f699fe85465d19bfa5ed9be784b0684ec61dca6e11886c7df02ade81`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.2.json`；
