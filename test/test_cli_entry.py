@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -112,6 +113,64 @@ class CliEntryTest(unittest.TestCase):
                     self.assertEqual(request("POST", "/api/shutdown", "{}")[0], 200)
                     self.assertEqual(proc.wait(timeout=5), 0)
                 finally:
+                    if proc.poll() is None:
+                        proc.terminate()
+
+    def test_update_probe_survives_unbackfilled_launch_pid(self):
+        """A1 回归：journal 先写 launchedPid=0、稍后才回填，新版进程不能因此自杀。
+
+        更新助手的真实顺序是「写 launch+0 → 冷启动新进程 → 回填 PID」（
+        tools/updater/PaperLibraryUpdater.cs install 的 launch 分支）。新版进程若在回填前读到 0
+        就返回 1，启动器健康检查必然超时，触发一次无意义的整包回滚。这里把回填放在 1.2 秒后，
+        在 2 秒等待预算之内：修复后的进程会等回填并正常服务；修复前会在回填前退出，测试失败。
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            data = Path(temp)
+            update_dir = data / "updates"
+            journal = update_dir / "journal.json"
+            launcher_pid = os.getpid()
+            write_json_atomic(journal, {"phase": "launch", "launchedPid": 0})
+            write_json_atomic(update_dir / "install.lock", {"pid": launcher_pid})
+            port = free_port()
+            command = [sys.executable, "-B", "-m", "paperlib", "--no-open", "--idle-exit", "0",
+                       "--host", "127.0.0.1", "--port", str(port), "--data-dir", str(data)]
+            env = dict(os.environ, PAPERLIB_UPDATE_PROBE_PID=str(launcher_pid))
+
+            def backfill():
+                time.sleep(1.2)
+                write_json_atomic(journal, {"phase": "launch", "launchedPid": launcher_pid})
+
+            with subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL) as proc:
+                worker = threading.Thread(target=backfill)
+                worker.start()
+                try:
+                    deadline = time.monotonic() + 20
+                    status = None
+                    while time.monotonic() < deadline and proc.poll() is None:
+                        try:
+                            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+                            try:
+                                conn.request("GET", "/api/health")
+                                status = conn.getresponse().status
+                            finally:
+                                conn.close()
+                            if status == 200:
+                                break
+                        except OSError:
+                            time.sleep(0.05)
+                    self.assertIsNone(proc.poll(),
+                                      "新版进程在 launchedPid 回填前退出了（A1 回归）")
+                    self.assertEqual(status, 200, "更新验证服务未启动")
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+                    try:
+                        conn.request("POST", "/api/shutdown", "{}")
+                        self.assertEqual(conn.getresponse().status, 200)
+                    finally:
+                        conn.close()
+                    self.assertEqual(proc.wait(timeout=5), 0)
+                finally:
+                    worker.join()
                     if proc.poll() is None:
                         proc.terminate()
 

@@ -135,6 +135,52 @@ def build(config, *, update_probe=False):
     return services, router, static_handler, store
 
 
+# 更新助手写 journal 的顺序是「先写 phase=launch + launchedPid=0 → 冷启动新版进程 → 回填真实 PID」
+# （tools/updater/PaperLibraryUpdater.cs 的 install 步骤，launch 分支）。新版进程可能在回填之前就读到
+# journal，此时 launchedPid 仍是 0：它不是「验证窗口已关闭」，只是「尚未回填」。直接退出会让新版进程自杀、
+# 启动器健康检查失败，进而触发一次无意义的整包回滚（A1）。这里短暂重读 journal，给回填留出窗口。
+PROBE_PID_BACKFILL_SECONDS = 2.0
+PROBE_PID_BACKFILL_POLL_SECONDS = 0.05
+
+
+def _launched_pid_pending(journal):
+    """journal 里的 launchedPid 是否还没被更新助手回填（缺失 / null / 空串 / 0）。"""
+    if not isinstance(journal, dict) or "launchedPid" not in journal:
+        return True
+    value = journal.get("launchedPid")
+    return ("" if value is None else str(value).strip()) in ("", "0")
+
+
+def _read_journal_dict(path):
+    journal = read_json(path, {}) if Path(path).exists() else {}
+    return journal if isinstance(journal, dict) else {}
+
+
+def probe_window_open(journal_path, updates_dir, probe_pid, *,
+                      wait_seconds=None, poll_seconds=PROBE_PID_BACKFILL_POLL_SECONDS):
+    """判定「更新验证窗口」是否仍然有效：phase=launch + launchedPid=本进程 + install.lock 存在。
+
+    launchedPid 仍是 0 时先短暂重读 journal（最多 wait_seconds 秒，默认 2s），
+    等助手回填后再按同一套严格判定；始终没回填才算窗口关闭。
+    journal 的 phase × launchedPid 判定表见 shared/contracts/update-install.md。
+    """
+    journal_path = Path(journal_path)
+    updates_dir = Path(updates_dir)
+    if wait_seconds is None:
+        wait_seconds = PROBE_PID_BACKFILL_SECONDS
+    journal = _read_journal_dict(journal_path)
+    if journal.get("phase") == "launch" and _launched_pid_pending(journal):
+        deadline = time.monotonic() + max(0.0, wait_seconds)
+        while time.monotonic() < deadline:
+            time.sleep(poll_seconds)
+            journal = _read_journal_dict(journal_path)
+            if not (journal.get("phase") == "launch" and _launched_pid_pending(journal)):
+                break
+    return (journal.get("phase") == "launch"
+            and str(journal.get("launchedPid")) == str(probe_pid)
+            and (updates_dir / "install.lock").is_file())
+
+
 def main(argv=None, root=None):
     config = parse_args(argv, root)
     if config.help:
@@ -150,8 +196,7 @@ def main(argv=None, root=None):
     phase = journal.get("phase") if isinstance(journal, dict) else None
     probe_pid = os.environ.get("PAPERLIB_UPDATE_PROBE_PID")
     if probe_pid:
-        if (phase != "launch" or str(journal.get("launchedPid")) != probe_pid
-                or not (updates / "install.lock").is_file()):
+        if not probe_window_open(journal_path, updates, probe_pid):
             print("更新验证窗口已关闭。", file=sys.stderr)
             return 1
     elif ((journal_path.exists() and phase not in ("success", "failed"))

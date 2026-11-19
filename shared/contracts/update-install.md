@@ -164,6 +164,25 @@ prepare → backup → replace → verify → launch → success
 | code / error | 失败码与可读原因（成功为空） |
 | log | helper 日志路径 |
 
+#### phase × launchedPid 判定表（A1，2026-11-20 补齐）
+
+`launch` 阶段 journal 是**先写 `launchedPid=0`、再冷启动新进程、最后回填真实 PID** 的
+（`tools/updater/PaperLibraryUpdater.cs` install 的 launch 分支）。因此「读到 0」只表示
+**尚未回填**，不表示验证窗口已关闭；三个读者必须按同一张表判定（数值以
+`paperlib/app.py` 的 `PROBE_PID_BACKFILL_SECONDS` 与 `launcher/LauncherCore.cs` 为准）：
+
+| phase | launchedPid | 新进程（`paperlib/app.py`） | 启动器（`LauncherCore.UpdateProbeState`） |
+|---|---|---|---|
+| launch | 0 / 缺失 | 视为「尚未回填」，最多重读 journal **2 秒**（50ms 轮询），回填后按下一行判定 | `starting`（容错，最长 5 秒） |
+| launch | = 本进程 PID | 打开更新验证窗口：页面与写接口 503，等 journal 变 `success` | `validating` |
+| launch | ≠ 本进程 PID | 窗口已关闭 → 退出码 1 | `""`（不参与判定） |
+| prepare/backup/replace/verify | 任意 | 非 probe 启动被拦截 | 安装中 / `starting` |
+| success | = 本进程 PID | 正常打开 | `committed` |
+| success | 其它 | 正常打开 | `""` |
+| failed | 任意 | 允许打开（恢复入口） | `""`（走 recover/notice-failed） |
+
+安装锁（`install.lock`）仍是窗口的组成部分：锁不存在时两端都判定为窗口关闭。
+
 ### state.json
 
 终态（成功/失败/恢复）写 `data/updates/state.json`，字段：
