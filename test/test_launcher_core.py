@@ -269,5 +269,85 @@ class LauncherCoreTest(unittest.TestCase):
         self.assertEqual(self.probe_json("update-probe", self.base, pid)[1]["state"], "committed")
 
 
+@unittest.skipUnless(CSC.is_file(), "需要 .NET Framework csc.exe")
+class LauncherClosingTest(unittest.TestCase):
+    def test_unavailable_helper_does_not_block_close(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            webview = ROOT / "tools" / "webview2"
+            sources = []
+            for name in ("LauncherCore.cs", "PaperLibraryLauncher.cs"):
+                source = root / name
+                write_utf8_bom(source, (ROOT / "launcher" / name).read_text(encoding="utf-8-sig"))
+                sources.append(str(source))
+            references = ["System.dll", "System.Core.dll", "System.Drawing.dll", "System.Windows.Forms.dll"]
+            for name in ("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll"):
+                dll = root / name
+                shutil.copyfile(webview / name, dll)
+                references.append(str(dll))
+            probe_source = root / "ClosingProbe.cs"
+            write_utf8_bom(probe_source, r'''
+using System;
+using System.Windows.Forms;
+
+class ClosingProbe
+{
+    [STAThread]
+    static int Main(string[] args)
+    {
+        int nextAnswer = 1;
+        var closing = new FormClosingEventArgs((CloseReason)Enum.Parse(typeof(CloseReason), args[0]), false);
+        Launcher.HandleClosing(closing, (message, buttons, icon, defaultButton) =>
+        {
+            Console.WriteLine(buttons + " " + defaultButton);
+            return (DialogResult)Enum.Parse(typeof(DialogResult), args[nextAnswer++]);
+        });
+        Console.WriteLine(closing.Cancel);
+        return nextAnswer == args.Length ? 0 : 1;
+    }
+}
+''')
+            probe = root / "ClosingProbe.exe"
+            build = subprocess.run(
+                [str(CSC), "/nologo", "/target:exe", "/main:ClosingProbe", "/out:" + str(probe),
+                 *("/r:" + ref for ref in references), *sources, str(probe_source)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            )
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+
+            updates = root / "data" / "updates"
+            staging = updates / "1.8.3" / "staging"
+            staging.mkdir(parents=True)
+            executable = staging / "PaperLibrary.exe"
+            executable.write_bytes(b"staged launcher")
+            (staging / "version.json").write_text('{"version":"1.8.3"}', encoding="utf-8")
+            apply_path = updates / "apply.json"
+            apply_contents = json.dumps({"schema": 1, "version": "1.8.3", "stagingPath": str(staging)})
+            apply_path.write_text(apply_contents, encoding="utf-8")
+            log = root / "data" / "logs" / "launcher.log"
+
+            initial = "YesNoCancel Button3"
+            failed = "YesNo Button2"
+            scenarios = (
+                ("UserClosing", ("Cancel",), [initial, "True"]),
+                ("UserClosing", ("No",), [initial, "False"]),
+                ("UserClosing", ("Yes", "No"), [initial, failed, "True"]),
+                ("UserClosing", ("Yes", "Yes"), [initial, failed, "False"]),
+                ("WindowsShutDown", (), ["False"]),
+            )
+            for reason, answers, expected in scenarios:
+                with self.subTest(reason=reason, answers=answers):
+                    log.unlink(missing_ok=True)
+                    result = subprocess.run([str(probe), reason, *answers], capture_output=True,
+                                            text=True, encoding="utf-8", errors="replace", timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), expected)
+                    logged = log.read_text(encoding="utf-8")
+                    self.assertEqual("window closing" in logged, expected[-1] == "False")
+                    self.assertEqual("manual close install precheck: helper-missing" in logged, failed in expected)
+                    self.assertEqual(apply_path.read_text(encoding="utf-8"), apply_contents)
+                    self.assertEqual(executable.read_bytes(), b"staged launcher")
+
+
 if __name__ == "__main__":
     unittest.main()

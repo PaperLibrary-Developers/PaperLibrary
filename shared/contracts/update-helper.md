@@ -24,13 +24,14 @@ Windows 无法可靠覆盖正在运行的 `PaperLibrary.exe`、WebView2 DLL 与 
   version.json                     ← 产品版本唯一来源
   tools/
     make_updater.ps1               ← 构建脚本（随包，便于排查/重建）
+    deploy_updater.py              ← 启动器调用的部署脚本
     updater/
       PaperLibraryUpdater.exe      ← helper（绝不放在包根）
       helper.json                  ← 版本 + 大小 + SHA-256 元数据
 ```
 
 `release.py` 在打包时调用 `make_updater.ps1` 生成 helper，并把版本/SHA-256 写入
-`release-manifest.json` 的 `entry.updater`。`package_zip.py` 校验 zip 内
+`release-manifest.json` 的 `entry.updater`。`package_zip.py` 校验 zip 内部署脚本、
 `tools/updater/PaperLibraryUpdater.exe` 与 `helper.json` 都存在。
 
 ## 3. helper.json（构建产物）
@@ -80,6 +81,12 @@ Windows 无法可靠覆盖正在运行的 `PaperLibrary.exe`、WebView2 DLL 与 
 
 部署实现：`paperlib/update/helper.py`（`read_package_helper` / `deploy` /
 `deployed_helper`）；命令行入口 `tools/deploy_updater.py`。
+
+桌面启动器使用便携 Python 调用该部署脚本。普通启动在打开主界面前部署，更新验证启动在
+新版本提交成功后部署。启动器保留已通过哈希校验的较新版本 helper。安装预检发现包外
+helper 缺失或无效时重新尝试部署，再重新预检。
+恢复时优先使用当前有效的包外 helper，缺失或无效时尝试从当前程序目录部署。启动时部署
+失败会记入 `data/logs/launcher.log`，已通过启动检查的文献库仍可打开。
 
 部署规则：
 

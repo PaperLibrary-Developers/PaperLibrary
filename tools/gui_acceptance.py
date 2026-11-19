@@ -131,7 +131,6 @@ class Acceptance:
         self.port = 4321
         self.debug = 9231
         self.proc = None
-        self.helper = None
 
     def setup(self):
         shutil.copytree(self.package, self.program)
@@ -143,19 +142,21 @@ class Acceptance:
                                encoding="utf-8", errors="replace", timeout=180)
         if build.returncode != 0:
             raise RuntimeError("launcher build failed: " + (build.stdout or "") + (build.stderr or ""))
-        self.home.mkdir(parents=True)
-        hd = self.home / "1.7.1"; hd.mkdir(parents=True)
+        # Inject the fake into the bundle, then let the desktop launcher deploy it.
+        helper_dir = self.program / "tools" / "updater"
+        helper_dir.mkdir(parents=True, exist_ok=True)
         source = self.tmp / "FakeHelper.cs"
         source.write_text(FAKE_HELPER, encoding="utf-8-sig")
-        self.helper = hd / "PaperLibraryUpdater.exe"
-        build = subprocess.run([str(CSC), "/nologo", "/target:exe", "/out:" + str(self.helper), str(source)],
+        helper = helper_dir / "PaperLibraryUpdater.exe"
+        build = subprocess.run([str(CSC), "/nologo", "/target:exe", "/out:" + str(helper), str(source)],
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         if build.returncode != 0:
             raise RuntimeError("fake helper build failed: " + (build.stdout or "") + (build.stderr or ""))
-        sha = hashlib.sha256(self.helper.read_bytes()).hexdigest()
-        (self.home / "current.json").write_text(json.dumps({
-            "schema": 1, "product": "PaperLibrary", "version": "1.7.1",
-            "exe": "1.7.1/PaperLibraryUpdater.exe", "sha256": sha,
+        version = json.loads((self.program / "version.json").read_text(encoding="utf-8-sig"))
+        (helper_dir / "helper.json").write_text(json.dumps({
+            "schema": 1, "product": "PaperLibrary", "version": version["version"],
+            "tag": version["tag"], "exe": helper.name, "bytes": helper.stat().st_size,
+            "sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
         }), encoding="utf-8")
         self.out.mkdir(parents=True, exist_ok=True)
 

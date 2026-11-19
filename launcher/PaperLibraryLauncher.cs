@@ -181,7 +181,7 @@ class Launcher
             if (closing) return;
             if (!updateProbe && !HandleStartupDecision())
             {
-                if (!closing) form.Close();
+                if (!closing) CloseHost();
                 return;
             }
             bool ok = false;
@@ -191,7 +191,7 @@ class Launcher
             {
                 if (!updateProbe)
                     MessageBox.Show(failure, Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                form.Close();
+                CloseHost();
                 return;
             }
 
@@ -202,12 +202,15 @@ class Launcher
                 if (closing) return;
                 if (!committed)
                 {
-                    form.Close();
+                    CloseHost();
                     return;
                 }
             }
 
             SetLoading("正在打开文献库…");
+            // A candidate must not switch the shared helper before its update commits.
+            await Task.Run(delegate { TryDeployBundledHelper(); });
+            if (closing) return;
             CoreWebView2EnvironmentOptions options = null;
             if (!string.IsNullOrEmpty(debugPort))
             {
@@ -240,7 +243,7 @@ class Launcher
                 + ex.Message + "\r\n\r\n是否改用默认浏览器打开？";
             DialogResult answer = MessageBox.Show(message, Title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (answer == DialogResult.Yes) OpenBrowser();
-            form.Close();
+            CloseHost();
         }
     }
 
@@ -303,12 +306,16 @@ class Launcher
         }
     }
 
-    static bool StartServer(int probePid)
+    static string PythonExecutable()
     {
         string python = Path.Combine(BaseDir, "runtime", "portable", "python.exe");
         if (!File.Exists(python)) python = Path.Combine(BaseDir, "runtime", "portable", "pythonw.exe");
-        if (!File.Exists(python)) python = "python.exe";
+        return File.Exists(python) ? python : "python.exe";
+    }
 
+    static bool StartServer(int probePid)
+    {
+        string python = PythonExecutable();
         string args = "-m paperlib --port " + Port + " --no-open";
         if (probePid != 0)
             args += " --data-dir " + LauncherCore.QuoteArgument(Path.Combine(BaseDir, "data"));
@@ -527,7 +534,7 @@ class Launcher
             DialogResult answer = MessageBox.Show(decision.Message, Title,
                 MessageBoxButtons.YesNo, MessageBoxIcon.Information);
             if (answer != DialogResult.Yes) return true;
-            PrecheckResult pre = LauncherCore.Precheck(BaseDir, UpdaterHome);
+            PrecheckResult pre = PrecheckInstall();
             Log("startup install precheck: " + pre.Code + " ok=" + pre.Ok);
             if (!pre.Ok)
             {
@@ -535,10 +542,11 @@ class Launcher
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return true;
             }
-            InstallRequest request = new InstallRequest();
-            request.RequestId = "startup-" + DateTime.Now.Ticks.ToString();
-            request.Version = pre.Version;
-            if (StartInstall(request, pre)) return false;
+            string code;
+            string message;
+            if (StartInstall(pre, out code, out message)) return false;
+            MessageBox.Show("无法立即安装：\r\n" + message, Title,
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return true;
         }
         if (decision.Action == "notice-success" || decision.Action == "notice-failed")
@@ -551,11 +559,66 @@ class Launcher
         return true;
     }
 
+    static bool TryDeployBundledHelper()
+    {
+        string script = Path.Combine(BaseDir, "tools", "deploy_updater.py");
+        if (string.IsNullOrEmpty(UpdaterHome) || !File.Exists(script)) return false;
+
+        try
+        {
+            string args = LauncherCore.JoinArgs(new[] {
+                "-X", "utf8", "-B", script, "--home", UpdaterHome, "--preserve-newer", "--json"
+            });
+            ProcessStartInfo info = new ProcessStartInfo(PythonExecutable(), args);
+            info.WorkingDirectory = BaseDir;
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            info.StandardErrorEncoding = Encoding.UTF8;
+            using (Process process = Process.Start(info))
+            {
+                if (process == null) return false;
+                process.OutputDataReceived += delegate { };
+                process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                {
+                    if (e.Data != null) Log("helper deployment: " + e.Data);
+                };
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                if (!process.WaitForExit(5000))
+                {
+                    try { process.Kill(); } catch (InvalidOperationException) { }
+                    Log("helper deployment timed out");
+                    return false;
+                }
+                process.WaitForExit();
+                Log("helper deployment exit=" + process.ExitCode);
+                return process.ExitCode == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("helper deployment failed: " + ex.Message);
+            return false;
+        }
+    }
+
+    static PrecheckResult PrecheckInstall()
+    {
+        PrecheckResult pre = LauncherCore.Precheck(BaseDir, UpdaterHome);
+        if (!pre.Ok && pre.Code.StartsWith("helper-", StringComparison.Ordinal) && TryDeployBundledHelper())
+            return LauncherCore.Precheck(BaseDir, UpdaterHome);
+        return pre;
+    }
+
     static bool RunRecover(StartupDecision decision)
     {
         string code;
         string message;
         string helper = LauncherCore.FindHelper(UpdaterHome, out code, out message);
+        if (helper.Length == 0 && TryDeployBundledHelper())
+            helper = LauncherCore.FindHelper(UpdaterHome, out code, out message);
         if (helper.Length == 0)
         {
             Log("recover helper unavailable: " + code + " " + message);
@@ -640,11 +703,12 @@ class Launcher
         return false;
     }
 
-    static bool StartInstall(InstallRequest request, PrecheckResult pre)
+    static bool StartInstall(PrecheckResult pre, out string code, out string message)
     {
         if (installStarted)
         {
-            PostInstallResult(request.RequestId, false, "install-busy", "安装已经启动，请稍候");
+            code = "install-busy";
+            message = "安装已经启动，请稍候";
             return false;
         }
         string logPath = pre.LogPath;
@@ -653,13 +717,10 @@ class Launcher
             Process.GetCurrentProcess().Id, logPath);
         string commandLine = LauncherCore.JoinArgs(args);
         Log("install start: helper=" + pre.HelperPath + " args=" + commandLine);
-        string errorCode;
-        string errorMessage;
-        Process helper = StartHelper(pre.HelperPath, commandLine, out errorCode, out errorMessage);
+        Process helper = StartHelper(pre.HelperPath, commandLine, out code, out message);
         if (helper == null)
         {
-            Log("install helper start failed: " + errorCode + " " + errorMessage);
-            PostInstallResult(request.RequestId, false, errorCode, errorMessage);
+            Log("install helper start failed: " + code + " " + message);
             return false;
         }
         installStarted = true;
@@ -670,13 +731,13 @@ class Launcher
             Log("install aborted: service did not stop within 5s");
             installStarted = false;
             KillInstallHelper();
-            PostInstallResult(request.RequestId, false, "service-stop-timeout",
-                "服务在 5 秒内没有停止，安装已取消；窗口保持打开，可重试。");
+            code = "service-stop-timeout";
+            message = "服务在 5 秒内没有停止，安装已取消。";
             return false;
         }
         Log("install prepared: service stopped, closing launcher");
-        if (!string.IsNullOrEmpty(request.RequestId))
-            PostInstallResult(request.RequestId, true, "started", "安装已启动，应用即将关闭");
+        code = "started";
+        message = "安装已启动，应用即将关闭";
         ScheduleClose();
         return true;
     }
@@ -813,7 +874,7 @@ class Launcher
                 closeTimer = null;
             }
             catch (Exception) { }
-            try { form.Close(); } catch (Exception) { }
+            try { CloseHost(); } catch (Exception) { }
         };
         closeTimer.Start();
     }
@@ -852,7 +913,7 @@ class Launcher
             PostInstallResult(request.RequestId, false, "install-busy", "安装已经启动，请稍候");
             return;
         }
-        PrecheckResult pre = LauncherCore.Precheck(BaseDir, UpdaterHome);
+        PrecheckResult pre = PrecheckInstall();
         Log("install request " + request.RequestId + " version=" + request.Version
             + " precheck=" + pre.Code + " ok=" + pre.Ok);
         if (!pre.Ok)
@@ -860,7 +921,10 @@ class Launcher
             PostInstallResult(request.RequestId, false, pre.Code, pre.Message);
             return;
         }
-        StartInstall(request, pre);
+        string code;
+        string message;
+        bool started = StartInstall(pre, out code, out message);
+        PostInstallResult(request.RequestId, started, code, message);
     }
 
     static void PostInstallResult(string requestId, bool ok, string code, string message)
@@ -911,31 +975,56 @@ class Launcher
 
     static void OnClosing(object sender, FormClosingEventArgs e)
     {
+        HandleClosing(e, (message, buttons, icon, defaultButton) =>
+            MessageBox.Show(form, message, Title, buttons, icon, defaultButton));
+    }
+
+    internal delegate DialogResult ClosePrompt(string message, MessageBoxButtons buttons,
+        MessageBoxIcon icon, MessageBoxDefaultButton defaultButton);
+
+    internal static void HandleClosing(FormClosingEventArgs e, ClosePrompt showPrompt)
+    {
         if (closing) return;
-        if (!installStarted && HasPendingApply())
+        if (e.CloseReason == CloseReason.UserClosing && !installStarted && HasPendingApply())
         {
             e.Cancel = true;
-            Log("manual close with pending apply; asking user");
-            DialogResult answer = MessageBox.Show(
-                "有已准备好的更新，是否立即安装？\r\n\r\n"
-                + "点击「是」将立即关闭应用并安装，完成后自动重新打开；数据保留。\r\n"
-                + "点击「否」保持当前窗口，稍后再说。",
-                Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (answer != DialogResult.Yes) return;
-            PrecheckResult pre = LauncherCore.Precheck(BaseDir, UpdaterHome);
-            Log("manual close install precheck: " + pre.Code + " ok=" + pre.Ok);
-            if (!pre.Ok)
-            {
-                MessageBox.Show("无法立即安装：\r\n" + pre.Message, Title,
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            InstallRequest request = new InstallRequest();
-            request.RequestId = "manual-" + DateTime.Now.Ticks.ToString();
-            request.Version = pre.Version;
-            StartInstall(request, pre);
-            return;
+            if (!ConfirmCloseWithPendingApply(showPrompt)) return;
+            e.Cancel = false;
+            Log("manual close without installing pending update");
         }
+        ShutdownHost();
+    }
+
+    static bool ConfirmCloseWithPendingApply(ClosePrompt showPrompt)
+    {
+        Log("manual close with pending apply; asking user");
+        DialogResult answer = showPrompt(
+            "有已准备好的更新，是否在关闭时安装？\r\n\r\n"
+            + "「是」关闭并安装，完成后自动重新打开。\r\n"
+            + "「否」关闭应用，保留更新供稍后安装。\r\n"
+            + "「取消」保持当前窗口。",
+            MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button3);
+        if (answer != DialogResult.Yes) return answer == DialogResult.No;
+
+        PrecheckResult pre = PrecheckInstall();
+        Log("manual close install precheck: " + pre.Code + " ok=" + pre.Ok);
+        string code;
+        string message = pre.Message;
+        if (pre.Ok && StartInstall(pre, out code, out message)) return false;
+        return showPrompt("无法立即安装：\r\n" + message
+            + "\r\n\r\n是否仍然关闭应用并保留更新，稍后再安装？",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+    }
+
+    static void CloseHost()
+    {
+        if (closing) return;
+        ShutdownHost();
+        form.Close();
+    }
+
+    static void ShutdownHost()
+    {
         closing = true;
         Log("window closing");
         if (loading != null)

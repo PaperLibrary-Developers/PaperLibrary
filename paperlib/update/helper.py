@@ -158,8 +158,8 @@ def read_current(home=None) -> dict:
         version_mod.semver(version)
     except version_mod.VersionError:
         return {}
-    exe_rel = str(data.get("exe") or "").replace("\\", "/").strip()
-    if not exe_rel or exe_rel.startswith("/") or ".." in exe_rel.split("/"):
+    exe_rel = data.get("exe")
+    if not isinstance(exe_rel, str) or not exe_rel.strip() or Path(exe_rel).anchor or ".." in exe_rel:
         return {}
     return data
 
@@ -170,48 +170,55 @@ def deployed_helper(home=None) -> dict:
     data = read_current(home)
     if not data:
         return {}
-    path = home / Path(data["exe"])
-    if not is_within(home, path) or not path.is_file():
+    path = _verified_helper_path(home, data)
+    if path is None:
         return {}
-    if path.name != HELPER_EXE:
-        return {}
-    if sha256_file(path) != str(data.get("sha256") or ""):
-        return {}
-    result = dict(data)
-    result["helperPath"] = str(path)
-    return result
+    return dict(data, helperPath=str(path))
 
 
-def deploy(package_root, home=None, keep: int = DEFAULT_KEEP) -> dict:
+def _verified_helper_path(home: Path, record: dict) -> Path | None:
+    path = home / record["exe"]
+    if path.name == HELPER_EXE and is_within(home, path) and path.is_file():
+        try:
+            if sha256_file(path) == record.get("sha256"):
+                return path
+        except OSError:
+            pass
+    return None
+
+
+def deploy(package_root, home=None, keep: int = DEFAULT_KEEP, *, preserve_newer: bool = False) -> dict:
     """把包内 helper 部署到包外版本目录，并原子更新 current.json。
 
     幂等：当前版本与哈希一致时不再复制，返回 deployed=False。
     升级：新版本写入 <home>/<version>/，旧版本继续保留（previousVersion），
     运行中的旧 helper 不受影响。
+    preserve_newer：旧版桌面程序启动时保留已通过校验的新版 helper。
     """
     source = read_package_helper(package_root)
     home = Path(home) if home is not None else updater_home()
     ensure_dir(home)
 
+    version = source["version"]
     current = read_current(home)
-    if (current
-            and current.get("version") == source["version"]
-            and current.get("sha256") == source["sha256"]):
-        existing = home / Path(current["exe"])
-        if existing.is_file() and sha256_file(existing) == source["sha256"]:
+    if current:
+        current_version = current["version"]
+        same = current_version == version and current.get("sha256") == source["sha256"]
+        newer = preserve_newer and version_mod.semver(current_version) > version_mod.semver(version)
+        existing = _verified_helper_path(home, current) if same or newer else None
+        if existing is not None:
             return {
                 "deployed": False,
-                "reason": "current",
-                "version": source["version"],
-                "tag": source["tag"],
-                "sha256": source["sha256"],
-                "bytes": source["bytes"],
+                "reason": "newer-current" if newer else "current",
+                "version": current_version,
+                "tag": version_mod.ui_label(current_version),
+                "sha256": current["sha256"],
+                "bytes": existing.stat().st_size,
                 "helperPath": str(existing),
                 "updaterHome": str(home),
                 "previousVersion": str(current.get("previousVersion") or ""),
             }
 
-    version = source["version"]
     target_dir = home / version
     if not is_within(home, target_dir):
         raise HelperError("unsafe-version", "helper 版本目录越界：%s" % target_dir)

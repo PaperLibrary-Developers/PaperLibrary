@@ -231,6 +231,29 @@ class DeployCliTest(unittest.TestCase):
         record = json.loads(proc.stdout)
         self.assertTrue(record["deployed"])
         self.assertEqual(record["version"], "1.7.1")
+        self.assertEqual(Path(record["helperPath"]), self.home / "1.7.1" / helper.HELPER_EXE)
+        self.assertEqual(helper.deployed_helper(self.home)["sha256"], record["sha256"])
+
+    def test_launcher_deployment_preserves_newer_only_if_valid(self):
+        old = make_package(self.dir / "old")
+        new = make_package(self.dir / "new", version="1.7.2", exe_bytes=b"MZ newer helper")
+        helper.deploy(new, home=self.home)
+        current = self.home / helper.CURRENT_FILE
+        before = current.read_bytes()
+        args = ("--package-root", str(old), "--home", str(self.home), "--preserve-newer", "--json")
+
+        proc = self.run_cli(*args)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["deployed"], result["version"], result["reason"]),
+                         (False, "1.7.2", "newer-current"))
+        self.assertEqual(current.read_bytes(), before)
+
+        Path(result["helperPath"]).write_bytes(b"tampered")
+        proc = self.run_cli(*args)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(json.loads(proc.stdout)["deployed"])
+        self.assertEqual(helper.deployed_helper(self.home)["version"], "1.7.1")
 
     def test_deploy_cli_missing_helper(self):
         pkg = self.dir / "empty"

@@ -87,7 +87,8 @@ def main(argv=None):
         "paperlib/data/store.py": "paperlib/data/store.py" in names,
         "public/index.html": "public/index.html" in names,
         "runtime/portable/python.exe": "runtime/portable/python.exe" in names,
-        # 包外更新助手（P2-12）：随包分发到 tools/updater/，绝不在包根
+        # 启动器从包内脚本和元数据部署助手，再从包外运行。
+        "tools/deploy_updater.py": "tools/deploy_updater.py" in names,
         "tools/updater/PaperLibraryUpdater.exe": "tools/updater/PaperLibraryUpdater.exe" in names,
         "tools/updater/helper.json": "tools/updater/helper.json" in names,
     }

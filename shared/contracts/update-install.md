@@ -239,7 +239,8 @@ UI 确认后，启动器执行：
    进入 `install` 等待/备份/替换/健康检查；
 5. helper 启动失败/预检失败 → UI `ok:false`，窗口保持；服务 5 秒未停止 → 终止本次 helper，
    UI `ok:false, code=service-stop-timeout`，窗口保持；
-6. 手动关窗且存在 pending apply 时走同一路径；无 pending 时行为不变；
+6. 手动关窗且存在 pending apply 时，用户可安装后关闭、保留更新并关闭，或取消关窗；
+   安装启动失败后也可保留更新并关闭。无 pending 时直接关闭；
 7. 启动器 Mutex 贯穿；helper 创建 `data/updates/install.lock`，双开被 Mutex/锁拦截。
 
 ## 9. 安装期文件占用重试（P2-18，已冻结）

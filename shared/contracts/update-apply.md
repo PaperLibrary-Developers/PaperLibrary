@@ -132,8 +132,10 @@ P2-18 完整版新增磁盘估算：zip + staging + 程序备份 + data(不含 u
    - 成功 → 回 `ok:true, code=started`，300ms 后关闭启动器；helper 等待启动器退出后继续；
    - 5 秒未停止 → 杀掉本次 helper，回 `ok:false, code=service-stop-timeout`，
      窗口保持、服务不静默关闭；
-4. 手动关窗且存在 pending `apply.json` → 同一“确认→预检→启动 helper→停服务→关闭”路径；
-   无 pending 时保持原有直接关闭行为；
+4. 用户手动关窗且存在 pending `apply.json` 时，可以选择关闭并安装、关闭并保留更新，或取消关窗。
+   如果选择安装后预检或启动安装失败，启动器提示错误，并允许用户仍然关闭并保留更新。
+   关闭并保留更新时走常规服务退出流程，`apply.json` 与 staging 留待下次安装；
+   无 pending 时直接关闭；
 5. 启动器 Mutex 保持；helper 持有 `install.lock`，双开被 Mutex/锁拦截。
 
 ## 9. 安全边界

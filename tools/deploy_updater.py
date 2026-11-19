@@ -30,13 +30,15 @@ def main(argv=None):
                         help="包外 helper 根目录（默认 %%LOCALAPPDATA%%\\PaperLibrary\\updater）")
     parser.add_argument("--keep", type=int, default=helper_mod.DEFAULT_KEEP,
                         help="保留的 helper 版本目录数（至少保留当前与上一版本）")
+    parser.add_argument("--preserve-newer", action="store_true",
+                        help="保留已校验通过的更新版本 helper")
     parser.add_argument("--json", action="store_true", help="只输出 JSON 记录")
     args = parser.parse_args(argv)
 
     try:
         result = helper_mod.deploy(args.package_root,
                                    home=(args.home or None),
-                                   keep=args.keep)
+                                   keep=args.keep, preserve_newer=args.preserve_newer)
     except helper_mod.HelperError as exc:
         print("[deploy-updater] %s: %s" % (exc.code, exc.message), file=sys.stderr)
         return 1
