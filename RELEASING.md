@@ -92,6 +92,14 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 ## 5. 当前状态（2026-11-20）
 
+- **v1.8.4 已发布**（tag `v1.8.4`（annotated `4dedec0a`）→ **`853eaa17`**，文献总结与问答改为一次发送全文、默认输出上限 128000）：
+  - zip `PaperLibrary.v1.8.4.Nexus.zip` 43,498,053 字节，sha256 `9cc248a81274a44b65fae2604fe8c99f8ad4402fe28bcd2062d2f1173cbfa044`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.4.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、匿名下载、字节数与 SHA-256、zip 无 `data/`、含 `PaperLibrary.exe`）。
+  - 发布前验证：Python 全量 **733 项 / 1 跳过 / 0 失败**；Node **15 项**；API 契约 **61 通过 / 0 失败 / 13 跳过**；
+    `tools/check_windows.ps1` 完整模式通过（仓库外重建运行时 → 733 项 → Node → 契约 → 打包 763 文件 → 解包后再跑契约 61/0/13）；
+    打 tag 后复跑 `test_update_publish` **8 项全通过、0 跳过**（发布窗口期内该分支按设计跳过，不当作通过）。
+  - 本版内容：`3a9446a4`（总结与问答共享全文前缀）+ `02f43a5c`（单次发送全文、移除分段提炼/缓存/复查、默认 `max_tokens` 128000）。
 - **v1.8.3 已发布**（tag `v1.8.3`（annotated `e2761477`）→ **`488fe078`**，更新助手自动部署、安装失败后关窗、更新验证窗口 launchedPid 回填判定修复）：
   - zip `PaperLibrary.v1.8.3.Nexus.zip` 43,501,773 字节，sha256 `075a45c8b2d09bfa1ac6236442792137796025e402456c3b8473cddceb6afb9c`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.3.json`；
