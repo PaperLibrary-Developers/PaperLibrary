@@ -16,6 +16,7 @@ __pycache__/
 /archive/
 /.archify/
 /.workbuddy/
+/.codex-attachments/
 HANDOFF.md
 
 # 本机密钥（更新签名私钥等）绝不入库
