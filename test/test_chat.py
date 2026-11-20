@@ -174,7 +174,8 @@ class ChatStreamTests(AiTestBase):
         self.assertIn("正文", messages[1]["sources"])
         # 资料包确实进了 system 消息，问题在最后一条 user 消息里
         sent = self.fake.server.last_body["messages"]
-        self.assertIn("资料包如下", sent[1]["content"])
+        self.assertIn("正文内容", sent[0]["content"])
+        self.assertTrue(any("资料包如下" in message["content"] for message in sent[:-1]))
         self.assertEqual(sent[-1], {"role": "user", "content": "讲了什么"})
 
     def test_history_is_sent_to_model(self):

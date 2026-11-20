@@ -244,7 +244,7 @@ def build_chat_context(services, paper, question, options=None):
 
     # 2. 正文 / 3. 补充材料（SI）：默认按旧版「按问题挑片段」；全文模式由 chat_stream
     #    调用 fullread 单独组装（includePaper=False），避免这里再截一次。
-    body_text = services.fulltext.read(paper_id) or ""
+    body_text = (services.fulltext.read(paper_id) or "") if include_paper else ""
     if include_paper:
         body_budget = services.prefs.limit("chatBodyChars")
         if body_text:
@@ -363,52 +363,74 @@ CHAT_MAP_SYSTEM = (
     "逐条简短列出并标明依据；若本片段与问题无关，只输出「无相关内容」。"
     "不要回答完整问题，不要推测，不要编造。"
 )
+VERIFY_MARKER = "[[READ_FULLTEXT]]"
+VERIFY_INSTRUCTION = (
+    "若需要正文或补充材料支持，但现有资料不足以核实用户问到的细节，"
+    "只输出 " + VERIFY_MARKER + " 以请求原文复查。若已有证据，直接回答。"
+)
+EVIDENCE_TOTAL_CHARS = 9000
+EVIDENCE_PART_CHARS = 3500
 
 
-def _chat_map_user(paper, question, chunk, index, total):
-    return (
-        "论文标题：" + str(paper.get("title") or "（无）")
-        + "\n片段来源：" + str(chunk.get("label") or "")
-        + "（第 %d/%d 段）" % (index, total)
-        + "\n\n" + str(chunk.get("text") or "")
-        + "\n\n用户问题：" + str(question or "")
-    )
-
-
-def _chat_material_section(services, paper, question, prepared, emit=None):
-    """返回 (section, sources, coverage)：全文直接送入，超长时分段提炼后汇总。"""
-    coverage = prepared["coverage"]
-    if not prepared["totalChars"]:
-        return "", [], coverage
-    sources = []
-    for material in prepared["materials"]:
-        label = "正文" if material["kind"] == "body" else ("SI:" + str(material["name"]))
-        if label not in sources:
-            sources.append(label)
-    if prepared["mode"] == "direct":
-        section = ("===== 文献全文（正文 + 全部 SI，未截断）=====\n"
-                   + fullread.coverage_text(coverage) + "\n\n"
-                   + fullread.direct_text(prepared))
-        return section, sources, coverage
-
-    def progress(index, count, chunk):
-        if emit:
-            emit({"type": "progress", "stage": "map", "done": index - 1,
-                  "total": count, "label": chunk.get("label")})
-
+def _verify_fulltext(services, paper, query, prepared, emit):
     notes = fullread.map_chunks(
         services.llm, prepared["chunks"], CHAT_MAP_SYSTEM,
-        lambda chunk, index, count: _chat_map_user(paper, question, chunk, index, count),
-        on_progress=progress,
+        lambda chunk, _index, _total: fullread.chunk_message(paper, chunk)
+        + "\n\n" + query,
+        on_progress=fullread.map_progress(emit, "verify"),
     )
-    coverage["processedChunks"] = len(notes)
-    section = ("===== 全文分段证据（覆盖正文与全部 SI）=====\n"
-               + fullread.coverage_text(coverage) + "\n\n"
-               + "\n\n".join("[" + str(n["label"]) + "]\n" + n["text"] for n in notes))
-    if emit:
-        emit({"type": "progress", "stage": "map", "done": len(notes),
-              "total": len(notes), "label": ""})
-    return section, sources, coverage
+    return "===== 全文复查证据（覆盖正文与全部可读取的 SI）=====\n" + fullread.format_notes(notes)
+
+
+def _question_evidence(services, materials, question):
+    """在所有材料上找锚点和关键词，取有限原文供模型核对。"""
+    def relevance(material):
+        hits, anchors = _find_hits(material["text"], question)
+        return anchors, len(hits)
+
+    sources = sorted(materials, key=relevance, reverse=True)
+    parts = []
+    remaining = EVIDENCE_TOTAL_CHARS
+    for material in sources:
+        if remaining < 1000:
+            break
+        budget = min(EVIDENCE_PART_CHARS, remaining)
+        excerpts = pick_passages(services, material["text"], question, budget, 450, 750)["text"]
+        if excerpts:
+            parts.append("[" + material["name"] + "]\n" + excerpts[:budget])
+            remaining -= min(len(excerpts), budget)
+    return "\n\n".join(parts)
+
+
+def _answer_with_shared_notes(llm, messages, on_delta):
+    """在识别内部复查信号前缓冲极短的响应前缀。"""
+    pending = ""
+    decided = False
+    verify = False
+
+    def receive(chunk):
+        nonlocal pending, decided, verify
+        if decided:
+            if not verify:
+                on_delta(chunk)
+            return
+        pending += chunk
+        prefix = pending.lstrip()
+        if len(prefix) < len(VERIFY_MARKER) and VERIFY_MARKER.startswith(prefix) and len(pending) < 64:
+            return
+        decided = True
+        verify = prefix.startswith(VERIFY_MARKER)
+        if not verify:
+            on_delta(pending)
+        pending = ""
+
+    result = llm.chat_stream(receive, {"messages": messages})
+    text = str((result or {}).get("text") or "").lstrip()
+    if verify or text.startswith(VERIFY_MARKER):
+        return None
+    if pending:
+        on_delta(pending)
+    return result or {}
 
 
 def chat_stream(services, paper, body, stream):
@@ -463,20 +485,39 @@ def chat_stream(services, paper, body, stream):
         send({"type": "delta", "text": chunk})
 
     try:
-        section, _paper_sources, coverage = _chat_material_section(
-            services, paper, question, prepared, emit=send)
+        reference = fullread.paper_reference(services, paper, prepared, emit=send)
         context = built["context"]
-        if section:
-            context = context + "\n\n" + section
-        messages = [
+        summary = str(fresh.get("aiSummary") or "").strip()
+        if summary:
+            context += ("\n\n===== 已有 AI 总结（仅供参考，以原文为准）=====\n" + summary[:6000])
+        shared_notes = prepared["mode"] == "map-reduce"
+        if shared_notes:
+            earlier = [str(msg.get("content") or "")[:500] for msg in history if msg.get("role") == "user"]
+            query = question + "\n" + "\n".join(earlier[-2:])
+            excerpts = _question_evidence(services, prepared["materials"], query)
+            context += "\n\n===== 可核对的原文片段 =====\n" + excerpts
+        messages = [reference] if reference else []
+        task_index = len(messages)
+        messages.extend([
             {"role": "system", "content": CHAT_SYSTEM_PROMPT},
             {"role": "system", "content": "资料包如下：\n\n" + context},
-        ]
+        ])
         for message in history:
             messages.append({"role": message.get("role") or "user",
                              "content": str(message.get("content") or "")})
         messages.append({"role": "user", "content": question})
-        result = llm.chat_stream(on_delta, {"messages": messages})
+        if shared_notes:
+            fast = list(messages)
+            fast[task_index] = {"role": "system", "content": CHAT_SYSTEM_PROMPT + "\n" + VERIFY_INSTRUCTION}
+            result = _answer_with_shared_notes(llm, fast, on_delta)
+            if result is None:
+                verify_query = ("本轮问题：" + question
+                                + ("\n最近提问线索：" + "\n".join(earlier[-2:]) if earlier else ""))
+                evidence = _verify_fulltext(services, paper, verify_query, prepared, send)
+                messages.insert(task_index + 2, {"role": "system", "content": evidence})
+                result = llm.chat_stream(on_delta, {"messages": messages})
+        else:
+            result = llm.chat_stream(on_delta, {"messages": messages})
         answer = str((result or {}).get("text") or "".join(collected)).strip()
         if answer:
             _append_chat(services, paper, [{

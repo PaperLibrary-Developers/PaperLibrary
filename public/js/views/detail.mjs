@@ -1065,7 +1065,7 @@ import * as foldersUi from '../folders.mjs'
             const fr = coverage
             if (fr && fr.totalChars) {
               const miss = fr.missing && fr.missing.length ? `；⚠ ${fr.missing.length} 个 SI 未提取到文字` : ''
-              aiStatus.textContent = `已读入全文：正文 ${fr.bodyChars} 字 + SI ${fr.siChars} 字（${fr.attachCount} 个文件）${fr.mode === 'map-reduce' ? `，分 ${fr.chunks} 段处理` : '，单次完整送入'}${miss}；模型 ${info.model} 正在生成…`
+              aiStatus.textContent = `全文资料：正文 ${fr.bodyChars} 字 + SI ${fr.siChars} 字（${fr.attachCount} 个文件）${miss}；模型 ${info.model} 正在生成…`
             } else if (info.usedFulltext) {
               aiStatus.textContent = `已读入 ${info.chars} 字正文，模型 ${info.model} 正在生成…`
             } else {
@@ -1075,7 +1075,9 @@ import * as foldersUi from '../folders.mjs'
           onProgress: info => {
             if (isStale()) return
             if (coverage && coverage.mode === 'map-reduce') {
-              aiStatus.textContent = `正在读取全文（${info.done || 0}/${info.total || coverage.chunks} 段）…`
+              aiStatus.textContent = info.done === info.total
+                ? '全文资料已就绪，模型正在生成…'
+                : `正在提炼全文资料（${info.done || 0}/${info.total || coverage.chunks} 段）…`
             }
           },
           onDelta: chunk => {
@@ -1384,7 +1386,7 @@ import * as foldersUi from '../folders.mjs'
             chatStatus.textContent = pics.length
               ? ('已发送 ' + pics.length + ' 张图，模型 ' + (info.model || '') + ' 正在回答…')
               : (fr && fr.totalChars
-                  ? `已读入全文：正文 ${fr.bodyChars} 字 + SI ${fr.siChars} 字（${fr.attachCount} 个文件）${fr.mode === 'map-reduce' ? `，分 ${fr.chunks} 段检索` : ''}${fr.missing && fr.missing.length ? `；⚠ ${fr.missing.length} 个 SI 未提取到文字` : ''}；模型 ${info.model || ''} 正在回答…`
+                  ? `正在依据${fr.mode === 'map-reduce' ? '全文提炼和相关原文' : '正文与 SI 全文'}回答${fr.missing && fr.missing.length ? `；⚠ ${fr.missing.length} 个 SI 未提取到文字` : ''}…`
                   : ('资料来源：' + ((info.sources || []).join('、') || '题录')))
             if (info.autoExtract && info.autoExtract.ok) {
               ftReady = true
@@ -1394,7 +1396,10 @@ import * as foldersUi from '../folders.mjs'
           onProgress: info => {
             if (isStale()) return
             if (!pics.length && coverage && coverage.mode === 'map-reduce') {
-              chatStatus.textContent = `正在读取全文（${info.done || 0}/${info.total || coverage.chunks} 段）…`
+              const action = info.stage === 'verify' ? '复查原文' : '提炼全文资料'
+              chatStatus.textContent = info.done === info.total
+                ? '文献资料已就绪，模型正在回答…'
+                : `正在${action}（${info.done || 0}/${info.total || coverage.chunks} 段）…`
             }
           },
           onDelta: chunk => {
@@ -1416,7 +1421,7 @@ import * as foldersUi from '../folders.mjs'
         }
         if (isStale()) return
         chatStatus.textContent = coverage && coverage.totalChars
-          ? '已基于正文与 SI 全文回答，并保存到对话历史'
+          ? '已依据文献资料回答，并保存到对话历史'
           : '已保存到这篇文献的对话历史'
         chatStatus.style.color = 'var(--accent-text)'
         await refreshChat()

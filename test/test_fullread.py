@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, Event, Lock
 from unittest import mock
 
 from paperlib.api import ai as ai_api
@@ -30,6 +32,7 @@ class RecordingLLM:
         self.answer = answer
         self.chat_calls = []
         self.stream_calls = []
+        self._chat_lock = Lock()
 
     def readiness(self):
         return {"ready": True, "reason": ""}
@@ -39,8 +42,9 @@ class RecordingLLM:
                 + str(label) + "=====\n" + str(excerpt))
 
     def chat(self, messages=None, options=None):
-        self.chat_calls.append(list(messages or []))
-        return {"text": "要点 %d" % len(self.chat_calls)}
+        with self._chat_lock:
+            self.chat_calls.append(list(messages or []))
+            return {"text": "要点 %d" % len(self.chat_calls)}
 
     def chat_stream(self, on_delta=None, options=None):
         return self.stream(on_delta, options)
@@ -87,6 +91,55 @@ class FullReadMaterialTests(AiTestBase):
         self.assertEqual(collected["siChars"], len("从 SI 重新抽出的文本" * 3))
         self.assertIn("从 SI 重新抽出的文本", collected["materials"][0]["text"])
 
+    def test_parallel_map_keeps_document_order(self):
+        ready = Barrier(3, timeout=5)
+        release_first = Event()
+
+        class OutOfOrderLLM:
+            def chat(self, messages, options):
+                name = messages[-1]["content"]
+                ready.wait()
+                if name == "A":
+                    if not release_first.wait(5):
+                        raise AssertionError("B has to be processed before A")
+                return {"text": name}
+
+        processed = []
+
+        def progress(done, total, chunk):
+            if chunk:
+                processed.append(chunk["label"])
+                if chunk["label"] == "B":
+                    release_first.set()
+
+        chunks = [{"label": name} for name in ("A", "B", "C")]
+        notes = fullread.map_chunks(OutOfOrderLLM(), chunks, "system",
+                                    lambda chunk, *_: chunk["label"], on_progress=progress)
+        self.assertEqual([n["text"] for n in notes], ["A", "B", "C"])
+        self.assertLess(processed.index("B"), processed.index("A"))
+
+    def test_cache_shares_concurrent_build_and_recovers_after_error(self):
+        cache = fullread.PaperContextCache()
+        with self.assertRaisesRegex(RuntimeError, "temporary"):
+            cache.get_or_build("paper", mock.Mock(side_effect=RuntimeError("temporary")))
+        started = Event()
+        release = Event()
+
+        def build():
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("timed out waiting for concurrent reader")
+            return ["notes"]
+
+        other = mock.Mock(side_effect=AssertionError("duplicate build"))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(cache.get_or_build, "paper", build)
+            self.assertTrue(started.wait(5))
+            second = pool.submit(cache.get_or_build, "paper", other)
+            release.set()
+            self.assertIs(first.result(timeout=5), second.result(timeout=5))
+        other.assert_not_called()
+
 
 class FullReadSummaryTests(AiTestBase):
     def _paper(self, services, body="BODY-" * 100, si="SI-" * 100):
@@ -110,10 +163,10 @@ class FullReadSummaryTests(AiTestBase):
         self.assertEqual(start["fullRead"]["siChars"], 300)
         self.assertEqual(start["fullRead"]["totalChars"], 800)
         self.assertEqual(start["fullRead"]["processedChunks"], 1)
-        final_user = llm.stream_calls[-1][-1]["content"]
-        self.assertIn("BODY-" * 100, final_user)
-        self.assertIn("SI-" * 100, final_user)
-        self.assertIn("全文（正文 + 全部补充材料 SI，未截断）", final_user)
+        final_reference = llm.stream_calls[-1][0]["content"]
+        self.assertIn("BODY-" * 100, final_reference)
+        self.assertIn("SI-" * 100, final_reference)
+        self.assertIn("全文（正文 + 全部补充材料 SI，未截断）", final_reference)
         done = frames[-1]
         self.assertEqual(done["fullRead"]["totalChars"], 800)
 
@@ -140,6 +193,7 @@ class FullReadSummaryTests(AiTestBase):
 
     def test_map_budget_covers_reasoning_models(self):
         self.assertGreaterEqual(fullread.MAP_MAX_TOKENS, 2000)
+        self.assertGreaterEqual(fullread.PAPER_NOTES_MAX_TOKENS, 4000)
 
     def test_map_retries_with_larger_budget_when_truncated(self):
         """第一次因 finish_reason=length 空回复时，第二次要用更大预算重试。"""
@@ -184,9 +238,9 @@ class FullReadSummaryTests(AiTestBase):
             for piece in fullread.split_text(material["text"], 100):
                 self.assertIn(piece, map_text)
         # 最终汇总收到所有分段的提炼结果
-        final_user = llm.stream_calls[-1][-1]["content"]
+        final_reference = llm.stream_calls[-1][0]["content"]
         for index in range(1, chunks + 1):
-            self.assertIn("要点 %d" % index, final_user)
+            self.assertIn("要点 %d" % index, final_reference)
 
 
 class FullReadChatTests(AiTestBase):
@@ -202,6 +256,8 @@ class FullReadChatTests(AiTestBase):
         paper = self._paper(services)
         llm = RecordingLLM("答案")
         services.llm = llm
+        ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(FakeCtx(services)))
+        summary = llm.stream_calls[-1]
         ctx = FakeCtx(services)
         chat_domain.chat_stream(services, paper, {"question": "方法是什么？"},
                                 chat_api.StreamOpener(ctx))
@@ -212,37 +268,80 @@ class FullReadChatTests(AiTestBase):
         self.assertIn("正文", frames[0]["sources"])
         self.assertIn("SI:SI.pdf", frames[0]["sources"])
         sent = llm.stream_calls[-1]
-        context = sent[1]["content"]
+        self.assertEqual(sent[0], summary[0])
+        context = sent[0]["content"]
         self.assertIn("BODY-" * 100, context)
         self.assertIn("SI-" * 100, context)
         self.assertEqual(sent[-1], {"role": "user", "content": "方法是什么？"})
 
-    def test_map_reduce_searches_every_chunk_with_question(self):
+    def test_map_reduce_reuses_shared_notes_and_refreshes_after_changes(self):
         services = self.make_services(api_key="sk-test")
         paper = self._paper(services, body="正文内容" * 60, si="补充材料" * 60)
         llm = RecordingLLM("基于全文的答案")
         services.llm = llm
         with mock.patch.object(fullread, "DIRECT_LIMIT", 100), \
                 mock.patch.object(fullread, "CHUNK_CHARS", 100):
-            ctx = FakeCtx(services)
-            chat_domain.chat_stream(services, paper, {"question": "实验条件是什么？"},
-                                    chat_api.StreamOpener(ctx))
+            def ask(question):
+                ctx = FakeCtx(services)
+                chat_domain.chat_stream(services, paper, {"question": question}, chat_api.StreamOpener(ctx))
+                return ctx.frames()
+
+            first = ask("实验条件是什么？")
+            chunks = first[0]["fullRead"]["chunks"]
+            self.assertGreater(chunks, 1)
+            self.assertEqual(len(llm.chat_calls), chunks)
+            self.assertEqual(first[-1]["fullRead"]["processedChunks"], chunks)
+            self.assertEqual(first[-1]["text"], "基于全文的答案")
+            reference = llm.stream_calls[-1][0]
+            self.assertIn("全文分段提炼", reference["content"])
+            self.assertIn("可核对的原文片段", llm.stream_calls[-1][2]["content"])
+            ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(FakeCtx(services)))
+            self.assertEqual(llm.stream_calls[-1][0], reference)
+            ask("关注补充材料")
+            self.assertEqual(llm.stream_calls[-1][0], reference)
+            self.assertEqual(len(llm.chat_calls), chunks)
+            self.assertIn("已有 AI 总结", llm.stream_calls[-1][2]["content"])
+            self.assertTrue(all("实验条件是什么？" not in call[-1]["content"] for call in llm.chat_calls))
+
+            services.db.set_text("att-si.pdf", "有变化的补充材料" * 60)
+            ask("更新后的结果是什么？")
+            self.assertGreater(len(llm.chat_calls), chunks)
+            self.assertTrue(any("有变化的补充材料" in call[-1]["content"] for call in llm.chat_calls[chunks:]))
+            calls = len(llm.chat_calls)
+            llm.settings["model"] = "another-model"
+            ask("变化在哪里？")
+            self.assertGreater(len(llm.chat_calls), calls)
+
+    def test_request_for_more_evidence_rechecks_every_chunk_without_leaking_marker(self):
+        services = self.make_services(api_key="sk-test")
+        paper = self._paper(services, body="正文数据" * 45, si="不同的 SI 条件" * 35)
+
+        class EvidenceLLM(RecordingLLM):
+            def chat_stream(self, on_delta=None, options=None):
+                messages = options["messages"]
+                if chat_domain.VERIFY_MARKER in messages[1]["content"]:
+                    self.stream_calls.append(messages)
+                    on_delta("[[READ")
+                    on_delta("_FULLTEXT]]")
+                    return {"text": chat_domain.VERIFY_MARKER}
+                return super().chat_stream(on_delta, options)
+
+        llm = EvidenceLLM("原文复查结果")
+        services.llm = llm
+        ctx = FakeCtx(services)
+        question = "详细实验条件？"
+        with mock.patch.object(fullread, "DIRECT_LIMIT", 100), \
+                mock.patch.object(fullread, "CHUNK_CHARS", 100):
+            chat_domain.chat_stream(services, paper, {"question": question}, chat_api.StreamOpener(ctx))
         frames = ctx.frames()
-        chunks = frames[0]["fullRead"]["chunks"]
-        self.assertGreater(chunks, 1)
-        self.assertEqual(len(llm.chat_calls), chunks)
-        self.assertEqual(frames[-1]["fullRead"]["processedChunks"], chunks)
-        map_text = "\n".join(call[-1]["content"] for call in llm.chat_calls)
-        self.assertIn("实验条件是什么？", map_text)
-        materials = fullread.collect_materials(services, paper)["materials"]
-        for material in materials:
-            for piece in fullread.split_text(material["text"], 100):
-                self.assertIn(piece, map_text)
-        final_context = llm.stream_calls[-1][1]["content"]
-        self.assertIn("全文分段证据", final_context)
-        for index in range(1, chunks + 1):
-            self.assertIn("要点 %d" % index, final_context)
-        self.assertEqual(frames[-1]["text"], "基于全文的答案")
+        count = frames[0]["fullRead"]["chunks"]
+        self.assertEqual(len(llm.chat_calls), 2 * count)
+        self.assertTrue(all(question in call[-1]["content"] for call in llm.chat_calls[count:]))
+        self.assertIn("全文复查证据", llm.stream_calls[-1][3]["content"])
+        self.assertEqual([f["text"] for f in frames if f["type"] == "delta"], ["原文复查结果"])
+        self.assertTrue(any(f.get("stage") == "verify" for f in frames))
+        self.assertEqual(frames[-1]["text"], "原文复查结果")
+        self.assertEqual(len(services.library.get(paper["id"])["chat"]), 2)
 
 
 if __name__ == "__main__":

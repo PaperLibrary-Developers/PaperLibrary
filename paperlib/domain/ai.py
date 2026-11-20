@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 
-from paperlib.adapters.llm import strip_echoed_material
+from paperlib.adapters.llm import paper_metadata, strip_echoed_material
 from paperlib.domain import fullread
 from paperlib.util import now_iso
 
@@ -107,28 +107,6 @@ def _meta_line(paper):
 
 
 # ---------------------------------------------------------------- 全文总结
-SUMMARY_MAP_SYSTEM = (
-    "你是严谨的学术助手。下面给你同一篇论文（正文或补充材料 SI）的一个片段。"
-    "请提炼这个片段中可用于撰写中文总结的事实：研究问题、方法、关键实验条件与数据"
-    "（数字与单位照抄）、结论、局限。只依据本片段，不要编造；"
-    "本片段没有有用信息时只输出「本段无有效信息」。"
-)
-
-SUMMARY_FULL_NOTE = (
-    "【本次输入】下面不是节选：正文与全部补充材料（SI）已完整读入；"
-    "超过单次上下文的部分已按段提炼并汇总，覆盖全文。不要声称内容被截断。"
-)
-
-
-def _summary_map_user(paper, chunk, index, total):
-    return (
-        "论文标题：" + str(paper.get("title") or "（无）")
-        + "\n片段来源：" + str(chunk.get("label") or "")
-        + "（第 %d/%d 段）" % (index, total)
-        + "\n\n" + str(chunk.get("text") or "")
-    )
-
-
 def _summary_prepare(services, paper, use_fulltext):
     if not use_fulltext:
         coverage = {
@@ -163,46 +141,15 @@ def _run_summary(services, paper, options, emit=None, on_delta=None, auto_extrac
               "usedFulltext": bool(total), "chars": total,
               "autoExtract": auto_extract, "fullRead": coverage})
 
-    if total:
-        if prepared["mode"] == "direct":
-            material = fullread.direct_text(prepared)
-            label = "全文（正文 + 全部补充材料 SI，未截断）"
-        else:
-            def progress(index, count, chunk):
-                if emit:
-                    emit({"type": "progress", "stage": "map", "done": index - 1,
-                          "total": count, "label": chunk.get("label")})
-
-            notes = fullread.map_chunks(
-                llm, prepared["chunks"], SUMMARY_MAP_SYSTEM,
-                lambda chunk, index, count: _summary_map_user(paper, chunk, index, count),
-                on_progress=progress,
-            )
-            coverage["processedChunks"] = len(notes)
-            material = ("【全文分段提炼，覆盖正文与全部 SI】\n\n"
-                        + "\n\n".join("[" + str(n["label"]) + "]\n" + n["text"] for n in notes))
-            label = "全文分段提炼（覆盖正文与全部补充材料 SI）"
-            if emit:
-                emit({"type": "progress", "stage": "map", "done": len(notes),
-                      "total": len(notes), "label": ""})
-    else:
-        material = ""
-        label = ""
-
+    reference = fullread.paper_reference(services, paper, prepared, emit)
     system = str(llm.settings.get("promptTemplate") or "")
-    if material:
-        note = SUMMARY_FULL_NOTE
-        missing = coverage.get("missing") or []
-        if missing:
-            note += "\n注意：以下 SI 没有提取到文字，无法阅读：" + "、".join(missing)
-        system = system + ("\n\n" if system else "") + note
-    user = (llm.build_user_message(paper, material, label=label) if material
-            else llm.build_user_message(paper, ""))
+    messages = [reference] if reference else []
+    messages.append({"role": "system", "content": system})
+    user = (paper_metadata(paper) + "\n\n请依据上面的文献资料和本条题录生成总结。"
+            if reference else llm.build_user_message(paper, ""))
+    messages.append({"role": "user", "content": user})
     result = llm.stream(on_delta, {
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         # 总结比翻译长得多；给足输出预算，避免思考型模型把预算用光后截断/空回复。
         "maxTokens": _output_budget(llm, SUMMARY_MIN_MAX_TOKENS),
     })

@@ -145,6 +145,21 @@ def _delta_text(chunk):
     return ""
 
 
+def paper_metadata(paper):
+    paper = paper or {}
+    head = [
+        "标题：" + str(paper.get("title") or "(无)"),
+        "作者：" + (", ".join(paper.get("authors") or []) or "(未填)"),
+        "年份：" + str(paper.get("year") or "(未填)"),
+        "期刊/会议：" + str(paper.get("venue") or "(未填)"),
+        "DOI：" + str(paper.get("doi") or "(未填)"),
+        ("原文关键词：" + ", ".join(paper.get("keywords") or [])) if paper.get("keywords") else "",
+        ("我写的一句话总结：" + str(paper.get("summary"))) if paper.get("summary") else "",
+        ("我的笔记：\n" + str(paper.get("notes"))[:2000]) if paper.get("notes") else "",
+    ]
+    return "\n".join(line for line in head if line)
+
+
 class LLM:
     def __init__(self, data_dir):
         self.file = Path(data_dir) / "settings.json"
@@ -265,23 +280,11 @@ class LLM:
     # ---------- 拼消息 ----------
     def build_user_message(self, paper, excerpt, label="正文节选（可能被截断）"):
         """拼给模型的用户消息（题录 + 资料段）。label 由调用方决定（全文/提炼等）。"""
-        paper = paper or {}
-        head = [
-            "标题：" + str(paper.get("title") or "(无)"),
-            "作者：" + (", ".join(paper.get("authors") or []) or "(未填)"),
-            "年份：" + str(paper.get("year") or "(未填)"),
-            "期刊/会议：" + str(paper.get("venue") or "(未填)"),
-            "DOI：" + str(paper.get("doi") or "(未填)"),
-            ("原文关键词：" + ", ".join(paper.get("keywords") or [])) if paper.get("keywords") else "",
-            ("我写的一句话总结：" + str(paper.get("summary"))) if paper.get("summary") else "",
-            ("我的笔记：\n" + str(paper.get("notes"))[:2000]) if paper.get("notes") else "",
-        ]
-        text = "\n".join([line for line in head if line])
         if excerpt:
             body = "\n\n===== " + str(label or "正文节选（可能被截断）") + "=====\n" + str(excerpt)
         else:
             body = "\n\n（没有 PDF 正文，仅依据上面的题录与摘要总结）"
-        return text + body
+        return paper_metadata(paper) + body
 
     def _payload(self, opts, messages, stream):
         temperature = _num(self.settings.get("temperature"), 0.3)
@@ -488,7 +491,7 @@ class LLM:
 
 
 # 分节头：总结/翻译时喂给模型的「资料」段（不是它该输出的内容）
-MATERIAL_SECTION = re.compile(r"^={3,}\s*(?:正文节选|全文|补充材料)", re.M)
+MATERIAL_SECTION = re.compile(r"^={3,}\s*(?:正文节选|全文|论文正文|补充材料)", re.M)
 SECTION_HEAD = re.compile(r"^={3,}\s*\S")
 
 
