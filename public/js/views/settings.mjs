@@ -7,6 +7,7 @@ import { autoCheckEnabled, autoDownloadEnabled } from '../update-auto.mjs'
 import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update-install.mjs'
 
   const { h, toast, rich, confirmDialog, fileSize, formatDate } = util
+  const DEFAULT_AI_MAX_TOKENS = 128000
   
   function download (url) {
     const a = h('a', { href: url, download: '' })
@@ -928,7 +929,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
     const fModel = h('input.input', { type: 'text', value: ai.model || '', placeholder: 'deepseek-chat' })
     const fKey = h('input.input', { type: 'password', value: '', placeholder: ai.hasKey ? '已保存，留空表示不修改' : '粘贴你的 API 密钥', autocomplete: 'off' })
     const fTemp = h('input.input', { type: 'text', inputmode: 'decimal', value: String(ai.temperature != null ? ai.temperature : 0.3) })
-    const fTokens = h('input.input', { type: 'text', inputmode: 'numeric', value: String(ai.maxTokens != null ? ai.maxTokens : 1200) })
+    const fTokens = h('input.input', { type: 'text', id: 'ai-max-tokens', inputmode: 'numeric', value: String(ai.maxTokens ?? DEFAULT_AI_MAX_TOKENS) })
     const fPrompt = h('textarea.textarea', { rows: 7 }, ai.promptTemplate || '')
     // 新增文献后是否自动生成中文一句话总结（默认开）
     const fAutoSummary = h('input.check', { type: 'checkbox', checked: ai.autoSummaryZh !== false })
@@ -960,7 +961,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
           h('div.hint', '密钥只保存在你这台电脑的 data/settings.json 里，不会上传到任何地方。')),
         h('div.form-grid',
           h('div.field', h('label', '温度 temperature'), fTemp, h('div.hint', '越低越稳定，0.2~0.4 适合总结')),
-          h('div.field', h('label', '最大输出 max_tokens'), fTokens, h('div.hint', '总结一般 1000~1500 够用'))
+          h('div.field', h('label', { for: 'ai-max-tokens' }, '最大输出 max_tokens'), fTokens)
         ),
         h('div.field', h('label', '提示词（决定总结的结构）'), fPrompt),
         h('div.field', h('label', '自动生成'), autoSummaryField,
@@ -981,7 +982,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
                   model: trimValue(fModel.value),
                   apiKey: fKey.value.trim(),
                   temperature: Number(fTemp.value) || 0.3,
-                  maxTokens: Number(fTokens.value) || 1200,
+                  maxTokens: Number(fTokens.value) || DEFAULT_AI_MAX_TOKENS,
                   promptTemplate: fPrompt.value,
                   autoSummaryZh: !!fAutoSummary.checked
                 })
@@ -1010,7 +1011,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
                   model: trimValue(fModel.value),
                   apiKey: fKey.value.trim(),
                   temperature: Number(fTemp.value) || 0.3,
-                  maxTokens: Number(fTokens.value) || 1200,
+                  maxTokens: Number(fTokens.value) || DEFAULT_AI_MAX_TOKENS,
                   promptTemplate: fPrompt.value,
                   autoSummaryZh: !!fAutoSummary.checked
                 })
@@ -1028,7 +1029,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
           }, '保存并测试连接'),
           testResult
         ),
-        h('div.hint', '隐私提示：点「生成总结」或提问时，这篇文献的题录、正文与全部补充材料（SI）会发送给你选择的模型服务商（超长会分段发送）；密钥与总结结果都只存在本机。')
+        h('div.hint', '隐私提示：生成总结或提问时，文献题录、正文与补充材料（SI）的可提取全文会一次发给你选择的模型服务商。问答请求也会发送已有的 AI 总结和近期对话。')
       ),
       h('a.btn.sm.ghost', { href: 'https://platform.deepseek.com/api_keys', target: '_blank', rel: 'noopener' }, '申请 DeepSeek 密钥 ↗')
     )

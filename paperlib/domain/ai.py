@@ -17,18 +17,13 @@ from __future__ import annotations
 
 import re
 
-from paperlib.adapters.llm import paper_metadata, strip_echoed_material
+from paperlib.adapters.llm import DEFAULT_MAX_TOKENS, paper_metadata, strip_echoed_material
 from paperlib.domain import fullread
 from paperlib.util import now_iso
 
 PROMPT_CHARS = 12000          # 送给大模型的正文上限
-# 输出预算下限：思考型模型会先花掉一部分预算，用户设置里的 maxTokens（默认 1200）
-# 常常不够。结构化总结要写四节 Markdown（实测约 1500–2500 字），给 4000；
-# 一句话总结/翻译较短，给 2000。这只是上限，不会强制消耗。
-SUMMARY_MIN_MAX_TOKENS = 4000
+# 一句话总结与翻译兼容已有的小额用户配置。
 SUMMARY_ZH_MIN_MAX_TOKENS = 2000
-ATT_PART_CHARS = 4000         # 单个补充材料片段上限
-ATT_TOTAL_CHARS = 12000       # 补充材料合计上限
 ZH_RE = re.compile(r"[\u4e00-\u9fff]")
 
 SYSTEM_SUFFIX = (
@@ -61,22 +56,6 @@ def build_excerpt(services, paper_id, limit=PROMPT_CHARS):
 read_attachment_text = fullread.read_attachment_text
 
 
-def attachment_parts(services, paper, per_part=ATT_PART_CHARS, total=ATT_TOTAL_CHARS):
-    """补充材料的资料段（有 SI 时总结更完整）；每段截前 per_part 字，合计不超过 total。"""
-    parts = []
-    used = 0
-    for attachment in (paper.get("attachments") or []):
-        if used >= total:
-            break
-        text = read_attachment_text(services, paper.get("id"), attachment.get("file"))
-        if not text:
-            continue
-        piece = str(text)[:per_part]
-        parts.append("===== 补充材料：" + str(attachment.get("originalName") or "") + " =====\n" + piece)
-        used += len(piece)
-    return parts
-
-
 def safe_extract(services, paper):
     """自动补抽 PDF 正文（失败不抛错，把结果塞进 SSE 的 autoExtract）。"""
     fn = getattr(services, "extract_paper_fulltext", None)
@@ -107,52 +86,35 @@ def _meta_line(paper):
 
 
 # ---------------------------------------------------------------- 全文总结
-def _summary_prepare(services, paper, use_fulltext):
-    if not use_fulltext:
-        coverage = {
-            "mode": "none", "bodyChars": 0, "siChars": 0, "totalChars": 0,
-            "attachCount": 0, "attachments": [], "missing": [], "chunks": 0,
-            "processedChunks": 0, "chunkChars": 0, "directLimit": fullread.DIRECT_LIMIT,
-        }
-        return {"mode": "none", "materials": [], "chunks": [], "totalChars": 0,
-                "coverage": coverage}
-    return fullread.prepare(services, paper)
-
-
-def _output_budget(llm, minimum):
-    """请求的 max_tokens：用户配置与「本次调用的下限」取大者。"""
+def _summary_zh_budget(llm):
     try:
-        configured = int(llm.settings.get("maxTokens") or 1200)
+        configured = int(llm.settings.get("maxTokens") or DEFAULT_MAX_TOKENS)
     except (TypeError, ValueError):
-        configured = 1200
-    return max(int(minimum), configured)
+        configured = DEFAULT_MAX_TOKENS
+    return max(SUMMARY_ZH_MIN_MAX_TOKENS, configured)
 
 
 def _run_summary(services, paper, options, emit=None, on_delta=None, auto_extract=None):
     """完整读入正文 + 全部 SI 后总结；返回 {"text","usage","coverage"}。"""
     llm = services.llm
     use_fulltext = options.get("useFulltext") is not False
-    prepared = _summary_prepare(services, paper, use_fulltext)
+    prepared = fullread.prepare(services, paper, use_fulltext=use_fulltext)
     coverage = prepared["coverage"]
-    total = prepared["totalChars"]
+    total = coverage["totalChars"]
 
     if emit:
         emit({"type": "start", "model": _model_name(services),
               "usedFulltext": bool(total), "chars": total,
               "autoExtract": auto_extract, "fullRead": coverage})
 
-    reference = fullread.paper_reference(services, paper, prepared, emit)
+    reference = fullread.paper_reference(prepared)
     system = str(llm.settings.get("promptTemplate") or "")
     messages = [reference] if reference else []
     messages.append({"role": "system", "content": system})
     user = (paper_metadata(paper) + "\n\n请依据上面的文献资料和本条题录生成总结。"
             if reference else llm.build_user_message(paper, ""))
     messages.append({"role": "user", "content": user})
-    result = llm.stream(on_delta, {
-        "messages": messages,
-        # 总结比翻译长得多；给足输出预算，避免思考型模型把预算用光后截断/空回复。
-        "maxTokens": _output_budget(llm, SUMMARY_MIN_MAX_TOKENS),
-    })
+    result = llm.stream(on_delta, {"messages": messages})
     text = strip_echoed_material(str((result or {}).get("text") or ""))
     return {"text": text, "usage": (result or {}).get("usage") or None, "coverage": coverage}
 
@@ -222,9 +184,7 @@ def summary_zh(services, paper, options=None):
                 {"role": "user", "content": _meta_line(paper) + "\n\n" + "\n\n".join(parts)},
             ],
             "timeoutMs": 120000,
-            # 推理模型先输出思考内容，1200 常常不够一句话总结/翻译 + 思考；
-            # 给足预算，避免空回复或半截译文。
-            "maxTokens": _output_budget(llm, SUMMARY_ZH_MIN_MAX_TOKENS),
+            "maxTokens": _summary_zh_budget(llm),
         })
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "status": 502,

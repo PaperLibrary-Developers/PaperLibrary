@@ -1,347 +1,134 @@
-# -*- coding: utf-8 -*-
-"""全文读取回归：正文 + 全部 SI 必须完整进入 AI 总结 / 对话的处理流程。
-
-旧实现只取 1.2–2.4 万字节选（正文头尾、SI 前 4000 字/合计 12000 字）；这里验证：
-  · 总量不大时一次完整送入，不截断；
-  · 超过阈值时分段 map-reduce，逐段都调用模型，最终汇总覆盖全文；
-  · 覆盖信息（bodyChars/siChars/chunks/processedChunks/attachments）如实上报；
-  · SI 文本缺失时会尝试重新抽取。
-"""
+"""回归：同一文献的总结与问答应在单次请求中共享正文和全部可读取的 SI。"""
 from __future__ import annotations
 
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Barrier, Event, Lock
 from unittest import mock
 
 from paperlib.api import ai as ai_api
 from paperlib.api import chat as chat_api
-from paperlib.domain import ai as ai_domain
-from paperlib.domain import chat as chat_domain
-from paperlib.adapters.llm import LLMError
 from paperlib.domain import fullread
-from test.test_ai import AiTestBase, FakeCtx
-
-
-class RecordingLLM:
-    """记录每次模型调用的假 LLM：chat 用于 map，stream 用于最终回答。"""
-
-    def __init__(self, answer="最终回答"):
-        self.settings = {"model": "fake-fullread", "promptTemplate": "请输出中文总结。"}
-        self.answer = answer
-        self.chat_calls = []
-        self.stream_calls = []
-        self._chat_lock = Lock()
-
-    def readiness(self):
-        return {"ready": True, "reason": ""}
-
-    def build_user_message(self, paper, excerpt, label="正文节选（可能被截断）"):
-        return ("标题：" + str(paper.get("title") or "") + "\n\n===== "
-                + str(label) + "=====\n" + str(excerpt))
-
-    def chat(self, messages=None, options=None):
-        with self._chat_lock:
-            self.chat_calls.append(list(messages or []))
-            return {"text": "要点 %d" % len(self.chat_calls)}
-
-    def chat_stream(self, on_delta=None, options=None):
-        return self.stream(on_delta, options)
-
-    def stream(self, on_delta=None, options=None):
-        self.stream_calls.append(list((options or {}).get("messages") or []))
-        if on_delta:
-            on_delta(self.answer)
-        return {"text": self.answer, "usage": {"total_tokens": 1}}
+from test.test_ai import AiTestBase, FakeCtx, delta
 
 
 class FullReadMaterialTests(AiTestBase):
-    def test_split_text_covers_every_character(self):
-        text = ("段落一\n\n" * 40) + ("句子内容。" * 200)
-        parts = fullread.split_text(text, 120)
-        self.assertEqual("".join(parts), text)
-        self.assertTrue(all(len(piece) <= 120 for piece in parts))
-
     def test_collect_includes_body_and_all_si(self):
         services = self.make_services()
-        paper = self.add_paper(title="T", attachments=[
+        paper = self.add_paper(attachments=[
             {"file": "si1.pdf", "originalName": "SI-1.pdf"},
             {"file": "si2.pdf", "originalName": "SI-2.pdf"},
         ])
         services.fulltext.save(paper["id"], "BODY-" * 100)
-        services.db.set_text("att-si1.pdf", "SI1-" * 50)
-        services.db.set_text("att-si2.pdf", "SI2-" * 30)
+        services.fulltext.save_attachment_text(paper["id"], "si1.pdf", "SI1-" * 50)
+        services.fulltext.save_attachment_text(paper["id"], "si2.pdf", "SI2-" * 30)
         collected = fullread.collect_materials(services, paper)
         self.assertEqual(collected["bodyChars"], 500)
-        self.assertEqual(collected["siChars"], 200 + 120)
+        self.assertEqual(collected["siChars"], 320)
         self.assertEqual([a["chars"] for a in collected["attachments"]], [200, 120])
         self.assertEqual(collected["missing"], [])
 
     def test_missing_attachment_text_is_re_extracted(self):
         services = self.make_services()
-        paper = self.add_paper(title="T", attachments=[
-            {"file": "si.pdf", "originalName": "SI.pdf"}])
-        Path(services.db.attachments_dir).mkdir(parents=True, exist_ok=True)
-        (Path(services.db.attachments_dir) / "si.pdf").write_bytes(b"%PDF-1.4 demo")
-        services.extract_attachment_text = lambda path, ext: {
-            "ok": True, "text": "从 SI 重新抽出的文本" * 3, "kind": "pdf"}
+        paper = self.add_paper(attachments=[{"file": "si.pdf", "originalName": "SI.pdf"}])
+        directory = Path(services.db.attachments_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "si.pdf").write_bytes(b"%PDF-1.4 demo")
+        text = "从 SI 重新抽出的文本" * 3
+        services.extract_attachment_text = lambda path, ext: {"ok": True, "text": text, "kind": "pdf"}
         collected = fullread.collect_materials(services, paper)
-        self.assertEqual(collected["missing"], [])
-        self.assertEqual(collected["siChars"], len("从 SI 重新抽出的文本" * 3))
-        self.assertIn("从 SI 重新抽出的文本", collected["materials"][0]["text"])
+        self.assertEqual(collected["siChars"], len(text))
+        self.assertEqual(collected["materials"][0]["text"], text)
+        self.assertEqual(services.fulltext.read_attachment(paper["id"], "si.pdf"), text)
 
-    def test_parallel_map_keeps_document_order(self):
-        ready = Barrier(3, timeout=5)
-        release_first = Event()
-
-        class OutOfOrderLLM:
-            def chat(self, messages, options):
-                name = messages[-1]["content"]
-                ready.wait()
-                if name == "A":
-                    if not release_first.wait(5):
-                        raise AssertionError("B has to be processed before A")
-                return {"text": name}
-
-        processed = []
-
-        def progress(done, total, chunk):
-            if chunk:
-                processed.append(chunk["label"])
-                if chunk["label"] == "B":
-                    release_first.set()
-
-        chunks = [{"label": name} for name in ("A", "B", "C")]
-        notes = fullread.map_chunks(OutOfOrderLLM(), chunks, "system",
-                                    lambda chunk, *_: chunk["label"], on_progress=progress)
-        self.assertEqual([n["text"] for n in notes], ["A", "B", "C"])
-        self.assertLess(processed.index("B"), processed.index("A"))
-
-    def test_cache_shares_concurrent_build_and_recovers_after_error(self):
-        cache = fullread.PaperContextCache()
-        with self.assertRaisesRegex(RuntimeError, "temporary"):
-            cache.get_or_build("paper", mock.Mock(side_effect=RuntimeError("temporary")))
-        started = Event()
-        release = Event()
-
-        def build():
-            started.set()
-            if not release.wait(5):
-                raise AssertionError("timed out waiting for concurrent reader")
-            return ["notes"]
-
-        other = mock.Mock(side_effect=AssertionError("duplicate build"))
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            first = pool.submit(cache.get_or_build, "paper", build)
-            self.assertTrue(started.wait(5))
-            second = pool.submit(cache.get_or_build, "paper", other)
-            release.set()
-            self.assertIs(first.result(timeout=5), second.result(timeout=5))
-        other.assert_not_called()
+    def test_unreadable_material_is_reported(self):
+        services = self.make_services()
+        paper = self.add_paper(attachments=[{"file": "si.pdf", "originalName": "缺失 SI.pdf"}])
+        services.fulltext.save(paper["id"], "正文")
+        prepared = fullread.prepare(services, paper)
+        self.assertEqual(prepared["coverage"]["missing"], ["缺失 SI.pdf"])
+        self.assertIn("未提取到文字的 SI", fullread.paper_reference(prepared)["content"])
 
 
-class FullReadSummaryTests(AiTestBase):
-    def _paper(self, services, body="BODY-" * 100, si="SI-" * 100):
-        paper = self.add_paper(title="Summary Paper", attachments=[
-            {"file": "si.pdf", "originalName": "SI.pdf"}])
+class FullReadRequestTests(AiTestBase):
+    def _ask(self, services, paper, question):
+        ctx = FakeCtx(services, params={"id": paper["id"]}, body={
+            "question": question, "useLocal": False, "useExternal": False,
+        })
+        chat_api.chat_post(ctx)
+        return ctx.frames()
+
+    def test_long_summary_and_chat_share_full_material_in_one_request_each(self):
+        services = self.make_services(api_key="sk-test")
+        paper = self.add_paper(attachments=[
+            {"file": "first.txt", "originalName": "SI-1.txt"},
+            {"file": "second.txt", "originalName": "SI-2.txt"},
+        ])
+        body = "正文开头\n" + "数据表与实验方法。" * 7000 + "\n正文末尾 QZ731"
+        si1 = "SI 1 开头\n" + "补充结果与方法。" * 7000 + "\nSI 1 末尾"
+        si2 = "SI 2 完整内容\n结尾 数据 17.4"
         services.fulltext.save(paper["id"], body)
-        services.db.set_text("att-si.pdf", si)
-        return paper
+        services.fulltext.save_attachment_text(paper["id"], "first.txt", si1)
+        services.fulltext.save_attachment_text(paper["id"], "second.txt", si2)
 
-    def test_direct_mode_sends_full_body_and_si(self):
+        with mock.patch.object(services.llm, "_open", wraps=services.llm._open) as request:
+            self.fake.set({"sse": [delta("已保存的 AI 总结")]})
+            summary = FakeCtx(services, body={"paperId": paper["id"]})
+            ai_api.summarize(summary)
+            self.fake.set({"sse": [delta("基于全文的回答")]})
+            first = self._ask(services, paper, "正文的关键数据？")
+            second = self._ask(services, paper, "补充材料呢？")
+
+        self.assertEqual(request.call_count, 3)
+        summary_request, first_request, second_request = [call.args[0] for call in request.call_args_list]
+        for payload in (summary_request, first_request, second_request):
+            self.assertTrue(payload["stream"])
+            self.assertEqual(payload["max_tokens"], 128000)
+            self.assertEqual(payload["messages"][0], summary_request["messages"][0])
+        reference = summary_request["messages"][0]["content"]
+        self.assertTrue(reference.endswith(
+            "===== 论文正文 =====\n" + body
+            + "\n\n===== 补充材料：SI-1.txt =====\n" + si1
+            + "\n\n===== 补充材料：SI-2.txt =====\n" + si2,
+        ))
+        for frames in (summary.frames(), first, second):
+            self.assertEqual([frame["type"] for frame in frames], ["start", "delta", "done"])
+            coverage = frames[-1]["fullRead"]
+            self.assertEqual(coverage["mode"], "direct")
+            self.assertEqual(coverage["processedChunks"], 1)
+            self.assertIsNone(coverage["directLimit"])
+            self.assertEqual(coverage["bodyChars"], len(body))
+            self.assertEqual(coverage["siChars"], len(si1) + len(si2))
+        self.assertIn("已保存的 AI 总结", first_request["messages"][2]["content"])
+        self.assertEqual(second_request["messages"][-3:], [
+            {"role": "user", "content": "正文的关键数据？"},
+            {"role": "assistant", "content": "基于全文的回答"},
+            {"role": "user", "content": "补充材料呢？"},
+        ])
+        current = services.library.get(paper["id"])
+        self.assertEqual(current["aiSummary"], "已保存的 AI 总结")
+        self.assertEqual(len(current["chat"]), 4)
+
+    def test_sync_summary_and_chat_use_saved_budget(self):
         services = self.make_services(api_key="sk-test")
-        paper = self._paper(services)
-        llm = RecordingLLM("总结文本")
-        services.llm = llm
-        ctx = FakeCtx(services)
-        ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(ctx))
-        frames = ctx.frames()
-        start = frames[0]
-        self.assertEqual(start["fullRead"]["mode"], "direct")
-        self.assertEqual(start["fullRead"]["bodyChars"], 500)
-        self.assertEqual(start["fullRead"]["siChars"], 300)
-        self.assertEqual(start["fullRead"]["totalChars"], 800)
-        self.assertEqual(start["fullRead"]["processedChunks"], 1)
-        final_reference = llm.stream_calls[-1][0]["content"]
-        self.assertIn("BODY-" * 100, final_reference)
-        self.assertIn("SI-" * 100, final_reference)
-        self.assertIn("全文（正文 + 全部补充材料 SI，未截断）", final_reference)
-        done = frames[-1]
-        self.assertEqual(done["fullRead"]["totalChars"], 800)
+        paper = self.add_paper()
+        services.llm.update({"maxTokens": 1300})
+        self.fake.set({"sse": [delta("答案")]})
+        summary = FakeCtx(services, body={"paperId": paper["id"]})
+        ai_api.summarize_sync(summary)
+        self.assertTrue(summary.payload["ok"])
+        self.assertEqual(self.fake.server.last_body["max_tokens"], 1300)
+        self.assertEqual(self._ask(services, paper, "什么结论？")[-1]["type"], "done")
+        self.assertEqual(self.fake.server.last_body["max_tokens"], 1300)
 
-    def test_final_summary_gets_min_output_budget(self):
-        """总结最终请求至少给 SUMMARY_MIN_MAX_TOKENS，避免思考型模型把预算用光。"""
+    def test_summary_can_use_metadata_without_reading_fulltext(self):
         services = self.make_services(api_key="sk-test")
-        paper = self.add_paper(title="Budget Paper")
-        services.fulltext.save(paper["id"], "正文内容" * 100)
-
-        class BudgetLLM(RecordingLLM):
-            def __init__(self):
-                super().__init__("总结")
-                self.stream_options = []
-
-            def stream(self, on_delta=None, options=None):
-                self.stream_options.append(dict(options or {}))
-                return super().stream(on_delta, options)
-
-        llm = BudgetLLM()
-        services.llm = llm
-        ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(FakeCtx(services)))
-        self.assertGreaterEqual(llm.stream_options[-1]["maxTokens"],
-                                ai_domain.SUMMARY_MIN_MAX_TOKENS)
-
-    def test_map_budget_covers_reasoning_models(self):
-        self.assertGreaterEqual(fullread.MAP_MAX_TOKENS, 2000)
-        self.assertGreaterEqual(fullread.PAPER_NOTES_MAX_TOKENS, 4000)
-
-    def test_map_retries_with_larger_budget_when_truncated(self):
-        """第一次因 finish_reason=length 空回复时，第二次要用更大预算重试。"""
-        class TruncatingLLM:
-            def __init__(self):
-                self.budgets = []
-
-            def chat(self, messages=None, options=None):
-                self.budgets.append((options or {}).get("maxTokens"))
-                if len(self.budgets) == 1:
-                    raise LLMError("模型输出被 max_tokens 截断（finish_reason=length）")
-                return {"text": "重试后的要点"}
-
-        llm = TruncatingLLM()
-        notes = fullread.map_chunks(llm, [{"label": "正文", "text": "x"}], "sys",
-                                    lambda chunk, index, count: "user")
-        self.assertEqual(notes[0]["text"], "重试后的要点")
-        self.assertEqual(llm.budgets[0], fullread.MAP_MAX_TOKENS)
-        self.assertGreaterEqual(llm.budgets[1], 4000)
-
-    def test_map_reduce_processes_every_chunk(self):
-        services = self.make_services(api_key="sk-test")
-        paper = self._paper(services, body="正文内容" * 60, si="补充材料" * 60)
-        llm = RecordingLLM("汇总总结")
-        services.llm = llm
-        with mock.patch.object(fullread, "DIRECT_LIMIT", 100), \
-                mock.patch.object(fullread, "CHUNK_CHARS", 100):
-            ctx = FakeCtx(services)
-            ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(ctx))
-        frames = ctx.frames()
-        start = frames[0]
-        chunks = start["fullRead"]["chunks"]
-        self.assertEqual(start["fullRead"]["mode"], "map-reduce")
-        self.assertGreater(chunks, 1)
-        self.assertEqual(len(llm.chat_calls), chunks)
-        done = frames[-1]
-        self.assertEqual(done["fullRead"]["processedChunks"], chunks)
-        # 每一段原文都出现在某一次 map 调用里（没有漏段/截断）
-        map_text = "\n".join(call[-1]["content"] for call in llm.chat_calls)
-        materials = fullread.collect_materials(services, paper)["materials"]
-        for material in materials:
-            for piece in fullread.split_text(material["text"], 100):
-                self.assertIn(piece, map_text)
-        # 最终汇总收到所有分段的提炼结果
-        final_reference = llm.stream_calls[-1][0]["content"]
-        for index in range(1, chunks + 1):
-            self.assertIn("要点 %d" % index, final_reference)
-
-
-class FullReadChatTests(AiTestBase):
-    def _paper(self, services, body="BODY-" * 100, si="SI-" * 100):
-        paper = self.add_paper(title="Chat Paper", attachments=[
-            {"file": "si.pdf", "originalName": "SI.pdf"}])
-        services.fulltext.save(paper["id"], body)
-        services.db.set_text("att-si.pdf", si)
-        return paper
-
-    def test_direct_mode_context_has_full_body_and_si(self):
-        services = self.make_services(api_key="sk-test")
-        paper = self._paper(services)
-        llm = RecordingLLM("答案")
-        services.llm = llm
-        ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(FakeCtx(services)))
-        summary = llm.stream_calls[-1]
-        ctx = FakeCtx(services)
-        chat_domain.chat_stream(services, paper, {"question": "方法是什么？"},
-                                chat_api.StreamOpener(ctx))
-        frames = ctx.frames()
-        self.assertEqual(frames[0]["fullRead"]["mode"], "direct")
-        self.assertEqual(frames[0]["fullRead"]["processedChunks"], 1)
-        self.assertTrue(frames[0]["hasBody"])
-        self.assertIn("正文", frames[0]["sources"])
-        self.assertIn("SI:SI.pdf", frames[0]["sources"])
-        sent = llm.stream_calls[-1]
-        self.assertEqual(sent[0], summary[0])
-        context = sent[0]["content"]
-        self.assertIn("BODY-" * 100, context)
-        self.assertIn("SI-" * 100, context)
-        self.assertEqual(sent[-1], {"role": "user", "content": "方法是什么？"})
-
-    def test_map_reduce_reuses_shared_notes_and_refreshes_after_changes(self):
-        services = self.make_services(api_key="sk-test")
-        paper = self._paper(services, body="正文内容" * 60, si="补充材料" * 60)
-        llm = RecordingLLM("基于全文的答案")
-        services.llm = llm
-        with mock.patch.object(fullread, "DIRECT_LIMIT", 100), \
-                mock.patch.object(fullread, "CHUNK_CHARS", 100):
-            def ask(question):
-                ctx = FakeCtx(services)
-                chat_domain.chat_stream(services, paper, {"question": question}, chat_api.StreamOpener(ctx))
-                return ctx.frames()
-
-            first = ask("实验条件是什么？")
-            chunks = first[0]["fullRead"]["chunks"]
-            self.assertGreater(chunks, 1)
-            self.assertEqual(len(llm.chat_calls), chunks)
-            self.assertEqual(first[-1]["fullRead"]["processedChunks"], chunks)
-            self.assertEqual(first[-1]["text"], "基于全文的答案")
-            reference = llm.stream_calls[-1][0]
-            self.assertIn("全文分段提炼", reference["content"])
-            self.assertIn("可核对的原文片段", llm.stream_calls[-1][2]["content"])
-            ai_domain.summarize_stream(services, paper, {}, ai_api.StreamOpener(FakeCtx(services)))
-            self.assertEqual(llm.stream_calls[-1][0], reference)
-            ask("关注补充材料")
-            self.assertEqual(llm.stream_calls[-1][0], reference)
-            self.assertEqual(len(llm.chat_calls), chunks)
-            self.assertIn("已有 AI 总结", llm.stream_calls[-1][2]["content"])
-            self.assertTrue(all("实验条件是什么？" not in call[-1]["content"] for call in llm.chat_calls))
-
-            services.db.set_text("att-si.pdf", "有变化的补充材料" * 60)
-            ask("更新后的结果是什么？")
-            self.assertGreater(len(llm.chat_calls), chunks)
-            self.assertTrue(any("有变化的补充材料" in call[-1]["content"] for call in llm.chat_calls[chunks:]))
-            calls = len(llm.chat_calls)
-            llm.settings["model"] = "another-model"
-            ask("变化在哪里？")
-            self.assertGreater(len(llm.chat_calls), calls)
-
-    def test_request_for_more_evidence_rechecks_every_chunk_without_leaking_marker(self):
-        services = self.make_services(api_key="sk-test")
-        paper = self._paper(services, body="正文数据" * 45, si="不同的 SI 条件" * 35)
-
-        class EvidenceLLM(RecordingLLM):
-            def chat_stream(self, on_delta=None, options=None):
-                messages = options["messages"]
-                if chat_domain.VERIFY_MARKER in messages[1]["content"]:
-                    self.stream_calls.append(messages)
-                    on_delta("[[READ")
-                    on_delta("_FULLTEXT]]")
-                    return {"text": chat_domain.VERIFY_MARKER}
-                return super().chat_stream(on_delta, options)
-
-        llm = EvidenceLLM("原文复查结果")
-        services.llm = llm
-        ctx = FakeCtx(services)
-        question = "详细实验条件？"
-        with mock.patch.object(fullread, "DIRECT_LIMIT", 100), \
-                mock.patch.object(fullread, "CHUNK_CHARS", 100):
-            chat_domain.chat_stream(services, paper, {"question": question}, chat_api.StreamOpener(ctx))
-        frames = ctx.frames()
-        count = frames[0]["fullRead"]["chunks"]
-        self.assertEqual(len(llm.chat_calls), 2 * count)
-        self.assertTrue(all(question in call[-1]["content"] for call in llm.chat_calls[count:]))
-        self.assertIn("全文复查证据", llm.stream_calls[-1][3]["content"])
-        self.assertEqual([f["text"] for f in frames if f["type"] == "delta"], ["原文复查结果"])
-        self.assertTrue(any(f.get("stage") == "verify" for f in frames))
-        self.assertEqual(frames[-1]["text"], "原文复查结果")
-        self.assertEqual(len(services.library.get(paper["id"])["chat"]), 2)
+        paper = self.add_paper()
+        self.fake.set({"sse": [delta("题录总结")]})
+        ctx = FakeCtx(services, body={"paperId": paper["id"], "useFulltext": False})
+        with mock.patch.object(fullread, "collect_materials") as collect:
+            ai_api.summarize(ctx)
+        collect.assert_not_called()
+        self.assertEqual(ctx.frames()[-1]["fullRead"]["mode"], "none")
 
 
 if __name__ == "__main__":

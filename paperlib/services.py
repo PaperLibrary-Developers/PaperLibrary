@@ -17,7 +17,6 @@ from paperlib.adapters.pdf import FullText
 from paperlib.adapters.sources import Sources
 from paperlib.adapters.websearch import WebSearch
 from paperlib.domain.folders import Folders
-from paperlib.domain.fullread import PaperContextCache
 from paperlib.domain.library import Library
 from paperlib.update.service import UpdateService
 from paperlib.util import ensure_dir, now_iso, safe_path_join
@@ -175,7 +174,6 @@ def create_services(config, store):
         prefs=prefs,
         fulltext=fulltext,
         llm=llm,
-        paper_context=PaperContextCache(),
         websearch=websearch,
         sources=sources,
         external=external,

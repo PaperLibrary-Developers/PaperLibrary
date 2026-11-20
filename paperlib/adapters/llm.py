@@ -42,20 +42,22 @@ PRESETS = [
      "docs": "https://ollama.com/"},
 ]
 
+DEFAULT_MAX_TOKENS = 128000
+
 DEFAULT_SETTINGS = {
     "provider": "deepseek",
     "baseURL": "https://api.deepseek.com/v1",
     "apiKey": "",
     "model": "deepseek-chat",
     "temperature": 0.3,
-    "maxTokens": 1200,
+    "maxTokens": DEFAULT_MAX_TOKENS,
     "promptTemplate": "\n".join([
-        "你是一名严谨的科研助手。请阅读下面这篇文献的信息与正文节选，输出结构化的中文总结。",
+        "你是一名严谨的科研助手。请阅读文献题录和提供的正文、补充材料，输出结构化的中文总结。",
         "",
         "要求：",
         "1. 用 Markdown，包含四个小节：**研究问题**、**方法**、**主要结论**、**对我的价值**；",
         "2. 每节 2-4 条要点，尽量具体（写清方法名、数据、指标），不要空话；",
-        "3. 如果正文节选信息不足，就基于标题与摘要总结，并在开头一句说明「仅依据摘要」；",
+        "3. 如果只有题录与摘要，就据此总结，并在开头说明资料来源；",
         "4. 不要编造原文没有的数据、结论或引用。",
     ]),
 }
@@ -118,7 +120,7 @@ def _empty_llm_message(finish_reason, reasoning):
     if finish_reason == "length":
         return ("模型输出被 max_tokens 截断（finish_reason=length），没有可用的正文。"
                 "该模型可能先输出思考内容、把输出预算用光了；请到「设置 → 大模型」"
-                "把 max_tokens 调大（例如 4000），或改用不输出思考过程的模型。")
+                "请检查模型的输出限制，或在模型支持的范围内提高 max_tokens。")
     if str(reasoning or "").strip():
         return ("模型只返回了思考内容、没有正文（finish_reason=%s）。"
                 "请把 max_tokens 调大，或改用不输出思考过程的模型。" % (finish_reason or "无"))
@@ -214,7 +216,7 @@ class LLM:
         if patch.get("temperature") is not None:
             nxt["temperature"] = _num(patch.get("temperature"), nxt.get("temperature") or 0.3)
         if patch.get("maxTokens") is not None:
-            nxt["maxTokens"] = int(_num(patch.get("maxTokens"), nxt.get("maxTokens") or 1200))
+            nxt["maxTokens"] = int(_num(patch.get("maxTokens"), nxt.get("maxTokens") or DEFAULT_MAX_TOKENS))
         if patch.get("autoSummaryZh") is not None:
             nxt["autoSummaryZh"] = bool(patch.get("autoSummaryZh"))
         if "apiKey" in patch:
@@ -288,7 +290,8 @@ class LLM:
 
     def _payload(self, opts, messages, stream):
         temperature = _num(self.settings.get("temperature"), 0.3)
-        max_tokens = _num(opts.get("maxTokens"), 0) or _num(self.settings.get("maxTokens"), 0) or 1200
+        max_tokens = (_num(opts.get("maxTokens"), 0) or _num(self.settings.get("maxTokens"), 0)
+                      or DEFAULT_MAX_TOKENS)
         if self._is_anthropic():
             system, chat = self._anthropic_parts(messages)
             payload = {
