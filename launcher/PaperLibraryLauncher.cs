@@ -549,12 +549,10 @@ class Launcher
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return true;
         }
-        if (decision.Action == "notice-success" || decision.Action == "notice-failed")
+        if (decision.Action == "notice-failed")
         {
             Log("startup state notice: " + decision.Action + " " + decision.Code);
-            MessageBox.Show(decision.Message, Title, MessageBoxButtons.OK,
-                decision.Action == "notice-failed" ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
-            return true;
+            MessageBox.Show(decision.Message, Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         return true;
     }

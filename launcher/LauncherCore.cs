@@ -556,15 +556,7 @@ public static class LauncherCore
         {
             string state = SafeRead(statePath);
             string phase = JsonString(state, "phase");
-            if (phase == "success")
-            {
-                decision.Action = "notice-success";
-                decision.Code = "updated";
-                decision.Message = "已更新到 v" + JsonString(state, "version") + "，当前版本可正常使用。";
-                decision.Path = statePath;
-                return decision;
-            }
-            if (phase == "failed" || JsonBool(state, "recovered", false))
+            if (phase != "success" && (phase == "failed" || JsonBool(state, "recovered", false)))
             {
                 decision.Action = "notice-failed";
                 decision.Code = JsonString(state, "code");

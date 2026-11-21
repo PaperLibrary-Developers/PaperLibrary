@@ -243,15 +243,29 @@ class LauncherCoreTest(unittest.TestCase):
         code, data = self.startup()
         self.assertEqual(data["action"], "clean-stale-lock")
 
-    def test_state_notices(self):
+    def test_successful_update_opens_without_notice_on_every_start(self):
         self.apply_path.unlink()
-        (self.updates / "state.json").write_text(json.dumps({
-            "schema": 1, "phase": "success", "version": "1.7.1", "code": "",
-        }), encoding="utf-8")
-        code, data = self.startup()
-        self.assertEqual(data["action"], "notice-success")
-        self.assertIn("1.7.1", data["message"])
+        state = self.updates / "state.json"
+        journal = self.updates / "journal.json"
+        result = {"schema": 1, "product": "PaperLibrary", "phase": "success",
+                  "version": "1.8.4", "fromVersion": "1.8.3", "launchedPid": os.getpid(), "code": ""}
+        state.write_text(json.dumps(dict(result, recovered=False)), encoding="utf-8")
+        saved_state = state.read_bytes()
+        for with_journal in (False, True):
+            with self.subTest(with_journal=with_journal):
+                if with_journal:
+                    journal.write_text(json.dumps(result), encoding="utf-8")
+                    saved_journal = journal.read_bytes()
+                for _ in range(3):
+                    code, decision = self.startup()
+                    self.assertEqual(code, 0)
+                    self.assertEqual(decision, {"action": "start", "code": "ok", "message": "", "path": ""})
+                self.assertEqual(state.read_bytes(), saved_state)
+                if with_journal:
+                    self.assertEqual(journal.read_bytes(), saved_journal)
 
+    def test_failed_state_notice_includes_code_and_log(self):
+        self.apply_path.unlink()
         (self.updates / "state.json").write_text(json.dumps({
             "schema": 1, "phase": "failed", "version": "1.7.1", "code": "health-version",
             "log": "data/logs/install.log",
