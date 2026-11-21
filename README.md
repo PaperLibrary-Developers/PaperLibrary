@@ -4,9 +4,9 @@ PaperLibrary Nexus 是一个**跑在自己电脑上的文献管理工具**：把
 
 它不注册账号、不上传云端，所有数据只放在程序目录的 `data/` 里；**不联网也能完成入库、检索、阅读、标注和导出**。联网与大模型是可选项：配好 API Key 才有 AI 总结、对话与联网检索。
 
-- 当前版本：**v1.9**（`1.9.0`）
+- 当前版本：以程序内「设置与备份 → 关于」和根目录 `version.json` 为准
 - 适用系统：Windows 10（10.0.17763 及以上）/ Windows 11，64 位
-- 下载地址：[GitHub Releases · v1.9](https://github.com/PaperLibrary-Developers/PaperLibrary/releases/tag/v1.9)（文件 `PaperLibrary.v1.9.Nexus.zip`，约 42 MB）
+- 下载地址：[GitHub Releases](https://github.com/PaperLibrary-Developers/PaperLibrary/releases)（下载最新发布里的 `PaperLibrary.*.Nexus.zip`，约 42 MB）
 - 开源许可：AGPL-3.0
 
 ![主界面：全部文献](assets/readme/01-home.png)
@@ -79,19 +79,19 @@ PaperLibrary 把这几件事收进一个本地库：
 
 ### 3.2 安装（发布包，推荐）
 
-1. 打开 [Releases 页面](https://github.com/PaperLibrary-Developers/PaperLibrary/releases/tag/v1.9)，下载 `PaperLibrary.v1.9.Nexus.zip`。
-   发布页同时提供 `SHA256SUMS`，需要校验时可用 `certutil -hashfile PaperLibrary.v1.9.Nexus.zip SHA256` 对比。
+1. 打开 [Releases 页面](https://github.com/PaperLibrary-Developers/PaperLibrary/releases)，在最新版本的 Assets 里下载 `PaperLibrary.*.Nexus.zip`（文件名带版本号）。
+   发布页同时提供 `SHA256SUMS`，需要校验时可用 `certutil -hashfile <你下载的 zip> SHA256` 对比。
 2. 解压到任意你喜欢的目录，例如 `D:\PaperLibrary`。**路径尽量不含特殊符号**，也不要放进 OneDrive / 坚果云等实时同步目录（原因见第 14 节）。
 3. 如果压缩包来自网络，首次运行前先解除锁定（否则 Windows 可能弹「无法验证发布者」）：
    右键 zip 文件 → **属性** → 勾选 **解除锁定** → 确定，再解压。也可以在解压后的目录里执行 `Get-ChildItem -Recurse | Unblock-File`。
-4. 双击 **`PaperLibrary.exe`**。几秒后出现标题为 **PaperLibrary v1.9 Nexus** 的窗口，界面就显示在这个窗口里。
+4. 双击 **`PaperLibrary.exe`**。几秒后出现标题为 **PaperLibrary … Nexus**（中间是版本号）的窗口，界面就显示在这个窗口里。
 5. 第一次启动是**空库**（不预置示例文献），可以直接开始导入。
 
 > **目录里的另一个文件不要动**：`PaperLibrary.exe.config` 是 .NET 运行配置（首次启动后会被设为隐藏），**不是启动器**。.NET 只认这个固定文件名，改名或删除会影响窗口的显示设置。
 
 ### 3.3 启动之后
 
-- 服务在后台运行（无控制台黑框）。窗口标题栏带版本号，例如 `PaperLibrary v1.9 Nexus`。
+- 服务在后台运行（无控制台黑框）。窗口标题栏带版本号（形如 `PaperLibrary … Nexus`）。
 - **关闭窗口**：会先保存数据，再停止由这个窗口启动的后台服务、释放端口。下次双击即可继续。
 - 重复双击 `PaperLibrary.exe` 不会重复起服务：检测到 4321 上已经在运行本程序时，会直接复用并打开窗口。
 - 想用**浏览器**而不是内置窗口：见下一节。
@@ -546,8 +546,8 @@ JSON 包含题录、标签、AI 总结与对话记录，但不含 PDF 原文。
 
 ## 16. 版本与许可
 
-- 当前版本 **v1.9**（`1.9.0`），发布于 2026-11-22。本版重点：分类与磁盘目录对齐、扫描入库递归去重、PDF 补充材料标签页与批注、设置页四栏折叠。
-- 更新记录与安装包：[GitHub Releases](https://github.com/PaperLibrary-Developers/PaperLibrary/releases)。
+- 版本以程序内「设置与备份 → 关于」和根目录 `version.json` 为准；更新记录与安装包见 [GitHub Releases](https://github.com/PaperLibrary-Developers/PaperLibrary/releases)。
+- 近期版本重点：分类与磁盘目录对齐、扫描入库递归去重、PDF 补充材料标签页与批注、设置页四栏折叠。
 - 更新方式：`设置与备份 → 关于 → 关于与更新 → 检查更新`，下载后点 `立即安装`（安装会保留 `data/`）。
 - 许可证：[GNU Affero General Public License v3.0](LICENSE)。
 
@@ -555,7 +555,7 @@ JSON 包含题录、标签、AI 总结与对话记录，但不含 PDF 原文。
 
 ## 附：截图说明
 
-本 README 中的界面截图均来自发布包 **v1.9** 的实际运行界面（1440 × 900）：
+本 README 中的界面截图均来自发布包的实际运行界面（1440 × 900）：
 
 | 截图 | 对应页面 / 状态 |
 | --- | --- |
