@@ -23,6 +23,51 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
     )
   }
 
+  /** 无标题面板：给「栏名就是标题」的几个单面板栏用（外观与偏好），避免标题重复两次 */
+  function flatPanel (body) {
+    return h('section.panel.flat', h('div.panel-body', body))
+  }
+
+  /* ---------------- 四栏折叠 ----------------
+     改造前 10 个面板平铺一页：1440 宽下整页 4256px，改个主题也要先滚过「大模型」的整段提示词。
+     现在按用途收成 4 栏（外观与偏好 / 资产与备份 / API服务 / 关于），默认只展开第一栏；
+     展开状态记在 localStorage（与侧栏收起、文件夹折叠同一套做法），下次进来还是原样，
+     隐私模式下写不进去就退回默认，不报错。
+     折叠本身用原生 <details>/<summary>：键盘可达、Ctrl+F 能自动展开、没有脚本状态机要维护。 */
+  const SEC_KEY = 'set.sections'
+
+  function readSectionState () {
+    try { return JSON.parse(localStorage.getItem(SEC_KEY) || '{}') || {} } catch (err) { return {} }
+  }
+
+  function writeSectionState (id, open) {
+    const all = readSectionState()
+    if (all[id] === !!open) return
+    all[id] = !!open
+    try { localStorage.setItem(SEC_KEY, JSON.stringify(all)) } catch (err) { /* 隐私模式：只影响记忆，不影响折叠 */ }
+  }
+
+  function section (id, title, hint, panels, defaultOpen) {
+    const saved = readSectionState()[id]
+    const open = saved == null ? !!defaultOpen : !!saved
+    const el = h('details.set-sec', { id: 'set-sec-' + id, open: open || null },
+      h('summary.set-sec-sum',
+        h('span.set-sec-name', title),
+        h('span.set-sec-hint', hint),
+        // 箭头是纯装饰（形状由 .set-sec-mark 的 clip-path 画出），不给读屏念
+        h('span.set-sec-mark', { 'aria-hidden': 'true' })
+      ),
+      h('div.set-sec-body', panels)
+    )
+    el.addEventListener('toggle', () => writeSectionState(id, el.open))
+    return el
+  }
+
+  /** 「全部展开 / 全部收起」：想用 Ctrl+F 通页找关键词时，手动点两下比逐个展开快 */
+  function expandAll (root, open) {
+    root.querySelectorAll('details.set-sec').forEach(item => { item.open = !!open })
+  }
+
   async function settingsHandler (ctx) {
     const { outlet, isStale } = ctx
     const state = getState()
@@ -72,7 +117,8 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       h('option', { value: 'night', selected: state.prefs.theme === 'night' }, '夜间深色')
     )
 
-    const prefPanel = panel('外观与偏好', h('div.form-grid',
+    // 「外观与偏好」栏里只有这一块，栏名即标题，所以用无标题面板（别把「外观与偏好」写两遍）
+    const prefPanel = flatPanel(h('div.form-grid',
       h('div.field', h('label', '默认视图'), viewSelect),
       h('div.field', h('label', '每页条数'), sizeSelect),
       h('div.field', h('label', '主题'), themeSelect),
@@ -819,7 +865,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       return res
     }
 
-    const webPanel = panel('网络检索（Exa，只走最便宜的基础检索）',
+    const webPanel = panel('网络检索（Exa）',
       h('div', { style: { display: 'grid', gap: '13px' } },
         webStatus,
         h('div.field', h('label', 'Exa API Key'), fExaKey,
@@ -947,7 +993,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
     })
 
     const testResult = h('div.hint', '')
-    const aiPanel = panel('大模型（用于自动总结文献）',
+    const aiPanel = panel('大模型',
       h('div', { style: { display: 'grid', gap: '13px' } },
         aiStatus,
         h('div.form-grid',
@@ -1456,21 +1502,41 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       limitStatus
     ))
 
+    /* 四栏装配：栏名给人找东西，栏内面板保持原来的标题与结构（面板本身没改，只换了归属）。
+       折叠状态见文件顶部的 section()；栏上那行小字列出里面有什么，收起时也能定位。 */
+    const prefsSec = section('prefs', '外观与偏好', '默认视图 · 每页条数 · 主题 · 快捷键',
+      prefPanel, true)
+    const assetsSec = section('assets', '资产与备份', '原文与补充材料 · 导入上限 · 导出与备份 · 导入',
+      [pdfPanel, limitsPanel, exportPanel, importPanel])
+    const apiSec = section('api', 'API服务', '大模型 · 学术检索来源（OpenAlex） · 网络检索（Exa）',
+      [aiPanel, sourcesPanel, webPanel])
+    const aboutSec = section('about', '关于', '关于与更新 · 服务与数据',
+      [aboutPanel, infoPanel])
+
+    const allToggle = h('button.btn.sm.ghost', {
+      type: 'button',
+      title: '展开/收起全部四栏（想用 Ctrl+F 通页找词时方便）',
+      onclick: ev => {
+        const btn = ev.currentTarget
+        const open = btn.dataset.open !== '1'
+        expandAll(btn.closest('.content'), open)
+        btn.dataset.open = open ? '1' : '0'
+        btn.textContent = open ? '全部收起' : '全部展开'
+      }
+    }, '全部展开')
+
     outlet.replaceChildren(h('div.content.detail',
-      h('div.page-head', h('div',
-        h('div.page-title', '设置与备份'),
-        h('div.page-sub', `共 ${stats.total != null ? stats.total : 0} 条文献 · ${stats.tags != null ? stats.tags : 0} 个标签`)
-      )),
-      prefPanel,
-      aiPanel,
-      sourcesPanel,
-      limitsPanel,
-      webPanel,
-      exportPanel,
-      importPanel,
-      pdfPanel,
-      aboutPanel,
-      infoPanel
+      h('div.page-head',
+        h('div',
+          h('div.page-title', '设置与备份'),
+          h('div.page-sub', `共 ${stats.total != null ? stats.total : 0} 条文献 · ${stats.tags != null ? stats.tags : 0} 个标签`)
+        ),
+        allToggle
+      ),
+      prefsSec,
+      assetsSec,
+      apiSec,
+      aboutSec
     ))
     document.onkeydown = null
   }

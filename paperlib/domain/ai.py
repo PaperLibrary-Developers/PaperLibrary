@@ -144,7 +144,7 @@ def summary_zh(services, paper, options=None):
     readiness = llm.readiness()
     if not readiness["ready"]:
         return {"ok": False, "status": 400,
-                "error": "还没有配置大模型：" + str(readiness.get("reason") or "") + "（到「设置 → 大模型」里填写）"}
+                "error": "还没有配置大模型：" + str(readiness.get("reason") or "") + "（到「设置 → API服务 → 大模型」里填写）"}
 
     # 组装资料：
     #   translate 只发「原文摘要」（翻译用不着正文，塞正文会被整段抄回输出）；
@@ -209,7 +209,7 @@ def summary_zh_batch(services):
     readiness = llm.readiness()
     if not readiness["ready"]:
         return {"ok": False, "status": 400,
-                "error": "还没有配置大模型：" + str(readiness.get("reason") or "") + "（到「设置 → 大模型」里填写）"}
+                "error": "还没有配置大模型：" + str(readiness.get("reason") or "") + "（到「设置 → API服务 → 大模型」里填写）"}
     pending = [p for p in services.db.list_papers() if not str(p.get("summaryZh") or "").strip()]
     results = []
     for paper in pending:
@@ -239,7 +239,7 @@ def summarize_stream(services, paper, body, stream):
     readiness = llm.readiness()
     if not readiness["ready"]:
         return {"ok": False, "status": 400,
-                "error": "还没有配置大模型：" + str(readiness.get("reason") or "") + "（到「设置 → 大模型」里填写）"}
+                "error": "还没有配置大模型：" + str(readiness.get("reason") or "") + "（到「设置 → API服务 → 大模型」里填写）"}
 
     # 有 PDF 但还没提取过正文时先自动抽一次，否则会退化成「仅依据摘要」
     auto_extract = None

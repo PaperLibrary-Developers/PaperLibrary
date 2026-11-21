@@ -291,7 +291,7 @@ def main(argv=None, root=None):
         print("  关掉网页 %d 秒后自动停止（--idle-exit 0 可关闭该行为）。" % config.idle_exit)
     else:
         print("  空闲自动停机：已关闭（--idle-exit 0）。")
-    print("  也可以在网页「设置 → 服务与数据」里点「停止服务」。")
+    print("  也可以在网页「设置 → 关于 → 服务与数据」里点「停止服务」。")
     print("")
     if not config.no_open and not probe_pid:
         open_browser(url, config.data_dir / "logs")

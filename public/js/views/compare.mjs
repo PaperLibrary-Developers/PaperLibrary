@@ -22,7 +22,7 @@ const selected = []
 const titleCache = new Map()
 
 const LOCAL_NOTE = '本地对比：当前没有可用的大模型（未配置，或调用失败），下面只有本地能算出来的字段与资料摘要，' +
-  '不做模型归纳、不编造内容。在「设置 → 大模型」配置后可以拿到完整的化学字段对比。'
+  '不做模型归纳、不编造内容。在「设置 → API服务 → 大模型」配置后可以拿到完整的化学字段对比。'
 
 function isKeyMissing (err) {
   if (!err) return false

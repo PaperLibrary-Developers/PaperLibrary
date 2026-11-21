@@ -95,7 +95,7 @@ def _known_exhausted_error():
     wait = ("%.1f 小时" % (minutes / 60.0)) if minutes >= 60 else ("%d 分钟" % minutes)
     message = "OpenAlex 今日额度已用尽，约 " + wait + "后重置"
     if not has_key:
-        message += "（未配置 key，额度按共享 IP 计算；在设置页填一个免费 key 可提升 10 倍）"
+        message += "（未配置 key，额度按共享 IP 计算；在「设置 → API服务 → 学术检索来源」填一个免费 key 可提升 10 倍）"
     error = SourceError(message, status=429, quota_exhausted=True)
     error.quota_reset_at = snap.get("resetAt")
     return error

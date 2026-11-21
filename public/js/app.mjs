@@ -822,7 +822,7 @@ const { h, toast, debounce } = util
     const autoChecker = createAutoChecker({
       check: () => api.checkUpdate(),
       notify: latest => toast('发现新版本 ' + (latest && latest.tag ? latest.tag : '') +
-        '，可在「设置 → 关于与更新」查看'),
+        '，可在「设置 → 关于」查看'),
       autoDownload: () => autoDownloadEnabled(getState().prefs),
       download: () => api.startUpdateDownload(),
       onAutoDownload: latest => toast('已开始自动下载 ' + (latest && latest.tag ? latest.tag : '') +

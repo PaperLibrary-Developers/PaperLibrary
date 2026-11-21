@@ -119,7 +119,7 @@ def _empty_llm_message(finish_reason, reasoning):
     """空回复的可诊断原因：区分「输出预算被思考吃光」与「模型只回了思考」。"""
     if finish_reason == "length":
         return ("模型输出被 max_tokens 截断（finish_reason=length），没有可用的正文。"
-                "该模型可能先输出思考内容、把输出预算用光了；请到「设置 → 大模型」"
+                "该模型可能先输出思考内容、把输出预算用光了；请到「设置 → API服务 → 大模型」"
                 "请检查模型的输出限制，或在模型支持的范围内提高 max_tokens。")
     if str(reasoning or "").strip():
         return ("模型只返回了思考内容、没有正文（finish_reason=%s）。"
@@ -248,7 +248,7 @@ class LLM:
         return self.readiness()
 
     def install_hint(self):
-        return "还没有配置大模型：到「设置 → 大模型」填入 API Key（或切到本地 Ollama）"
+        return "还没有配置大模型：到「设置 → API服务 → 大模型」填入 API Key（或切到本地 Ollama）"
 
     # ---------- 协议分支：OpenAI 兼容 / Anthropic ----------
     def _is_anthropic(self):

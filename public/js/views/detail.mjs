@@ -1195,7 +1195,7 @@ import * as foldersUi from '../folders.mjs'
     })
     const webLabel = h('label', {
       style: { display: 'flex', gap: '5px', alignItems: 'center', fontSize: '12.5px', color: 'var(--muted)' },
-      title: '勾上后这次提问会用 Exa 联网检索（约 $0.011/次，走最便宜的基础档）；不勾就用免费的学术检索。先在「设置 → 网络检索」里配好 Exa Key。'
+      title: '勾上后这次提问会用 Exa 联网检索（约 $0.011/次，走最便宜的基础档）；不勾就用免费的学术检索。先在「设置 → API服务 → 网络检索」里配好 Exa Key。'
     }, webToggle, '联网搜索')
     webToggle.addEventListener('change', () => {
       savePrefs({ chatUseWeb: !!webToggle.checked }, { silent: true })

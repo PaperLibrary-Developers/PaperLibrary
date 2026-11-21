@@ -187,7 +187,7 @@ class WebSearch:
     def _request(self, endpoint, body):
         key = str(self.settings.get("exaApiKey") or "")
         if not key:
-            raise WebSearchError("还没有配置 Exa API Key（到「设置 → 网络检索」里填写）")
+            raise WebSearchError("还没有配置 Exa API Key（到「设置 → API服务 → 网络检索」里填写）")
         data = json.dumps(body or {}, ensure_ascii=False).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
@@ -276,7 +276,7 @@ class WebSearch:
                 "ok": False,
                 "items": [],
                 "error": "本月 Exa 估算花费已达上限（约 $%s / 上限 $%s）。"
-                         "可在「设置 → 网络检索」里调高上限或重置用量。"
+                         "可在「设置 → API服务 → 网络检索」里调高上限或重置用量。"
                          % (budget["spent"], budget["cap"]),
             }
 

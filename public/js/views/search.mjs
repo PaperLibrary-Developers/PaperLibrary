@@ -1053,7 +1053,7 @@ import * as foldersUi from '../folders.mjs'
       h('div.external-head',
         h('div', { style: { display: 'grid', gap: '2px' } },
           h('div', { style: { fontWeight: '650', fontSize: '15px' } }, '网络资料（Exa）'),
-          h('div.hint', '网页、博客、新闻、预印本页面等，不是论文题录；每条都带正文片段，方便判断相关性。需要先在设置里填 Exa API Key。')
+          h('div.hint', '网页、博客、新闻、预印本页面等，不是论文题录；每条都带正文片段，方便判断相关性。需要先在「设置 → API服务 → 网络检索（Exa）」里填 Exa API Key。')
         ),
         h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' } },
           webStatus,
@@ -1116,7 +1116,7 @@ import * as foldersUi from '../folders.mjs'
         webStatus.textContent = '检索失败'
         webStatus.style.color = 'var(--danger)'
         webBody.replaceChildren(h('div.hint', { style: { padding: '8px 0', color: 'var(--danger)' } },
-          err.message, h('br'), '需要先在「设置 → 网络检索（Exa）」里填好 API Key。'))
+          err.message, h('br'), '需要先在「设置 → API服务 → 网络检索（Exa）」里填好 API Key。'))
       } finally {
         webLoading = false
       }
@@ -1320,7 +1320,7 @@ import * as foldersUi from '../folders.mjs'
           failed.push(['openalex', {
             hint: 'OpenAlex 今日额度已用尽' +
               (oaState.quota.resetAt ? '（' + new Date(oaState.quota.resetAt).toLocaleString('zh-CN', { hour12: false }) + ' 重置）' : '') +
-              (oaState.keyless ? '；在「设置 → 学术检索来源」填一个免费 key 可提升约 10 倍额度' : '')
+              (oaState.keyless ? '；在「设置 → API服务 → 学术检索来源」填一个免费 key 可提升约 10 倍额度' : '')
           }])
         }
         if (!externalItems.length) {

@@ -337,7 +337,7 @@ def build_chat_context(services, paper, question, options=None):
 
 
 # ---------------- 对话 ----------------
-def _readiness_error(services, suffix="（到「设置 → 大模型」里填写）"):
+def _readiness_error(services, suffix="（到「设置 → API服务 → 大模型」里填写）"):
     readiness = services.llm.readiness()
     if readiness["ready"]:
         return None

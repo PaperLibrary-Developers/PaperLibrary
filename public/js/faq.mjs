@@ -49,13 +49,13 @@ export const FAQ_GROUPS = [
       },
       {
         q: '已经有一堆 PDF 放在文件夹里，能批量识别吗？',
-        a: '把 PDF 放进 data/article/papers/，然后到「设置 → 原文与补充材料」点「重新扫描」，系统会按内容比对并补建记录；也可以直接到 #/new 一次多选拖入。',
+        a: '把 PDF 放进 data/article/papers/，然后到「设置 → 资产与备份 → 原文与补充材料」点「重新扫描」，系统会按内容比对并补建记录；也可以直接到 #/new 一次多选拖入。',
         keywords: ['批量', '扫描', '目录', '文件夹', '已有', '导入'],
         links: [{ label: '去设置', hash: '#/settings' }]
       },
       {
         q: '导入后摘要是空的，怎么办？',
-        a: '有些出版社（ACS 全系、Nature、部分 Wiley/RSC）不向 Crossref 交摘要。到「设置 → 学术检索来源（OpenAlex）」点「补摘要」，它会按「PDF 本地抽取 → OpenAlex」的顺序补，只补空的，不动你已经有的内容。',
+        a: '有些出版社（ACS 全系、Nature、部分 Wiley/RSC）不向 Crossref 交摘要。到「设置 → API服务 → 学术检索来源（OpenAlex）」点「补摘要」，它会按「PDF 本地抽取 → OpenAlex」的顺序补，只补空的，不动你已经有的内容。',
         keywords: ['摘要', '空', '补摘要', 'openalex', '没有摘要'],
         links: [{ label: '去设置', hash: '#/settings' }]
       }
@@ -112,7 +112,7 @@ export const FAQ_GROUPS = [
     items: [
       {
         q: 'AI 总结 / 对话为什么是灰的？',
-        a: '这两项需要大模型：到「设置 → 大模型」填服务商、模型 id（例如 deepseek-chat）、接口地址和 API Key，保存并测试。没有配置时，检索、分类、横向对比、图表、导出都不受影响。',
+        a: '这两项需要大模型：到「设置 → API服务 → 大模型」填服务商、模型 id（例如 deepseek-chat）、接口地址和 API Key，保存并测试。没有配置时，检索、分类、横向对比、图表、导出都不受影响。',
         keywords: ['ai', '总结', '对话', '灰', '大模型', 'key', '配置'],
         links: [{ label: '去设置', hash: '#/settings' }]
       },
@@ -124,7 +124,7 @@ export const FAQ_GROUPS = [
       },
       {
         q: '怎么导出 BibTeX 或 GB/T 7714 引用？',
-        a: '打开文献详情页，引用面板里可以复制或导出 GB/T 7714、BibTeX 等格式；整库导出在「设置 → 导出与备份」，可导 JSON / BibTeX / Markdown。',
+        a: '打开文献详情页，引用面板里可以复制或导出 GB/T 7714、BibTeX 等格式；整库导出在「设置 → 资产与备份 → 导出与备份」，可导 JSON / BibTeX / Markdown。',
         keywords: ['导出', 'bibtex', '引用', 'gbt', '文献格式', 'citation'],
         links: [{ label: '回文献库', hash: '#/' }, { label: '去设置', hash: '#/settings' }]
       }
@@ -135,7 +135,7 @@ export const FAQ_GROUPS = [
     items: [
       {
         q: '数据存在哪？怎么备份、换电脑怎么迁？',
-        a: '所有数据都在 data/ 目录（唯一的真源，不上云）。到「设置 → 导出与备份」点「导出全部（JSON 备份）」；换电脑后在同一页的「导入」里选那个 JSON 即可恢复。建议定期导一份。',
+        a: '所有数据都在 data/ 目录（唯一的真源，不上云）。到「设置 → 资产与备份 → 导出与备份」点「导出全部（JSON 备份）」；换电脑后在同一栏的「导入」里选那个 JSON 即可恢复。建议定期导一份。',
         keywords: ['数据', '备份', '导出', '导入', '迁移', '换电脑', 'json'],
         links: [{ label: '去设置', hash: '#/settings' }]
       },
