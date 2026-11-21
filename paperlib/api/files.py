@@ -172,10 +172,16 @@ def attachments_list(ctx):
     if not paper:
         return None
     fulltext = ctx.services.fulltext
+    paper_id = paper.get("id")
     items = []
     for record in _paper_attachments(paper):
         row = dict(record)
-        row["hasTextFile"] = bool(fulltext.has_attachment_text(paper.get("id"), record.get("file")))
+        file = record.get("file")
+        row["hasTextFile"] = bool(fulltext.has_attachment_text(paper_id, file))
+        if row["hasTextFile"] and not row.get("hasText"):
+            # 已入库的 SI 可能是在总结或问答时补抽的，文本已存但旧记录还没有字数。
+            text = fulltext.read_attachment(paper_id, file) or ""
+            row.update(hasText=bool(text.strip()), textChars=len(text))
         items.append(row)
     ctx.json(200, {"ok": True, "attachments": items})
 

@@ -5,8 +5,10 @@
 #
 #     python -m pip install -r requirements.txt
 #
-# 其余全部是标准库。缺 PyMuPDF 时 PDF 文本提取会降级（接口回 400 并提示安装），
-# 不影响入库、检索、阅读、引用等主流程。
+# 文档解析依赖缺失时，补充材料仍可保存原件。
 
 PyMuPDF>=1.24,<2
 Pillow>=10,<13
+msdoc2docx==0.36.6
+striprtf>=0.0.35,<0.1
+openpyxl>=3.1.5,<4

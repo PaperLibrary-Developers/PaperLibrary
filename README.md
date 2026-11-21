@@ -5,7 +5,7 @@ PaperLibrary（Python 分析引擎）与 Sci-lib（Web 壳）合并后的单产�
 
 ## 运行（开发）
 
-依赖只有 PyMuPDF 与 Pillow，其余全是标准库（发布包已内置便携运行时，无需安装）：
+从源码运行时安装依赖。Windows 发布包已内置便携运行时：
 
     python -m pip install -r requirements.txt
 
@@ -21,6 +21,8 @@ Windows 发布包的唯一入口是双击 `PaperLibrary.exe`：后台启动 Pyth
     python -m paperlib --stop                 # 命令行停止（开发 / 排错用）
 
 数据目录默认 ./data（可用 --data-dir 指定）。首次运行会播种 1 条示例文献（data/.seeded 标记）。
+
+补充材料（SI）支持抽取 PDF、DOCX、Word 97–2003 DOC、RTF、XLSX 和 TXT、CSV、TSV、Markdown 等纯文本格式。总结和问答会使用抽取结果，已上传的附件可在首次使用时补抽。
 
 服务会盯着有没有网页连着（前端每个页面一条 `/api/presence` SSE；发布包的内置窗口也算一个页面）：**关掉所有页面 30 秒后自动保存并退出、释放端口**，
 不用再手动 stop。时间可用 `--idle-exit 秒数` 调整（0 = 不自动停），启动宽限用 `--idle-grace 秒数`（默认 8）。

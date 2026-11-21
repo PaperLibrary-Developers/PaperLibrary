@@ -2,7 +2,7 @@
 
 目标：解压即用、无需安装 Python/Node。组成：
   python-3.11.9-embed-amd64.zip（官方 11MB → 解压 21MB）
-  + 固定版本及 SHA-256 的 PyMuPDF 和 Pillow Windows x64 wheel
+  + 锁定版本及 SHA-256 的 Windows x64 运行时依赖
   + python311._pth（把 site-packages 与项目根加进 sys.path）
 
 用法：python tools/make_portable.py [--runtime-dir <dir>] [--source-site-packages <dir>] [--force]
@@ -33,9 +33,12 @@ WHEEL_LOCK = Path(__file__).with_name("windows-portable-requirements.txt")
 PTH = "python311._pth"
 SELF_TEST = (
     "import sys; "
+    "from importlib.metadata import version; "
     "import sqlite3, ssl, json, hashlib, urllib.request, zipfile, ctypes, http.server; "
     "import pymupdf; from PIL import Image; "
-    "print('portable-ok', sys.version.split()[0], pymupdf.__version__, Image.__version__)"
+    "from doc2docx import convert; from striprtf.striprtf import rtf_to_text; "
+    "from openpyxl import load_workbook; import et_xmlfile; "
+    "print('portable-ok', sys.version.split()[0], *(version(name) for name in sys.argv[1:]))"
 )
 
 
@@ -73,7 +76,8 @@ def install_wheels(target):
 def copy_packages(source: Path, target: Path):
     target.mkdir(parents=True, exist_ok=True)
     copied = []
-    for name in ("pymupdf", "fitz", "PIL", "pillow.libs", "pymupdf.libs"):
+    for name in ("pymupdf", "fitz", "PIL", "pillow.libs", "pymupdf.libs",
+                 "doc2docx", "striprtf", "openpyxl", "et_xmlfile"):
         src = source / name
         if src.is_dir():
             dst = target / name
@@ -95,9 +99,11 @@ def write_pth(portable):
 def self_test(portable, locked):
     exe = portable / "python.exe"
     env = dict(os.environ, PYTHONUTF8="1")
-    out = subprocess.run([str(exe), "-B", "-c", SELF_TEST], capture_output=True, text=True, env=env)
-    expected = [line.split()[0].split("==")[1] for line in WHEEL_LOCK.read_text(encoding="utf-8").splitlines()
+    packages = [line.split()[0].split("==") for line in WHEEL_LOCK.read_text(encoding="utf-8").splitlines()
                 if "==" in line]
+    expected = [version for _, version in packages]
+    names = [name for name, _ in packages] if locked else []
+    out = subprocess.run([str(exe), "-B", "-c", SELF_TEST, *names], capture_output=True, text=True, env=env)
     if out.returncode != 0 or (locked and out.stdout.split() != ["portable-ok", PY_VERSION, *expected]):
         print(out.stdout)
         print(out.stderr)

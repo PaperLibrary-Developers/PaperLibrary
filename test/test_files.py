@@ -13,16 +13,20 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
+from zipfile import ZipFile
 
 import pymupdf
+from openpyxl import Workbook
 
 from paperlib.api import files, import_
 from paperlib.config import Config
 from paperlib.data.store import Store
+from paperlib.domain import fullread
 from paperlib.http.router import Router
 from paperlib.http.server import HttpServer
 from paperlib.http.static import StaticHandler
@@ -34,6 +38,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CJK_FONT = r"C:\Windows\Fonts\msyh.ttc"
 TITLE = "金属有机笼的气体分离 测试论文"
 SAMPLE_DOI = "10.1021/jacs.3b12345"
+WORD97_FIXTURE = Path(__file__).with_name("fixtures") / "si-word97.doc"
 
 
 def pdf_bytes():
@@ -254,7 +259,6 @@ class FulltextTest(Base):
 
 class AttachmentsTest(Base):
     def _upload_attachment(self, content=b"supplementary info", name="SI 说明.txt"):
-        self.upload()
         ctx = FakeCtx(self.services, params={"id": self.paper["id"]},
                       headers={"X-Filename": quote(name)}, body=content)
         files.attachments_upload(ctx)
@@ -307,6 +311,100 @@ class AttachmentsTest(Base):
         files.attachments_upload(second)
         self.assertNotEqual(first.payload["attachment"]["file"], second.payload["attachment"]["file"])
         self.assertEqual(len(second.payload["attachments"]), 2)
+
+    def test_uploads_word_files_and_spreadsheet_into_ai_reference(self):
+        docx = BytesIO()
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        with ZipFile(docx, "w") as archive:
+            archive.writestr("word/document.xml", f'<w:document {w}><w:body>'
+                '<w:p><w:r><w:t>补充实验</w:t><w:tab/><w:t>结论</w:t></w:r></w:p>'
+                '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>项目</w:t></w:r></w:p></w:tc>'
+                '<w:tc><w:p><w:r><w:t>测定值</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+                '</w:body></w:document>')
+            archive.writestr("word/footnotes.xml", f'<w:footnotes {w}>'
+                '<w:footnote w:id="1"><w:p><w:r><w:t>补充脚注</w:t></w:r></w:p></w:footnote>'
+                '</w:footnotes>')
+        xlsx = BytesIO()
+        workbook = Workbook()
+        workbook.active.title = "原始数据"
+        workbook.active.append(["样品编号", None, "读数"])
+        workbook.active.append(["S17", None, 0])
+        workbook.create_sheet("结果").append(["有效", False])
+        workbook.save(xlsx)
+        workbook.close()
+
+        cases = [
+            ("方法.DOCX", docx.getvalue(), "docx", "补充实验\t结论\n项目\t测定值\n\n补充脚注"),
+            ("旧版.DOC", WORD97_FIXTURE.read_bytes(), "doc", "补充材料：样品编号 S17。\nSample\tValue\nS17\t7.25"),
+            ("表格.xlsx", xlsx.getvalue(), "xlsx", "工作表：原始数据\n样品编号\t\t读数\nS17\t\t0\n工作表：结果\n有效\tFalse"),
+            ("读数.rtf", rb"{\rtf1\ansi SI result\par Reading = 7.25}", "rtf", "SI result\nReading = 7.25"),
+            ("附件.pdf", self.PDF, "pdf", "Porous Metal-Organic Cages"),
+        ]
+        for name, data, kind, expected in cases:
+            with self.subTest(name=name):
+                ctx = self._upload_attachment(data, name)
+                self.assertEqual(ctx.status, 201)
+                record = ctx.payload["attachment"]
+                self.assertEqual(record["kind"], kind)
+                self.assertTrue(record["hasText"])
+                text = self.services.fulltext.read_attachment(self.paper["id"], record["file"])
+                self.assertIn(expected, text)
+                self.assertEqual(ctx.payload["extract"], {"ok": True, "chars": len(text)})
+
+        paper = self.services.library.get(self.paper["id"])
+        prepared = fullread.prepare(self.services, paper)
+        self.assertEqual(prepared["coverage"]["missing"], [])
+        reference = fullread.paper_reference(prepared)["content"]
+        for name, _, _, expected in cases:
+            self.assertIn(f"补充材料：{name}", reference)
+            self.assertIn(expected, reference)
+
+    def test_uploads_short_and_multiencoding_text(self):
+        cases = [
+            ("短文.TXT", "需重测".encode("utf-8-sig"), "需重测"),
+            ("说明.txt", "数据\r\n7.25".encode("utf-16"), "数据\n7.25"),
+            ("表格.tsv", "峰值\t7.25".encode("gb18030"), "峰值\t7.25"),
+        ]
+        for name, data, expected in cases:
+            with self.subTest(name=name):
+                ctx = self._upload_attachment(data, name)
+                self.assertEqual(ctx.status, 201)
+                self.assertEqual(ctx.payload["extract"], {"ok": True, "chars": len(expected)})
+                record = ctx.payload["attachment"]
+                self.assertEqual(self.services.fulltext.read_attachment(self.paper["id"], record["file"]), expected)
+
+    def test_corrupt_or_unsupported_si_is_saved_without_text(self):
+        for name, data in [("损坏.docx", b"invalid ZIP"), ("损坏.doc", b"invalid OLE"),
+                           ("图片.png", b"\x89PNG"), ("空白.txt", b" \r\n"), ("二进制.txt", b"\x00\x01\x02")]:
+            with self.subTest(name=name):
+                ctx = self._upload_attachment(data, name)
+                self.assertEqual(ctx.status, 201)
+                self.assertFalse(ctx.payload["extract"]["ok"])
+                record = ctx.payload["attachment"]
+                self.assertFalse(record["hasText"])
+                self.assertEqual(Path(self.store.path_for_attachment(record["file"])).read_bytes(), data)
+                self.assertFalse(self.services.fulltext.has_attachment_text(self.paper["id"], record["file"]))
+
+    def test_existing_word_attachment_is_extracted_when_first_used(self):
+        file = self.paper["id"] + "-old.doc"
+        directory = Path(self.store.attachments_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / file).write_bytes(WORD97_FIXTURE.read_bytes())
+        paper = self.services.library.update(self.paper["id"], {"attachments": [
+            {"file": file, "originalName": "原有附件.doc", "kind": "other"},
+        ]})
+        self.assertFalse(self.services.fulltext.has_attachment_text(paper["id"], file))
+        prepared = fullread.prepare(self.services, paper)
+        self.assertIn("补充材料：样品编号 S17。", fullread.paper_reference(prepared)["content"])
+        cached = self.services.fulltext.read_attachment(paper["id"], file)
+        self.assertEqual(prepared["coverage"]["siChars"], len(cached))
+
+        ctx = FakeCtx(self.services, method="GET", params={"id": paper["id"]})
+        files.attachments_list(ctx)
+        record = ctx.payload["attachments"][0]
+        self.assertTrue(record["hasText"])
+        self.assertTrue(record["hasTextFile"])
+        self.assertEqual(record["textChars"], len(cached))
 
     def test_empty_attachment_is_400(self):
         ctx = FakeCtx(self.services, params={"id": self.paper["id"]},

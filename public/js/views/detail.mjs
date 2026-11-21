@@ -1624,7 +1624,7 @@ import * as foldersUi from '../folders.mjs'
             target: '_blank',
             rel: 'noopener',
             title: att.originalName + ' · ' + util.fileSize(att.size) +
-              (att.hasText ? ' · 已抽取 ' + att.textChars + ' 字（用于总结与问答）' : ' · 未抽取文字（仅作附件）')
+              (att.hasText ? ' · 已抽取 ' + att.textChars + ' 字（用于总结与问答）' : ' · 尚未抽取文字')
           }, att.originalName),
           att.hasText ? h('span.att-flag', { title: '已抽取文字，会用于 AI 总结与问答' }, '已读入') : null,
           h('button.att-del', {
@@ -1668,7 +1668,7 @@ import * as foldersUi from '../folders.mjs'
     // 反馈：这块只是上传补充材料的地方，越紧凑越好——只留一行文件名，其余信息放进 hover 提示
     const moreUploadBtn = h('button.btn.sm.ghost', {
       type: 'button',
-      title: '上传 SI、附录、数据集说明等（支持 PDF / Word / 文本 / 图片）',
+      title: '上传补充材料，可抽取 PDF、DOCX、DOC、RTF、XLSX 和纯文本',
       onclick: () => attInput.click()
     }, '＋ 上传')
     const morePanel = h('section.panel.compact', { id: 'more-panel' },

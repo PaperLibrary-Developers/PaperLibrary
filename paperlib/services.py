@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import shutil
 import time
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
 from paperlib import __version__
 from paperlib.adapters import external, metadata
+from paperlib.adapters.attachment_text import extract_attachment_text
 from paperlib.adapters.llm import LLM
 from paperlib.adapters.pdf import FullText
 from paperlib.adapters.sources import Sources
@@ -119,26 +121,6 @@ def create_services(config, store):
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": "提取失败：" + str(exc)}
 
-    def extract_attachment_text(abs_path, ext):
-        kind = str(ext or "").lower()
-        try:
-            if kind == ".pdf":
-                result = fulltext.extract_from_file(abs_path)
-                text = str(result.get("text") or "").strip()
-                if len(text) >= 20:
-                    return {"ok": True, "text": text, "kind": "pdf"}
-                return {"ok": False, "error": "这个 PDF 提取不到文字（可能是扫描件）", "kind": "pdf"}
-            if kind in (".txt", ".md", ".markdown", ".csv", ".json", ".tex", ".bib"):
-                if Path(abs_path).stat().st_size > 5 * 1024 * 1024:
-                    return {"ok": False, "error": "文本文件超过 5MB，先不抽取", "kind": "text"}
-                text = Path(abs_path).read_text(encoding="utf-8", errors="replace")
-                if len(text.strip()) >= 10:
-                    return {"ok": True, "text": text, "kind": "text"}
-                return {"ok": False, "error": "文件内容太短或不是纯文本", "kind": "text"}
-            return {"ok": False, "error": "这种格式暂不抽取文字（" + kind + "），只作为附件保存", "kind": "other"}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": "抽取失败：" + str(exc), "kind": "other"}
-
     def trigger_auto_summary_zh(paper_id):
         # 自动中文总结改为同步调用领域函数（避免 HTTP 自请求），由 T4 实现
         try:
@@ -182,7 +164,7 @@ def create_services(config, store):
         pick_passages=pick_passages,
         runtime=runtime,
         extract_paper_fulltext=extract_paper_fulltext,
-        extract_attachment_text=extract_attachment_text,
+        extract_attachment_text=partial(extract_attachment_text, extract_pdf=fulltext.extract_from_file),
         trigger_auto_summary_zh=trigger_auto_summary_zh,
         fulltext_budget=budget,
         update=UpdateService(config.root, config.data_dir),
