@@ -140,6 +140,41 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(snap["error"], "")
         self.assertEqual(snap["code"], "")
 
+    def test_reopen_after_install_retires_download_artifacts(self):
+        svc = self.make_service()
+        svc.start_download()
+        self.assertTrue(svc.wait_idle(30))
+        paths = svc.store.paths("1.7.1")
+        make_root(self.root, "1.7.1")
+        journal = svc.store.updates_dir / "journal.json"
+        journal.write_text(json.dumps({"phase": "launch", "version": "1.7.1"}), encoding="utf-8")
+        candidate = self.make_service()
+        self.assertEqual(candidate.snapshot()["phase"], "idle")
+        self.assertTrue(paths.ready.is_file(), "验证阶段须保留回滚可能需要的暂存")
+        backup = svc.store.updates_dir / "backups" / "app-1.6.0"
+        backup.mkdir(parents=True)
+        journal.write_text(json.dumps({"phase": "success", "version": "1.7.1"}), encoding="utf-8")
+        candidate.clear_installed_cache()
+        self.assertFalse(paths.root.exists())
+        self.assertTrue(backup.is_dir())
+        self.assertTrue(journal.is_file())
+        self.assertFalse(self.make_service().snapshot()["ready"])
+
+    def test_restore_skips_stale_cache_and_preserves_newer_update(self):
+        svc = self.make_service()
+        svc.start_download()
+        self.assertTrue(svc.wait_idle(30))
+        paths = svc.store.paths("1.7.1")
+        make_root(self.root, "1.8.0")
+        svc.store.update_state("1.8.0", phase="ready")
+        svc.store.ensure("1.8.1").staging.mkdir()
+        svc.store.write_ready("1.8.1", {})
+        reopened = self.make_service()
+        self.assertEqual(reopened.snapshot()["stagingVersion"], "1.8.1")
+        self.assertTrue(paths.ready.is_file())
+        reopened.store.clear_ready("1.8.1")
+        self.assertEqual(self.make_service().snapshot()["phase"], "idle")
+
     def test_failed_status_fields(self):
         svc = self.make_service(downloader=FakeDownloader(self.zip, fail=True))
         svc.start_download()

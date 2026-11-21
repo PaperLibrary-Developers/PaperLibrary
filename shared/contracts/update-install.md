@@ -126,7 +126,8 @@ PaperLibraryUpdater.exe backup-data --program-root DIR --new-version X [--keep N
    再 `GET /api/version` 要求 `product=="PaperLibrary"` 且 `version==目标版本`；
    单次请求 **2 秒**、间隔 **1 秒**、总超时 **60 秒**、**连续成功 2 次**；
 6. 成功：写 `state.json`，再提交 `journal.json` 的 `success` 阶段，放行读写并打开界面。
-   清理 `apply.json`，保留备份并释放安装锁。
+   助手清理 `apply.json`，保留备份并释放安装锁。新版服务确认当前版本与成功 journal 一致后，
+   清理该版本的下载 ZIP、暂存目录和下载状态。恢复待安装状态只考虑高于当前版本的下载。
 7. 失败：关停本次启动的新版进程并等待端口释放，恢复数据与程序备份。写入终态并释放安装锁后，
    重新启动旧版本。恢复失败保留未完成的 journal 和备份，供再次恢复。
    `apply.json` 保留供重试。

@@ -26,6 +26,7 @@ from paperlib.update import signing
 from paperlib.update import staging as staging_mod
 from paperlib.update import store as store_mod
 from paperlib.update import verify as verify_mod
+from paperlib.util import read_json
 
 ACTIVE_PHASES = ("checking", "downloading", "verifying", "extracting")
 
@@ -68,35 +69,54 @@ class UpdateService:
         self._ready: dict = {}
         self._last_check_at = ""
         self._cancel_event = None
+        self.clear_installed_cache()
         self._load_persisted()
 
     # ---------- 持久化状态恢复 ----------
 
-    def _load_persisted(self) -> None:
+    def _future_update_dirs(self, current):
         try:
             dirs = [child for child in self.store.updates_dir.iterdir() if child.is_dir()]
         except OSError:
             return
-        ready_dirs = []
-        state_dirs = []
         for child in dirs:
             try:
-                version_mod.semver(child.name)
+                candidate = version_mod.semver(child.name)
             except version_mod.VersionError:
                 continue
-            if (child / "ready.json").is_file() and (child / "staging").is_dir():
-                ready_dirs.append(child)
-            if (child / "download-state.json").is_file():
-                state_dirs.append(child)
-        if ready_dirs:
-            latest = max(ready_dirs, key=lambda path: path.stat().st_mtime)
-            ready = self.store.read_ready(latest.name)
-            if ready:
-                self._version = latest.name
-                self._phase = "ready"
-                self._ready = ready
-                self._state = self.store.read_state(latest.name)
+            if candidate > current:
+                yield child
+
+    def clear_installed_cache(self) -> None:
+        """安装提交后回收已用的下载产物；验证或回滚期间仍需保留。"""
+        journal = read_json(self.store.updates_dir / "journal.json", {})
+        if not isinstance(journal, dict) or journal.get("phase") != "success":
+            return
+        try:
+            installed = version_mod.load(self.root)["version"]
+            if journal.get("version") != installed:
                 return
+            paths = self.store.paths(installed)
+            if paths.root.resolve() == self.store.updates_dir.resolve() / installed:
+                self.store.discard(installed)
+        except (OSError, ValueError, RuntimeError):
+            # 清理失败时仍能启动；已安装版本不会再进入待安装状态。
+            pass
+
+    def _load_persisted(self) -> None:
+        try:
+            current = version_mod.semver(version_mod.load(self.root)["version"])
+        except version_mod.VersionError:
+            return
+        version, ready = self._discover_ready(current)
+        if ready:
+            self._version = version
+            self._phase = "ready"
+            self._ready = ready
+            self._state = self.store.read_state(version)
+            return
+        state_dirs = [child for child in self._future_update_dirs(current)
+                      if (child / "download-state.json").is_file()]
         if state_dirs:
             latest = max(state_dirs, key=lambda path: path.stat().st_mtime)
             state = self.store.read_state(latest.name)
@@ -107,6 +127,10 @@ class UpdateService:
                 state = self.store.update_state(
                     latest.name, phase="failed", code="interrupted",
                     error="服务重启，下载/校验/解压已中断；重新下载会从已下载部分续传")
+                phase = "failed"
+            elif phase == "ready":
+                state = self.store.update_state(latest.name, phase="failed", code="staging-incomplete",
+                                                error="暂存更新不完整，请重新下载")
                 phase = "failed"
             self._state = state
             self._phase = phase
@@ -285,20 +309,14 @@ class UpdateService:
 
     # ---------- 应用（写 apply.json，供启动器退出时安装；本步不执行替换） ----------
 
-    def _discover_ready(self):
+    def _discover_ready(self, current):
         """从磁盘找一份可用的 staging（服务重启后内存快照为空时）。"""
-        try:
-            dirs = [child for child in self.store.updates_dir.iterdir() if child.is_dir()]
-        except OSError:
-            return "", {}
         candidates = []
-        for child in dirs:
-            try:
-                version_mod.semver(child.name)
-            except version_mod.VersionError:
+        for child in self._future_update_dirs(current):
+            if not (child / "ready.json").is_file() or not (child / "staging").is_dir():
                 continue
             ready = self.store.read_ready(child.name)
-            if ready and (child / "staging").is_dir():
+            if ready:
                 candidates.append((child.stat().st_mtime, child.name, ready))
         if not candidates:
             return "", {}
@@ -325,8 +343,9 @@ class UpdateService:
                 raise UpdateServiceError("busy", "更新任务正在进行，请稍后再应用", 409)
             version = str((self._ready or {}).get("version") or "")
             ready_disk = self.store.read_ready(version) if version else {}
+        current = version_mod.load(self.root)  # VersionError → 500
         if not version or not ready_disk:
-            version, ready_disk = self._discover_ready()
+            version, ready_disk = self._discover_ready(version_mod.semver(current["version"]))
         if not version or not ready_disk:
             raise UpdateServiceError("staging-missing",
                                      "还没有已准备好的更新（staging 未完成）", 409)
@@ -363,7 +382,6 @@ class UpdateService:
                                      "清单版本 %s 与 staging 版本 %s 不一致"
                                      % (data["version"], version), 409)
 
-        current = version_mod.load(self.root)  # VersionError → 500
         if current["version"] == version:
             raise UpdateServiceError("version-same", "staging 版本与当前版本相同，无需安装", 409)
         if version_mod.semver(version) < version_mod.semver(current["version"]):

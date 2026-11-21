@@ -217,6 +217,7 @@ def main(argv=None, root=None):
                 with store.paper_writes():
                     if not update_committed:
                         services.folders.sync_locations()
+                        services.update.clear_installed_cache()
                         update_committed = True
         return not update_committed
 
