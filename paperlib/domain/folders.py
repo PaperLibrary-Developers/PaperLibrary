@@ -1,18 +1,12 @@
-"""文献库内的文件夹分类（类似资源管理器，**纯库内**，不与磁盘目录同步）。
-
-为什么不复用磁盘目录：库里的分类是给「检索与整理」用的逻辑分组，文献的 PDF 仍然按
-data/article/papers/ 平铺存放；两者解耦后，挪文件不会打乱分类，也不会有路径权限问题。
-
-路径规则（对外统一用「字符串路径」）：
-  · '/' 分隔层级，根目录是空串 ''（不入表）；
-  · 每段去掉首尾空白、中间连续空白压成一个；'/'、'\\'、'.'、'..' 视为非法段；
-  · 同名同级视为同一个文件夹：create 是幂等的，不会因为重复点击报错。
-
-数据落点：
-  · folders 表：path / name / parent / sort，用来表达「空的文件夹」也要存在；
-  · papers.folder：文献当前所在路径（唯一真源，data JSON 里的旧值会被覆盖）。
-"""
+"""用原文目录组织分类。papers.folder 是供文献查询使用的路径。"""
 from __future__ import annotations
+
+import os
+import shutil
+from collections import Counter, defaultdict
+from contextlib import ExitStack
+
+from paperlib.assets import asset_path, parent_path, unique_path, walk_assets
 
 MAX_DEPTH = 8          # 再深就不好在侧栏里读了
 MAX_NAME = 60
@@ -61,65 +55,64 @@ class Folders:
     # ---------------- 读 ----------------
     def list(self):
         """返回扁平列表 + 直属/含子级计数，前端自己拼树。"""
-        rows = self.db.list_folders()
-        direct = self.db.folder_counts()
-        total_papers = sum(direct.values())
-
-        children = {}
-        for row in rows:
-            children.setdefault(row["parent"], []).append(row["path"])
-
-        def deep_count(path):
-            total = direct.get(path, 0)
-            for child in children.get(path, []):
-                total += deep_count(child)
-            return total
-
-        out = []
-        for row in rows:
-            path = row["path"]
-            out.append({
-                "path": path,
-                "name": row["name"],
-                "parent": row["parent"],
-                "depth": path.count("/"),
-                "count": direct.get(path, 0),
-                "countDeep": deep_count(path),
-                "createdAt": row.get("createdAt") or "",
-            })
+        with self.db.paper_writes():
+            paths = [path for path, _ in walk_assets(self.db.papers_dir) if path]
+            papers = self.db.list_papers()
+        direct = Counter(p.get("folder") or "" for p in papers)
+        deep = direct.copy()
+        for path in reversed(paths):
+            deep[parent_of(path)] += deep[path]
+        out = [{"path": path, "name": name_of(path), "parent": parent_of(path),
+                "depth": path.count("/"), "count": direct[path], "countDeep": deep[path],
+                "createdAt": ""} for path in paths]
         out.sort(key=lambda item: (item["parent"], item["name"].casefold()))
-        return {"folders": out, "total": total_papers, "rootCount": direct.get("", 0)}
+        return {"folders": out, "total": len(papers), "rootCount": direct[""]}
 
     def exists(self, path) -> bool:
-        return bool(path) and self.db.get_folder(path) is not None
+        target = asset_path(self.db.papers_dir, path) if path else None
+        return bool(target and target.is_dir())
+
+    def sync_locations(self):
+        """从已有 PDF 路径重建分类，保留指向真实目录的无原文卡片。"""
+        with self.db.paper_writes():
+            patches = {}
+            actual = {"": ""}
+            for paper in self.db.list_papers():
+                path = (parent_path(paper["pdfFile"]) if paper.get("pdfFile") else paper.get("folder")) or ""
+                if path not in actual:
+                    actual[path] = path if self.exists(path) else ""
+                patches[paper["id"]] = {"folder": actual[path]}
+            return self.db.patch_papers(patches)
 
     # ---------------- 写 ----------------
     def ensure(self, path) -> str:
         """保证路径存在（逐级补建），返回归一化后的路径。导入时用它兜底。"""
-        path = normalize_path(path)
+        path = str(path or "").replace("\\", "/")
         if not path:
             return ""
-        parent = ""
-        for part in path.split("/"):
-            current = (parent + "/" + part) if parent else part
-            if self.db.get_folder(current) is None:
-                self.db.save_folder(current, part, parent)
-            parent = current
-        return path
+        target = asset_path(self.db.papers_dir, path)
+        if target is None or (path.split("/", 1)[0] == "未分类" and not target.is_dir()):
+            raise FolderError("文件夹路径不合法")
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            return target.resolve().relative_to(self.db.papers_dir.resolve()).as_posix()
+        except (OSError, ValueError) as exc:
+            raise FolderError("无法创建文件夹：" + str(exc)) from exc
 
     def create(self, path=None, parent=None, name=None):
         """新建文件夹：支持 {path} 或 {parent, name} 两种入参。已存在则原样返回（幂等）。"""
         if path is None:
-            # 只给了 name：先校验它本身合法，否则「电催化/  」会被归一化成父目录，
-            # 静默返回 200 让人以为建成功了
-            if not clean_name(name):
+            new_name = clean_name(name)
+            if not new_name:
                 raise FolderError("文件夹名不能为空（不能只用斜杠或空格）")
-            path = ((parent or "") + "/" + clean_name(name)).strip("/")
-        normalized = normalize_path(path)
+            normalized = (str(parent) + "/" + new_name) if parent else new_name
+        else:
+            normalized = str(path) if self.exists(path) else normalize_path(path)
         if not normalized:
             raise FolderError("文件夹名不能为空（不能只用斜杠或空格）")
-        existed = self.exists(normalized)
-        self.ensure(normalized)
+        with self.db.paper_writes():
+            existed = self.exists(normalized)
+            normalized = self.ensure(normalized)
         return {
             "path": normalized,
             "name": name_of(normalized),
@@ -129,7 +122,7 @@ class Folders:
 
     def rename(self, path, name):
         """重命名（同父级下改名）：整棵子树一起改。"""
-        path = normalize_path(path)
+        path = str(path or "")
         if not path:
             raise FolderError("根目录不能重命名")
         if not self.exists(path):
@@ -139,32 +132,113 @@ class Folders:
             raise FolderError("文件夹名不能为空")
         parent = parent_of(path)
         target = (parent + "/" + new_name) if parent else new_name
-        target = normalize_path(target)
         if target == path:
             return {"path": path, "renamed": False, "moved": 0}
-        if self.exists(target):
-            raise FolderError("同级下已经有同名文件夹「%s」" % new_name, 409)
-        moved = self.db.rename_folder_prefix(path, target)
+        old_dir = asset_path(self.db.papers_dir, path)
+        new_dir = asset_path(self.db.papers_dir, target)
+        if new_dir is None or target == "未分类":
+            raise FolderError("文件夹路径不合法")
+        with self.db.paper_writes(), ExitStack() as rollback:
+            if os.path.lexists(new_dir) and os.path.normcase(path) != os.path.normcase(target):
+                raise FolderError("同级下已经有同名文件夹「%s」" % new_name, 409)
+            try:
+                old_dir.rename(new_dir)
+            except OSError as exc:
+                raise FolderError("无法重命名文件夹：" + str(exc)) from exc
+            rollback.callback(new_dir.rename, old_dir)
+            patches = {}
+            for paper in self.db.list_papers():
+                file = paper.get("pdfFile") or ""
+                folder = parent_path(file) if file else paper.get("folder") or ""
+                if folder == path or folder.startswith(path + "/"):
+                    patch = {"folder": target + folder[len(path):]}
+                    if file:
+                        patch["pdfFile"] = target + file[len(path):]
+                    patches[paper["id"]] = patch
+            moved = self.db.patch_papers(patches)
+            rollback.pop_all()
         return {"path": target, "name": new_name, "parent": parent, "renamed": True, "moved": moved}
 
     def delete(self, path):
         """删除文件夹及其子文件夹；里面的文献**不删除**，统一上移到被删文件夹的父级。"""
-        path = normalize_path(path)
+        path = str(path or "")
         if not path:
             raise FolderError("根目录不能删除")
         if not self.exists(path):
             raise FolderError("文件夹不存在或已被删除", 404)
         dest = parent_of(path)
-        moved = self.db.move_folder_papers(path, dest)
-        removed = len([r for r in self.db.list_folders()
-                       if r["path"] == path or r["path"].startswith(path + "/")])
-        self.db.delete_folder_rows(path)
+        root = self.db.papers_dir
+        source = asset_path(root, path)
+        destination = asset_path(root, dest)
+        with self.db.paper_writes(), ExitStack() as rollback:
+            tree = list(walk_assets(source))
+            dirs = [source / folder for folder, _ in tree]
+            files = [source / file for _, entries in tree for file in entries]
+            known = set(dirs + files)
+            if any(entry not in known for directory in dirs for entry in directory.iterdir()):
+                raise FolderError("文件夹含有其他文件或链接，请先在资源管理器中整理")
+            locations = {}
+            try:
+                for file in files:
+                    target = unique_path(destination / file.name)
+                    file.rename(target)
+                    rollback.callback(target.rename, file)
+                    locations[file.relative_to(root).as_posix()] = target.relative_to(root).as_posix()
+                for directory in reversed(dirs):
+                    directory.rmdir()
+                    rollback.callback(directory.mkdir)
+            except OSError as exc:
+                raise FolderError("无法删除文件夹：" + str(exc)) from exc
+            patches = {}
+            for paper in self.db.list_papers():
+                file = paper.get("pdfFile") or ""
+                folder = parent_path(file) if file else paper.get("folder") or ""
+                if folder == path or folder.startswith(path + "/"):
+                    next_file = locations.get(file, file)
+                    patches[paper["id"]] = {"folder": dest if not file or file in locations else "",
+                                            "pdfFile": next_file}
+            moved = self.db.patch_papers(patches)
+            rollback.pop_all()
+            removed = len(dirs)
         return {"ok": True, "removed": removed, "moved": moved, "to": dest}
 
     def move_papers(self, ids, path):
         """把一批文献移到指定文件夹（path 为空串 = 根目录），目标不存在会自动补建。"""
-        target = normalize_path(path)
-        if target:
-            self.ensure(target)
-        count = self.db.set_paper_folders(ids, target)
-        return {"ok": True, "folder": target, "moved": count}
+        with self.db.paper_writes(), ExitStack() as rollback:
+            folder = self.ensure(path)
+            root = self.db.papers_dir
+            destination = asset_path(root, folder)
+            selected = set(ids)
+            references = defaultdict(list)
+            patches = {}
+            for paper in self.db.list_papers():
+                file = paper.get("pdfFile") or ""
+                if file:
+                    references[file].append(paper["id"])
+                elif paper["id"] in selected:
+                    patches[paper["id"]] = {"folder": folder}
+
+            for file, users in references.items():
+                affected = selected.intersection(users)
+                if not affected:
+                    continue
+                if parent_path(file) != folder:
+                    source = asset_path(root, file)
+                    if source is None or not source.is_file():
+                        raise FolderError("原文文件不存在，请先重新扫描：" + file, 409)
+                    target = unique_path(destination / source.name)
+                    try:
+                        if affected == set(users):
+                            source.rename(target)
+                            rollback.callback(target.rename, source)
+                        else:
+                            rollback.callback(target.unlink, missing_ok=True)
+                            shutil.copyfile(source, target)
+                    except OSError as exc:
+                        raise FolderError("无法移动原文：" + str(exc)) from exc
+                    file = target.relative_to(root).as_posix()
+                for paper_id in affected:
+                    patches[paper_id] = {"folder": folder, "pdfFile": file}
+            self.db.patch_papers(patches)
+            rollback.pop_all()
+            return {"ok": True, "folder": folder, "moved": len(patches)}

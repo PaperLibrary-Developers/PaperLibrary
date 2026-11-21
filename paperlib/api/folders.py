@@ -1,4 +1,4 @@
-"""文件夹分类端点（库内分类，类似资源管理器）。
+"""原文目录分类端点。
 
   GET    /api/folders              → 扁平列表 + 计数（前端拼树）
   POST   /api/folders              → 新建（{path} 或 {parent,name}；已存在则幂等返回）
@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from paperlib.domain.folders import FolderError, normalize_path
+from paperlib.domain.folders import FolderError
 
 
 def _folders(ctx):
@@ -59,6 +59,8 @@ def move_papers(ctx):
         ids = [ids]
     if not ids:
         return ctx.fail(400, "先选中要移动的文献")
-    target = normalize_path(body.get("path"))
-    result = _folders(ctx).move_papers(ids, target)
+    try:
+        result = _folders(ctx).move_papers(ids, body.get("path"))
+    except FolderError as exc:
+        return _fail(ctx, exc)
     return ctx.json(200, result)

@@ -159,12 +159,18 @@ def pdf_confirm(ctx):
             # 标题先立起来，文件名才能跟着标题走
             title = str(payload.get("title") or "").strip() or pdf_import.title_from_file_name(
                 str(entry.get("name") or "document.pdf"))
-            created = services.library.create(dict(payload, title=title))
-            display = sanitize_file_name(created.get("title"), 70)
-            file_name = str(created.get("id")) + "-" + display + ".pdf"
-            if not safe_path_join(services.db.papers_dir, file_name):
-                raise ValueError("文件名不合法")
-            services.db.attach_file(created.get("id"), src, {"fileName": file_name})
+            with services.db.paper_writes():
+                folder = services.folders.ensure(payload.get("folder"))
+                created = services.library.create(dict(payload, title=title, folder=folder))
+                display = sanitize_file_name(created.get("title"), 70)
+                file_name = str(created.get("id")) + "-" + display + ".pdf"
+                if folder:
+                    file_name = folder + "/" + file_name
+                try:
+                    services.db.attach_file(created.get("id"), src, {"fileName": file_name})
+                except Exception:
+                    services.library.remove(created.get("id"))
+                    raise
             extract = services.extract_paper_fulltext(services.library.get(created.get("id"))) or {}
             imported.append({
                 "id": created.get("id"),

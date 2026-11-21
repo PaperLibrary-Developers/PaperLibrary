@@ -59,8 +59,8 @@ import * as foldersUi from '../folders.mjs'
           '把下载好的 PDF 拖进新建页的虚线框，题录与正文自动解析，一次可以拖多篇。',
           '去新建页', () => go('#/new')),
         way('🗂', '方式二', '放进文件夹后扫描',
-          '手上已有一堆 PDF：放进 data/article/papers/，到「设置 → 资产与备份 → 原文与补充材料」点「扫描」，自动识别成文献。',
-          '打开扫描', () => go('#/settings')),
+          '把已分类的 PDF 放进 data/article/papers/ 下的子文件夹，重新扫描后按目录入库。直接放在根目录的 PDF 归入未分类。',
+          '打开扫描', () => go('#/settings?panel=assets-pdf')),
         way('🔗', '方式三', '粘贴 DOI 抓题录',
           '还没下载原文也行：粘一个 DOI 回车，标题、作者、期刊、摘要自动补齐。',
           '去粘贴 DOI', () => go('#/new'))

@@ -24,6 +24,8 @@ import threading
 from pathlib import Path
 
 from paperlib.api.paper_scope import require_paper
+from paperlib.assets import parent_path, unique_path
+from paperlib.domain.folders import FolderError
 from paperlib.domain.query import needs_evaluator, parse_query
 from paperlib.util import now_iso, safe_path_join, to_string_array
 
@@ -207,7 +209,16 @@ def list_papers(ctx):
 def create(ctx):
     services = ctx.services
     body = ctx.read_json() or {}
-    _ensure_folder(services, body)
+    if not isinstance(body, dict):
+        return ctx.fail(400, "文献字段须为对象")
+    try:
+        if body.get("pdfFile"):
+            folder = parent_path(body["pdfFile"])
+            body["folder"] = folder if services.folders.exists(folder) else ""
+        else:
+            _ensure_folder(services, body)
+    except FolderError as exc:
+        return ctx.fail(exc.status, str(exc))
     paper = services.library.create(body)
     # 新增文献后自动补一份中文一句话总结（后台跑、不阻塞创建；失败不影响保存）。
     if _auto_summary_ready(services.llm):
@@ -236,6 +247,10 @@ def scan_pdfs(ctx):
     return ctx.json(200, {"ok": True, "scan": ctx.services.library.scan_pdf_contents()})
 
 
+def sync_pdfs(ctx):
+    return ctx.json(200, {"ok": True, **ctx.services.library.sync_pdf_directory(ctx.services)})
+
+
 def associate_pdf(ctx):
     body = ctx.read_json() or {}
     result = ctx.services.library.associate_pdf(body.get("paperId"), body.get("file"))
@@ -249,6 +264,11 @@ def cleanup_duplicates(ctx):
     services = ctx.services
     library = services.library
     body = ctx.read_json() or {}
+    with services.db.paper_writes():
+        return _cleanup_duplicates(ctx, services, library, body)
+
+
+def _cleanup_duplicates(ctx, services, library, body):
     scan = library.scan_pdf_contents()
     safe_list = []
     safe = set()
@@ -269,15 +289,14 @@ def cleanup_duplicates(ctx):
     quarantine.mkdir(parents=True, exist_ok=True)
     moved = []
     for file_name in wanted:
-        abs_path = safe_path_join(services.db.papers_dir, file_name)
+        abs_path = services.db.path_for_paper_file(file_name)
         if not abs_path or not os.path.isfile(abs_path):
             continue
         dest = safe_path_join(quarantine, os.path.basename(file_name))
         if not dest:
             continue
         try:
-            if os.path.isfile(dest):
-                os.unlink(dest)
+            dest = unique_path(Path(dest))
             os.replace(abs_path, dest)
             moved.append({"file": file_name, "bytes": os.stat(dest).st_size})
         except OSError as exc:
@@ -375,8 +394,27 @@ def update(ctx):
     if not paper:
         return None
     body = ctx.read_json() or {}
-    _ensure_folder(ctx.services, body)
-    updated = ctx.services.library.update(ctx.params.get("id"), body)
+    if not isinstance(body, dict):
+        return ctx.fail(400, "文献字段须为对象")
+    services = ctx.services
+    try:
+        with services.db.paper_writes():
+            latest = services.library.get(paper["id"])
+            if latest is None:
+                return ctx.fail(404, "找不到这条文献")
+            file = latest.get("pdfFile") or ""
+            requested = body.get("pdfFile")
+            if requested is not None and requested != file and requested:
+                folder = parent_path(requested)
+                body["folder"] = folder if services.folders.exists(folder) else ""
+            else:
+                _ensure_folder(services, body)
+                if file and requested != "" and "folder" in body and body["folder"] != parent_path(file):
+                    services.folders.move_papers([paper["id"]], body["folder"])
+                    body.pop("pdfFile", None)
+            updated = services.library.update(paper["id"], body)
+    except FolderError as exc:
+        return ctx.fail(exc.status, str(exc))
     return ctx.json(200, {"ok": True, "paper": updated})
 
 

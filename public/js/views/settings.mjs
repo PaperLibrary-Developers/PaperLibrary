@@ -1,6 +1,7 @@
 /* 设置页（ESM：原 IIFE 脚本平移而来，保留原缩进便于与历史版本逐行对照） */
 import * as util from '../util.mjs'
 import { api } from '../api.mjs'
+import { notifyChanged as refreshFolders } from '../folders.mjs'
 import { getState } from '../state/store.mjs'
 import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
 import { autoCheckEnabled, autoDownloadEnabled } from '../update-auto.mjs'
@@ -89,7 +90,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
   }
 
   async function settingsHandler (ctx) {
-    const { outlet, isStale } = ctx
+    const { outlet, isStale, params } = ctx
     const state = getState()
     outlet.replaceChildren(h('div.content', h('div.empty', h('div.big', '正在读取设置…'))))
 
@@ -103,6 +104,8 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       toast('读取服务信息失败：' + err.message, 'error')
     }
     if (isStale()) return
+    const libraryStatsText = data => `共 ${data.total ?? 0} 条文献 · ${data.tags ?? 0} 个标签`
+    const libraryStats = h('div.page-sub', libraryStatsText(stats))
 
     /* ---------- 偏好 ---------- */
 
@@ -274,26 +277,37 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
     }, tidyLabel)
 
     const scanBox = h('div', { style: { display: 'grid', gap: '8px' } })
+    const scanButton = h('button.btn.sm', { type: 'button', onclick: () => runScan(true) }, '重新扫描')
+    let scanRequest = 0
 
     /**
-     * 扫描原文目录：**按内容**比对，找出重复文件与孤儿文件。
-     * 关联动作由用户从下拉里挑文献（以前是拿文件名去猜，会把别人的文件认错）。
+     * 打开页面只盘点。点击按钮才按磁盘分类同步并导入。
      */
-    async function runScan () {
-      scanBox.replaceChildren(h('div.hint', '正在比对文件内容…'))
+    async function runScan (sync = false) {
+      const current = ++scanRequest
+      if (sync) scanButton.disabled = true
+      scanBox.replaceChildren(h('div.hint', sync ? '正在扫描目录并导入文献…' : '正在比对文件内容…'))
       let scan = null
       let papers = []
+      let result = null
       try {
-        const [res, list] = await Promise.all([
-          api.scanPdfs(),
-          api.listPapers({ all: true, pageSize: 500 })
-        ])
+        const res = sync ? await api.syncPdfDirectory() : await api.scanPdfs()
+        if (sync) {
+          result = res
+          refreshFolders()
+          await refreshMeta()
+          libraryStats.textContent = libraryStatsText(getState().stats || stats)
+        }
+        const list = await api.listPapers({ all: true, pageSize: 500 })
         scan = res.scan || {}
         papers = (list.items || []).map(p => ({ id: p.id, title: p.title, hasPdf: !!p.pdfFile }))
       } catch (err) {
-        scanBox.replaceChildren(h('div.hint', '扫描失败：' + err.message))
+        if (current === scanRequest) scanBox.replaceChildren(h('div.hint', '扫描失败：' + err.message))
         return
+      } finally {
+        if (sync) scanButton.disabled = false
       }
+      if (current !== scanRequest || isStale()) return
 
       const groups = scan.duplicateGroups || []
       const orphans = scan.orphans || []
@@ -303,6 +317,13 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       const uniqueOrphans = orphans.filter(o => !inDuplicateGroup.has(o.file))
       const dupOrphans = orphans.filter(o => inDuplicateGroup.has(o.file))
       const rows = []
+
+      if (result) {
+        rows.push(h('div.hint', `扫描完成 · 新增 ${(result.imported || []).length} 篇 · 恢复关联 ${result.relinked || 0} 篇 · 失败 ${(result.failed || []).length} 个`))
+        for (const item of result.failed || []) {
+          rows.push(h('div.hint', item.file + '：' + item.error))
+        }
+      }
 
       rows.push(h('div.hint',
         `共 ${scan.total || 0} 个文件（${fileSize(scan.bytes || 0)}）：` +
@@ -434,14 +455,13 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       scanBox.replaceChildren(...rows)
     }
 
-    // 「原文与补充材料」单独一格也会占掉半屏，收起来；扫描结果在展开后才显示，runScan 照旧在加载时先跑一遍
     const pdfPanel = foldPanel('assets-pdf', '原文与补充材料',
       h('div', { style: { display: 'grid', gap: '10px' } },
         h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
-          '原文 PDF 与补充材料（SI）都放在 data/article/ 下面（原文在 papers/，补充材料在 attachments/），' +
-          '整个 article/ 目录可以直接拷走备份。'),
+          '把 PDF 放进 data/article/papers/，重新扫描后按实际目录导入和分类。' +
+          '根目录的 PDF 归入未分类。补充材料单独保存在 data/article/attachments/。'),
         h('div', { style: { display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' } },
-          h('button.btn.sm', { type: 'button', onclick: runScan }, '重新扫描'),
+          scanButton,
           tidyButton
         ),
         tidyStatus,
@@ -1452,6 +1472,10 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       prefPanel, true)
     const assetsSec = section('assets', '资产与备份', '原文与补充材料 · 导出与备份',
       [pdfPanel, exportPanel])
+    if (params.get('panel') === 'assets-pdf') {
+      assetsSec.open = true
+      pdfPanel.open = true
+    }
     const apiSec = section('api', 'API服务', '大模型 · 学术检索来源（OpenAlex） · 网络检索（Exa）',
       [aiPanel, sourcesPanel, webPanel])
     const aboutSec = section('about', '关于', '关于与更新 · 服务与数据',
@@ -1473,7 +1497,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       h('div.page-head',
         h('div',
           h('div.page-title', '设置与备份'),
-          h('div.page-sub', `共 ${stats.total != null ? stats.total : 0} 条文献 · ${stats.tags != null ? stats.tags : 0} 个标签`)
+          libraryStats
         ),
         allToggle
       ),

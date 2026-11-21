@@ -235,6 +235,22 @@
       "kind": "api"
     },
     {
+      "id": "papers-sync-pdfs",
+      "method": "POST",
+      "path": "/api/papers/scan/pdfs",
+      "status": 200,
+      "statusClass": "2xx",
+      "jsonKeys": [
+        "failed",
+        "imported",
+        "ok",
+        "relinked",
+        "scan"
+      ],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
       "id": "papers-associate-pdf",
       "method": "POST",
       "path": "/api/papers/associate-pdf",

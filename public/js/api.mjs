@@ -294,6 +294,7 @@
     deletePaper: id => request('DELETE', '/api/papers/' + encodeURIComponent(id)),
     bulk: (ids, patch) => request('POST', '/api/papers/bulk', { body: { ids, patch } }),
     scanPdfs: () => request('GET', '/api/papers/scan/pdfs'),
+    syncPdfDirectory: () => request('POST', '/api/papers/scan/pdfs'),
     associatePdf: (paperId, file) => request('POST', '/api/papers/associate-pdf', { body: { paperId, file } }),
     cleanupDuplicates: files => request('POST', '/api/papers/cleanup-duplicates', { body: { files: files || [] } }),
     tidyPdfNames: () => request('POST', '/api/papers/tidy-pdf-names'),

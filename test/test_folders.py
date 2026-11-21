@@ -1,7 +1,4 @@
-"""文件夹分类（库内）的单元测试：路径归一化、增删改、子树上移、按目录筛选。
-
-不碰磁盘目录：全是「库内分类」，断言点是 papers.folder 与 folders 表。
-"""
+"""原文目录分类：路径归一化、磁盘与库内联动、目录筛选。"""
 from __future__ import annotations
 
 import tempfile
@@ -142,6 +139,40 @@ class FolderCRUDTest(unittest.TestCase):
         self.assertEqual(self.library.get("p1")["folder"], "新目录/子目录")
         paths = [row["path"] for row in self.folders.list()["folders"]]
         self.assertIn("新目录", paths)
+
+    def test_rename_move_and_delete_update_the_same_physical_pdf(self):
+        self._paper_in("p1")
+        root = self.store.papers_dir
+        self.store.attach_file("p1", b"original PDF", {"fileName": "A/子类/原文.pdf"})
+        self.folders.rename("A", "B")
+        self.assertEqual(self.library.get("p1")["pdfFile"], "B/子类/原文.pdf")
+        self.assertFalse((root / "A").exists())
+        (root / "原文.pdf").write_bytes(b"another PDF")
+        self.folders.move_papers(["p1"], "")
+        self.assertEqual((root / "原文 (2).pdf").read_bytes(), b"original PDF")
+        self.assertEqual((root / "原文.pdf").read_bytes(), b"another PDF")
+        self.assertFalse((root / "未分类").exists())
+        self.folders.move_papers(["p1"], "B/子类")
+        self.assertEqual(self.folders.delete("B")["moved"], 1)
+        self.assertFalse((root / "B").exists())
+        self.assertEqual(self.library.get("p1")["pdfFile"], "原文 (2).pdf")
+        self.assertEqual(self.library.query({"folder": ""})["total"], 1)
+
+    def test_existing_disk_folders_supply_the_tree_and_classification(self):
+        self._paper_in("p1", "旧的虚拟分类")
+        root = self.store.papers_dir
+        (root / "A" / "两个  空格").mkdir(parents=True)
+        (root / "C").mkdir()
+        self.store.attach_file("p1", b"PDF", {"fileName": "A/两个  空格/原文.pdf"})
+        self.store.patch_paper("p1", {"folder": "旧的虚拟分类"})
+        self.folders.sync_locations()
+        paths = {row["path"]: row for row in self.folders.list()["folders"]}
+        self.assertEqual(set(paths), {"A", "A/两个  空格", "C"})
+        self.assertEqual(paths["A"]["countDeep"], 1)
+        self.assertEqual(paths["C"]["count"], 0)
+        self.assertEqual(self.library.get("p1")["folder"], "A/两个  空格")
+        self.assertEqual(self.folders.create(parent="A/两个  空格", name="子类")["path"], "A/两个  空格/子类")
+        self.assertTrue((root / "A/两个  空格/子类").is_dir())
 
     def test_query_filter_by_folder(self):
         self.folders.ensure("电催化/钙钛矿")

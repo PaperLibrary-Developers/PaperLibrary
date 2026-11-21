@@ -76,9 +76,14 @@ def upload(ctx):
         stem = os.path.splitext(os.path.basename(original_name))[0]
         display = sanitize_file_name(stem, 60)
     file_name = id_safe + "-" + display + ".pdf"
-    if not safe_path_join(store.papers_dir, file_name):
-        return ctx.fail(400, "文件名不合法")
-    store.attach_file(paper.get("id") if paper else "", buf, {"fileName": file_name})
+    with store.paper_writes():
+        paper = services.library.get(paper_id) if paper_id else None
+        folder = (paper or {}).get("folder") or ""
+        if folder:
+            file_name = folder + "/" + file_name
+        if not store.path_for_paper_file(file_name):
+            return ctx.fail(400, "文件名不合法")
+        store.attach_file(paper.get("id") if paper else "", buf, {"fileName": file_name})
 
     # 上传完顺手把正文提取出来：AI 总结马上就能用上正文，不用用户再点一次「提取全文」
     extract = None
@@ -309,7 +314,7 @@ def pdf(ctx):
         return None
     if not paper.get("pdfFile"):
         return ctx.fail(404, "这条文献还没有关联 PDF")
-    abs_path = safe_path_join(ctx.services.db.papers_dir, paper.get("pdfFile"))
+    abs_path = ctx.services.db.path_for_paper_file(paper.get("pdfFile"))
     if not abs_path:
         return ctx.fail(400, "文件路径不合法")
     ctx.send_file(abs_path, content_type="application/pdf",

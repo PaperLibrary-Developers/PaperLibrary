@@ -130,6 +130,8 @@ def build(config, *, update_probe=False):
     if not update_probe:
         seed_once_if_needed(config, store)
     services = create_services(config, store)
+    if not update_probe:
+        services.folders.sync_locations()
     static_handler = StaticHandler(config.root, config.public_dir, config.shared_dir, config.vendor_dir)
     router = Router(ROUTES, services)
     return services, router, static_handler, store
@@ -212,7 +214,10 @@ def main(argv=None, root=None):
             current = read_json(journal_path, {})
             if (isinstance(current, dict) and current.get("phase") == "success"
                     and str(current.get("launchedPid")) == probe_pid):
-                update_committed = True
+                with store.paper_writes():
+                    if not update_committed:
+                        services.folders.sync_locations()
+                        update_committed = True
         return not update_committed
 
     browser_host = "127.0.0.1" if config.host == "0.0.0.0" else config.host

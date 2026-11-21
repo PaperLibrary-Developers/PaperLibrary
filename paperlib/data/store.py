@@ -17,6 +17,7 @@ import shutil
 import threading
 from pathlib import Path
 
+from paperlib.assets import asset_path, parent_path, sha256_file
 from paperlib.data.repository import Repository
 from paperlib.util import dump_json, ensure_dir, now_iso, read_json, safe_path_join, write_json_atomic
 
@@ -140,6 +141,26 @@ class Store:
             self.papers[idx] = merged
             return merged
 
+    def patch_papers(self, patches):
+        """同时提交多篇文献的文件位置，并在提交后更新内存。"""
+        with self._lock:
+            previous = {}
+            records = {}
+            for index, paper in enumerate(self.papers):
+                patch = patches.get(paper["id"])
+                if patch and any((paper.get(key) or "") != value for key, value in patch.items()):
+                    previous[paper["id"]] = paper
+                    records[index] = dict(paper, **patch)
+            if not records:
+                return 0
+            updated = now_iso()
+            self.repo.write_papers(records.values(), updated_at=updated, previous_by_id=previous)
+            for index, record in records.items():
+                self.papers[index] = record
+                self._hashes[record["id"]] = _hash_paper(record)
+            self.meta["updatedAt"] = updated
+            return len(records)
+
     def remove_paper(self, paper_id, options=None):
         with self._lock:
             idx = self.index_of(paper_id)
@@ -193,23 +214,26 @@ class Store:
     # ------------------------------------------------------------------ 文件
     def attach_file(self, paper_id, source, options=None):
         """把原文 PDF 放进 article/papers/ 并记到卡片上（fileName 由调用方定）。"""
-        name = str((options or {}).get("fileName") or "").strip()
+        name = str((options or {}).get("fileName") or "").replace("\\", "/")
         if not name:
             raise ValueError("attach_file：需要 options.fileName")
-        abs_path = safe_path_join(self.papers_dir, name)
-        if not abs_path:
-            raise ValueError("文件名不合法")
-        ensure_dir(Path(abs_path).parent)
-        if isinstance(source, (bytes, bytearray)):
-            with open(abs_path, "wb") as fh:
-                fh.write(bytes(source))
-        else:
-            shutil.copyfile(str(source), abs_path)
-        paper = self.patch_paper(paper_id, {"pdfFile": name, "updatedAt": now_iso()}) if paper_id else None
+        with self._lock:
+            abs_path = self.path_for_paper_file(name)
+            if not abs_path:
+                raise ValueError("文件名不合法")
+            ensure_dir(Path(abs_path).parent)
+            if isinstance(source, (bytes, bytearray)):
+                with open(abs_path, "wb") as fh:
+                    fh.write(bytes(source))
+            else:
+                shutil.copyfile(str(source), abs_path)
+            paper = self.patch_paper(paper_id, {"pdfFile": name, "folder": parent_path(name),
+                                              "pdfSha256": sha256_file(abs_path), "updatedAt": now_iso()}) if paper_id else None
         return {"file": name, "abs": abs_path, "paper": paper}
 
     def path_for_paper_file(self, file_name):
-        return safe_path_join(self.papers_dir, file_name)
+        path = asset_path(self.papers_dir, file_name)
+        return str(path) if path else None
 
     def path_for_attachment(self, file_name):
         return safe_path_join(self.attachments_dir, file_name)
@@ -236,67 +260,6 @@ class Store:
 
     def list_text_keys(self):
         return self.repo.list_text_keys()
-
-    # ------------------------------------------------------------------ 文件夹（库内分类）
-    # 说明：分类只活在库里（folders 表 + papers.folder），不与磁盘目录同步。
-    # 所有写操作都要顺手把**内存里那份 papers** 改掉：查询/排序走的是内存，
-    # 只改 SQL 的话界面上要等重启才看得到变化。
-    def list_folders(self):
-        return self.repo.list_folders()
-
-    def get_folder(self, path):
-        return self.repo.get_folder(path)
-
-    def folder_counts(self):
-        return self.repo.folder_counts()
-
-    def save_folder(self, path, name, parent, sort=0):
-        return self.repo.save_folder(path, name, parent, sort)
-
-    def _sync_folder_memory(self, ids):
-        """把指定文献的 folder 从库里重新读回来，写进内存卡片（哈希一起更新，避免 touch 反复写）。"""
-        changed = 0
-        with self._lock:
-            for pid in ids or []:
-                row = self.repo.get_paper(pid)
-                paper = self.find_paper(pid)
-                if not row or paper is None:
-                    continue
-                folder = row.get("folder") or ""
-                if folder:
-                    if paper.get("folder") != folder:
-                        paper["folder"] = folder
-                        changed += 1
-                elif paper.pop("folder", None) is not None:
-                    changed += 1
-                self._hashes[pid] = _hash_paper(paper)
-        return changed
-
-    def rename_folder_prefix(self, old, new):
-        with self._lock:
-            ids = self.repo.papers_in_folder(old)
-            count = self.repo.rename_folder_prefix(old, new)
-            self._sync_folder_memory(ids)
-            return count
-
-    def move_folder_papers(self, prefix, dest):
-        with self._lock:
-            ids = self.repo.papers_in_folder(prefix)
-            count = self.repo.move_folder_papers(prefix, dest)
-            self._sync_folder_memory(ids)
-            return count
-
-    def delete_folder_rows(self, prefix):
-        self.repo.delete_folder_rows(prefix)
-
-    def set_paper_folders(self, ids, path):
-        with self._lock:
-            count = self.repo.set_paper_folders(ids, path)
-            self._sync_folder_memory(ids)
-            return count
-
-    def papers_in_folder(self, prefix):
-        return self.repo.papers_in_folder(prefix)
 
     # ------------------------------------------------------------------ 旧目录迁移
     def migrate_legacy_dirs(self):

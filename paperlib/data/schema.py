@@ -1,7 +1,8 @@
 """SQLite schema（10 张表）与迁移。
 
-唯一真源：papers / folders / figures / tags / paper_tags / attachments / chat_messages /
+库内记录：papers / figures / tags / paper_tags / attachments / chat_messages /
 analysis / paper_text / legacy_ids / jobs（+ meta 记录版本）。
+folders 表仅保留旧版结构。实际分类目录由原文目录提供，papers.folder 用于查询。
 
 设计：
   · papers 行存「列级可查询字段 + data JSON（完整卡片形状）」——对外 API 形状不变，

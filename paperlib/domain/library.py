@@ -99,6 +99,9 @@ class Library:
     def scan_pdf_contents(self):
         return self.importer.scan_pdf_contents()
 
+    def sync_pdf_directory(self, services):
+        return self.importer.sync_pdf_directory(services)
+
     def associate_pdf(self, paper_id, file):
         return self.importer.associate_pdf(paper_id, file)
 

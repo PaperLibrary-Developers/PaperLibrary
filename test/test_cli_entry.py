@@ -11,14 +11,17 @@ import http.client
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 
+from paperlib.data.store import Store
 from paperlib.util import write_json_atomic
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +71,11 @@ class CliEntryTest(unittest.TestCase):
     def test_update_probe_blocks_ui_and_writes_until_commit(self):
         with tempfile.TemporaryDirectory() as temp:
             data = Path(temp)
+            store = Store(data)
+            store.load()
+            store.insert_paper({"id": "probe-fixture", "title": "Existing paper",
+                                "pdfFile": "root.pdf", "folder": "Legacy virtual folder"})
+            store.repo.close()
             update_dir = data / "updates"
             journal = update_dir / "journal.json"
             launcher_pid = os.getpid()
@@ -105,10 +113,16 @@ class CliEntryTest(unittest.TestCase):
                     self.assertEqual(request("GET", "/")[0], 503)
                     body = json.dumps({"title": "Update gate fixture"})
                     self.assertEqual(request("POST", "/api/papers", body)[0], 503)
+                    with closing(sqlite3.connect(data / "library.db")) as db:
+                        stored_folder, = db.execute("SELECT folder FROM papers WHERE id='probe-fixture'").fetchone()
+                    self.assertEqual(stored_folder, "Legacy virtual folder")
                     write_json_atomic(journal, {"phase": "success", "launchedPid": launcher_pid + 1})
                     self.assertEqual(request("POST", "/api/papers", body)[0], 503)
                     write_json_atomic(journal, {"phase": "success", "launchedPid": launcher_pid})
                     self.assertEqual(request("GET", "/")[0], 200)
+                    status, payload = request("GET", "/api/papers/probe-fixture")
+                    self.assertEqual(status, 200)
+                    self.assertFalse(json.loads(payload)["paper"].get("folder"))
                     self.assertEqual(request("POST", "/api/papers", body)[0], 201)
                     self.assertEqual(request("POST", "/api/shutdown", "{}")[0], 200)
                     self.assertEqual(proc.wait(timeout=5), 0)

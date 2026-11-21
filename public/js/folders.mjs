@@ -1,4 +1,4 @@
-/* 文件夹分类（库内，类似 Windows 资源管理器）。
+/* 对应原文目录的分类树。
 
    三处共用同一套树：侧栏「分类文件夹」、导入时的选目录弹窗、分类管理器弹窗。
    路径就是字符串（'电催化/钙钛矿'），根目录是空串；URL 里用 '/' 代表根（空串会被 setHash 丢掉）。
@@ -11,7 +11,7 @@ import { api } from './api.mjs'
 import { go } from './shell/app-api.mjs'
 import { getState } from './state/store.mjs'
 
-  const { h, toast, confirmDialog, rich } = util
+  const { h, toast, confirmDialog } = util
 
   const ROOT_LABEL = '未分类'
   const expanded = new Set()        // 记住展开状态，跨重绘仍在（按路径）
@@ -325,7 +325,7 @@ import { getState } from './state/store.mjs'
       title: '删除文件夹「' + labelOf(path) + '」？',
       body: h('div',
         h('p', '子文件夹会一起删除。'),
-        h('p', rich('里面的文献**不会被删除**，会移动到上一级（' + (parentOf(path) ? labelOf(parentOf(path)) : '未分类') + '）。'))),
+        h('p', '里面的原文 PDF 与文献记录会移到上一级（' + (parentOf(path) ? labelOf(parentOf(path)) : '未分类') + '）。')),
       okText: '删除文件夹',
       danger: true
     })

@@ -200,15 +200,20 @@ def normalize_paper(input_data, existing=None):
         "attachments": normalize_attachments(src.get("attachments") if src.get("attachments") is not None else base.get("attachments")),
         "chat": normalize_chat(src.get("chat") if src.get("chat") is not None else base.get("chat")),
         "refs": normalize_refs(src.get("refs") if src.get("refs") is not None else base.get("refs")),
-        "pdfFile": _clean(src.get("pdfFile") if src.get("pdfFile") is not None else base.get("pdfFile"), 300),
+        "pdfFile": str(src.get("pdfFile") if src.get("pdfFile") is not None else base.get("pdfFile") or "").replace("\\", "/"),
         "bibtexKey": _clean(src.get("bibtexKey") if src.get("bibtexKey") is not None else base.get("bibtexKey"), 100).strip(),
         "addedAt": base.get("addedAt") or src.get("addedAt") or now_iso(),
         "updatedAt": now_iso(),
     }
     # union 字段（合并后新增）：只在非空时出现，保持与 Node 卡片形状一致
-    folder = _clean(src.get("folder") if src.get("folder") is not None else base.get("folder"), 200).strip()
+    folder = str(src.get("folder") if src.get("folder") is not None else base.get("folder") or "")
     if folder:
         paper["folder"] = folder
+    digest = src.get("pdfSha256")
+    if digest is None and paper["pdfFile"] == base.get("pdfFile"):
+        digest = base.get("pdfSha256")
+    if paper["pdfFile"] and isinstance(digest, str) and len(digest) == 64:
+        paper["pdfSha256"] = digest
     arxiv_id = _clean(src.get("arxivId") if src.get("arxivId") is not None else base.get("arxivId"), 100).strip()
     if arxiv_id:
         paper["arxivId"] = arxiv_id

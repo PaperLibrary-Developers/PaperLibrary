@@ -11,17 +11,21 @@
 from __future__ import annotations
 
 import datetime
-import hashlib
 import os
+from collections import defaultdict
 from pathlib import Path
+from threading import Lock
 
+from paperlib.assets import asset_path, parent_path, sha256_file, unique_path, walk_assets
+from paperlib.domain import pdf_import
+from paperlib.domain.folders import Folders
 from paperlib.domain.naming import (
     display_file_name,
     find_attachment_on_disk,
     next_attachment_name,
 )
 from paperlib.domain.repository import normalize_paper
-from paperlib.util import now_iso, safe_path_join, sanitize_file_name, to_string_array
+from paperlib.util import now_iso, sanitize_file_name, to_string_array
 from shared.pure.citation import bibtex_key, format as format_citation
 
 
@@ -45,18 +49,8 @@ def _file_size(path):
         return 0
 
 
-def _sha256(path):
-    try:
-        with open(path, "rb") as fh:
-            digest = hashlib.sha256()
-            while True:
-                chunk = fh.read(1024 * 1024)
-                if not chunk:
-                    break
-                digest.update(chunk)
-        return digest.hexdigest()
-    except OSError:
-        return ""
+def _file_key(path):
+    return os.path.normcase(str(path or "").replace("\\", "/"))
 
 
 class Importer:
@@ -65,6 +59,7 @@ class Importer:
     def __init__(self, db, repository):
         self.db = db
         self.repository = repository
+        self._scan_lock = Lock()
 
     # ------------------------------------------------------------------ 扫描
     def scan_pdfs(self):
@@ -76,12 +71,9 @@ class Importer:
         root = Path(str(self.db.papers_dir))
         papers = self.db.list_papers()
         out = []
-        for current, _dirs, files in os.walk(str(root)):
-            for name in sorted(files):
-                if not name.lower().endswith(".pdf"):
-                    continue
-                abs_path = os.path.join(current, name)
-                rel = os.path.relpath(abs_path, str(root)).replace(os.sep, "/")
+        for _, files in walk_assets(root):
+            for rel in files:
+                abs_path = root / rel
                 used_by = [{"id": p.get("id"), "title": p.get("title")}
                            for p in papers if p.get("pdfFile") == rel]
                 out.append({
@@ -93,7 +85,20 @@ class Importer:
                 })
         return sorted(out, key=lambda item: item["file"])
 
-    def scan_pdf_contents(self):
+    def _pdf_files(self):
+        root = self.db.papers_dir
+        for _, paths in walk_assets(root):
+            for relative in paths:
+                path = asset_path(root, relative)
+                try:
+                    info = path.stat() if path is not None else None
+                except OSError:
+                    continue
+                if info is not None:
+                    yield {"file": relative, "size": info.st_size, "mtime": _mtime_iso(info),
+                           "sha256": sha256_file(path)}
+
+    def scan_pdf_contents(self, files=None):
         """按内容扫描原文目录：内容完全相同的重复文件 + 没有任何记录引用的孤儿。
 
         为什么不按文件名猜：文件名会因为「重整文件名」「导入时按标题命名」而变，
@@ -101,28 +106,7 @@ class Importer:
 
         返回 {total, bytes, duplicateGroups, duplicates, wastedBytes, orphans, linked}。
         """
-        root = Path(str(self.db.papers_dir))
-        empty = {"total": 0, "bytes": 0, "duplicateGroups": [], "duplicates": 0,
-                 "wastedBytes": 0, "orphans": [], "linked": []}
-        if not root.is_dir():
-            return empty
-        files = []
-        for name in _listdir(root):
-            if not name.lower().endswith(".pdf"):
-                continue
-            abs_path = root / name
-            if not abs_path.is_file():
-                continue
-            stat = abs_path.stat()
-            files.append({"file": name, "size": stat.st_size, "mtime": _mtime_iso(stat)})
-
-        # 内容哈希：先按大小分组——不同大小不可能同内容，省掉大部分读盘
-        by_size = {}
-        for item in files:
-            by_size.setdefault(item["size"], []).append(item)
-        for group in by_size.values():
-            for item in group:
-                item["sha256"] = _sha256(root / item["file"])
+        files = list(self._pdf_files()) if files is None else files
 
         by_hash = {}
         for item in files:
@@ -130,11 +114,12 @@ class Importer:
                 continue
             by_hash.setdefault(item["sha256"], []).append(item)
 
-        papers = self.db.list_papers()
+        references = defaultdict(list)
+        for paper in self.db.list_papers():
+            references[_file_key(paper.get("pdfFile"))].append({"id": paper.get("id"), "title": paper.get("title")})
 
         def users_of(file_name):
-            return [{"id": p.get("id"), "title": p.get("title")}
-                    for p in papers if p.get("pdfFile") == file_name]
+            return references[_file_key(file_name)]
 
         duplicate_groups = []
         wasted_bytes = 0
@@ -187,63 +172,152 @@ class Importer:
             "linked": linked,
         }
 
+    def sync_pdf_directory(self, services):
+        """同步已移动的原文并就地登记新 PDF，扫描不会复制或改名。"""
+        with self._scan_lock:
+            files = list(self._pdf_files())
+            with self.db.paper_writes():
+                references, digests, relinked = self._reconcile_pdf_locations(files)
+                services.folders.sync_locations()
+            imported, failed = [], []
+            offline = {"lookup_doi": lambda _doi: None, "fetch_openalex_abstract": lambda _doi: ""}
+            for item in files:
+                relative, digest = item["file"], item["sha256"]
+                if _file_key(relative) in references or (digest and digest in digests):
+                    continue
+                path = asset_path(self.db.papers_dir, relative)
+                if not digest or path is None or not path.is_file():
+                    failed.append({"file": relative, "error": "无法读取 PDF"})
+                    continue
+                try:
+                    parsed = pdf_import.parse_pdf(services, path, offline)
+                    if not parsed.get("ok"):
+                        raise ValueError(parsed.get("warning") or "无法打开 PDF")
+                    draft = pdf_import.draft_from_parsed(services, parsed, deps=offline)
+                    with self.db.paper_writes():
+                        current = self.db.list_papers()
+                        if any(_file_key(p.get("pdfFile")) == _file_key(relative) for p in current):
+                            continue
+                        if any(p.get("pdfSha256") == digest for p in current):
+                            raise ValueError("内容与已登记的原文相同，请在下方核对关联")
+                        path = asset_path(self.db.papers_dir, relative)
+                        info = path.stat() if path is not None else None
+                        if info is None or info.st_size != item["size"] or _mtime_iso(info) != item["mtime"]:
+                            raise ValueError("PDF 已变更，请重新扫描")
+                        card = self.repository.create(dict(draft, folder=parent_path(relative),
+                                                           pdfFile=relative, pdfSha256=digest))
+                except (OSError, ValueError) as exc:
+                    failed.append({"file": relative, "error": str(exc)})
+                    continue
+                imported.append({"id": card["id"], "file": relative})
+                digests.add(digest)
+                services.extract_paper_fulltext(card)
+            return {"scan": self.scan_pdf_contents(files), "imported": imported, "relinked": relinked, "failed": failed}
+
+    def _reconcile_pdf_locations(self, files):
+        inventory = {_file_key(item["file"]): item for item in files}
+        papers = [paper for paper in self.db.list_papers() if paper.get("pdfFile")]
+        referenced = {_file_key(paper["pdfFile"]) for paper in papers if _file_key(paper["pdfFile"]) in inventory}
+        unclaimed = defaultdict(list)
+        by_id_prefix = defaultdict(list)
+        for key, item in inventory.items():
+            if key not in referenced:
+                if item["sha256"]:
+                    unclaimed[item["sha256"]].append(item)
+                name = Path(item["file"]).name
+                by_id_prefix[name.partition("-")[0]].append(item)
+        patches = {}
+        recovered = {}
+        relinked = 0
+        digests = set()
+        for paper in papers:
+            previous = _file_key(paper["pdfFile"])
+            item = inventory.get(previous)
+            if item is None:
+                candidates = unclaimed.get(paper.get("pdfSha256"), ())
+                if not candidates and not paper.get("pdfSha256"):
+                    candidates = by_id_prefix.get(paper["id"], ())
+                item = recovered.get(previous)
+                if item is None and len(candidates) == 1 and _file_key(candidates[0]["file"]) not in referenced:
+                    item = recovered[previous] = candidates[0]
+                if item is not None:
+                    relinked += 1
+            if item is None:
+                continue
+            relative, digest = item["file"], item["sha256"]
+            referenced.add(_file_key(relative))
+            if digest:
+                digests.add(digest)
+            patches[paper["id"]] = {"pdfFile": relative, "folder": parent_path(relative),
+                                    "pdfSha256": digest or paper.get("pdfSha256") or ""}
+        self.db.patch_papers(patches)
+        return referenced, digests, relinked
+
     # ------------------------------------------------------------------ 关联
     def associate_pdf(self, paper_id, file):
         """把一个已存在的 PDF 关联给某篇文献（文件名不参与猜测，由调用方指定）。"""
+        with self.db.paper_writes():
+            return self._associate_pdf(paper_id, file)
+
+    def _associate_pdf(self, paper_id, file):
         paper = self.repository.get(paper_id)
         if not paper:
             return {"ok": False, "error": "找不到这条文献"}
         rel = str(file or "").lstrip("/\\")
         if not rel or not rel.lower().endswith(".pdf"):
             return {"ok": False, "error": "文件名不合法"}
-        abs_path = safe_path_join(self.db.papers_dir, rel)
+        abs_path = self.db.path_for_paper_file(rel)
         if not abs_path or not os.path.isfile(abs_path):
             return {"ok": False, "error": "文件不存在：" + rel}
-        updated = self.repository.update(paper_id, {"pdfFile": rel})
+        rel = rel.replace("\\", "/")
+        updated = self.repository.update(paper_id, {"pdfFile": rel, "folder": parent_path(rel),
+                                                    "pdfSha256": sha256_file(abs_path)})
         return {"ok": True, "paper": updated, "file": rel}
 
     # ------------------------------------------------------------------ 整理
     def tidy_pdf_names(self):
-        """把 papers/ 里现存 PDF 的文件名统一重整（去 id 前缀、去非法字符、同名加序号）。"""
-        root = Path(str(self.db.papers_dir))
+        """在原分类目录内重整每个 PDF 的文件名。"""
+        with self.db.paper_writes():
+            return self._tidy_pdf_names()
+
+    def _tidy_pdf_names(self):
+        root = self.db.papers_dir
         results = []
-        files = [name for name in _listdir(root) if name.lower().endswith(".pdf")]
-        if not files:
-            return {"changed": 0, "total": 0, "results": results}
-        taken = set(files)
+        references = defaultdict(list)
+        for paper in self.db.list_papers():
+            references[_file_key(paper.get("pdfFile"))].append(paper)
+        files = [name for _, names in walk_assets(root) for name in names]
         for old_name in files:
-            paper = next((p for p in self.db.list_papers() if p.get("pdfFile") == old_name), None)
+            source = root / old_name
+            papers = references[_file_key(old_name)]
+            paper = papers[0] if papers else None
             # 目标名：优先用文献标题，其次用去掉前缀的原名
             if paper and paper.get("title"):
                 base = sanitize_file_name(paper.get("title"), 70)
             else:
-                stripped = old_name
-                if old_name[:8].lower() and stripped[:8].lower() == old_name[:8].lower():
-                    parts = stripped.split("-", 1)
-                    if len(parts) == 2 and len(parts[0]) >= 8 and all(
-                            ch in "0123456789abcdefABCDEF" for ch in parts[0]):
-                        stripped = parts[1]
+                stripped = source.name
+                parts = stripped.split("-", 1)
+                if len(parts) == 2 and len(parts[0]) >= 8 and all(
+                        ch in "0123456789abcdefABCDEF" for ch in parts[0]):
+                    stripped = parts[1]
                 base = sanitize_file_name(os.path.splitext(stripped)[0], 70)
-            nxt = base + ".pdf"
-            if nxt == old_name:
-                results.append({"old": old_name, "next": nxt, "changed": False, "reason": "已经规范"})
+            target = source.with_name(base + ".pdf")
+            if source == target:
+                results.append({"old": old_name, "next": old_name, "changed": False, "reason": "已经规范"})
                 continue
-            candidate = nxt
-            n = 2
-            while candidate in taken and candidate != old_name:
-                candidate = base + " (" + str(n) + ").pdf"
-                n += 1
-            nxt = candidate
+            target = unique_path(target)
+            nxt = target.relative_to(root).as_posix()
             try:
-                os.rename(str(root / old_name), str(root / nxt))
+                source.rename(target)
             except OSError as exc:
                 results.append({"old": old_name, "next": nxt, "changed": False,
                                 "reason": "重命名失败：" + str(exc)})
                 continue
-            taken.discard(old_name)
-            taken.add(nxt)
-            if paper:
-                self.repository.update(paper.get("id"), {"pdfFile": nxt})
+            try:
+                self.db.patch_papers({p["id"]: {"pdfFile": nxt, "folder": parent_path(nxt)} for p in papers})
+            except Exception:
+                target.rename(source)
+                raise
             results.append({"old": old_name, "next": nxt, "changed": True,
                             "paperId": paper.get("id") if paper else None})
         return {"changed": len([r for r in results if r["changed"]]),
@@ -385,4 +459,5 @@ class Importer:
             else:
                 self.repository.insert_normalized(norm)
                 added += 1
+        Folders(self.db).sync_locations()
         return {"added": added, "updated": updated, "skipped": skipped, "total": len(incoming)}

@@ -1,9 +1,9 @@
 # Sci-lib HTTP API 契约
 
 > 状态：P5 契约固化。**这份文档是行为事实的规格化**，不是新设计。
-> 机器可校验的版本是 `tools/api-snapshot.json`（73 条响应形状快照，`npm test` 强制零差异）；
+> 机器可校验的版本是 `api-snapshot.json`（74 条响应形状快照）；
 > 本文补上快照里没有的东西：入参、错误码、SSE 帧、上传与 Range 语义。
-> 任何实现改动都必须让 `npm test` 的 73 条快照保持零差异，除非显式修订本文件与快照。
+> 接口改动需同步修订本文件与快照，可运行 `python tools/contract_check.py` 校验。
 
 ## 1. 通用约定
 
@@ -118,7 +118,7 @@ data: {"type":"done", ...}
 
 `ai` 与 `chat` 拆开、`files` 与 `papers` 拆开，是为了让每个文件都 ≤450 行且各自只做一类事；**路由表（server/routes.js）才是端点的唯一事实来源**，域文件只是它的实现落点。
 
-## 3. 端点清单（73 条，与 `tools/api-snapshot.json` 逐条对齐）
+## 3. 端点清单（74 条，与 `api-snapshot.json` 逐条对齐）
 
 快照 id 与本文行一一对应；`network=true` 的端点只做状态类别比较（外部网络波动）。
 
@@ -173,6 +173,7 @@ data: {"type":"done", ...}
 | POST | `/api/papers` | paper 局部字段 | 201 `{ok, paper}` | —（字段缺省会被规整，不是错误） |
 | POST | `/api/papers/bulk` | `{ids[], patch:{tags?, removeTags?/untags?, status?, rating?, starred?, type?}}` | `{ok, changed, papers[]}` | — |
 | GET | `/api/papers/scan/pdfs` | — | `{ok, scan:{total, bytes, duplicateGroups[], duplicates, wastedBytes, orphans[], linked[]}}` | — |
+| POST | `/api/papers/scan/pdfs` | — | `{ok, scan, imported:[{id,file}], relinked, failed:[{file,error}]}` | — |
 | POST | `/api/papers/associate-pdf` | `{paperId, file}` | `{ok, paper, file}` | 400 |
 | POST | `/api/papers/cleanup-duplicates` | `{files?: string[]}`（不传=清理全部无引用重复副本） | `{ok, moved, bytes, files[], quarantine, scan}`；无可清理时 `{ok, moved:0, files:[], hint}` | — |
 | POST | `/api/papers/tidy-pdf-names` | — | `{ok, result, attachmentResult}` | — |
@@ -198,6 +199,8 @@ data: {"type":"done", ...}
 | GET | `/api/papers/:id/cite` | `format=gb\|apa\|mla\|bibtex\|markdown` | `{ok, format, text, available[]}` | 404 |
 | GET/HEAD | `/api/papers/:id/pdf` | Range 头 | PDF 流（206 分片） | 404 |
 | GET | `/api/facets` | 与 `/api/papers` 同构的筛选参数 | `{ok, authors[], venues[], tags[], years[], query:{...}}` | — |
+
+扫描递归遍历 `data/article/papers/` 中的实际目录。GET 只盘点，POST 同步并就地登记 PDF，原文路径为相对于 `papers/` 的路径。根目录对应未分类，文件夹接口读取实际目录。
 
 > `facets` 语义（**不能改**）：`authors/venues/tags/years` 是全库联想清单；`query` 是当前结果集内的 facet 计数，**每类先剥掉自身条件再计数**（例如已选 tag=A，则 tags 计数按「不含 tag 过滤」的全集统计）。
 >

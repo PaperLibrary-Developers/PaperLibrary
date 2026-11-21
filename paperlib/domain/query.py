@@ -21,7 +21,8 @@ from pathlib import Path
 
 from paperlib.domain.naming import display_file_name
 from paperlib.domain.repository import SORTABLE
-from paperlib.util import clamp_int, safe_path_join, to_string_array, truncate
+from paperlib.assets import asset_path
+from paperlib.util import clamp_int, to_string_array, truncate
 from shared.pure.text import zh_collation_key
 
 try:  # T1 交付；暂缺时布尔/字段查询降级（测试用 skip 标记）
@@ -557,7 +558,7 @@ class QueryEngine:
     def pdf_exists(self, pdf_file):
         if not pdf_file:
             return False
-        abs_path = safe_path_join(self.db.papers_dir, pdf_file)
+        abs_path = asset_path(self.db.papers_dir, pdf_file)
         if not abs_path:
             return False
         try:

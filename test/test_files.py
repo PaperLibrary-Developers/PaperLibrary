@@ -23,7 +23,7 @@ from zipfile import ZipFile
 import pymupdf
 from openpyxl import Workbook
 
-from paperlib.api import files, import_
+from paperlib.api import files, import_, papers as papers_api
 from paperlib.config import Config
 from paperlib.data.store import Store
 from paperlib.domain import fullread
@@ -514,6 +514,68 @@ class HttpPdfTest(Base):
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.read(), b"supplementary info")
             self.assertIn("inline", resp.headers["Content-Disposition"])
+
+
+class DirectoryScanTest(Base):
+    def _scan(self):
+        ctx = FakeCtx(self.services)
+        papers_api.sync_pdfs(ctx)
+        self.assertEqual(ctx.status, 200)
+        return ctx.payload
+
+    def test_scan_imports_in_place_then_relinks_an_externally_moved_pdf(self):
+        root = self.store.papers_dir
+        for folder in ("A/子类", "B", "C"):
+            (root / folder).mkdir(parents=True)
+        for relative, title in (("A/子类/原文.pdf", "Classified article"), ("根目录.pdf", "Unclassified article")):
+            with pymupdf.open() as doc:
+                doc.set_metadata({"title": title})
+                doc.new_page().insert_text((72, 72), title + " supplementary verification content")
+                doc.save(root / relative)
+        (root / "B/副本.pdf").write_bytes((root / "A/子类/原文.pdf").read_bytes())
+        (root / "C/损坏.pdf").write_bytes(b"not a PDF")
+
+        passive = FakeCtx(self.services, method="GET")
+        papers_api.scan_pdfs(passive)
+        self.assertEqual(passive.payload["scan"]["total"], 4)
+        self.assertEqual(self.store.count(), 1)  # 只有 Base 创建的无原文卡片
+
+        first = self._scan()
+        cards = {row["file"]: row["id"] for row in first["imported"]}
+        self.assertEqual(set(cards), {"A/子类/原文.pdf", "根目录.pdf"})
+        self.assertEqual([entry["file"] for entry in first["failed"]], ["C/损坏.pdf"])
+        paper_id = cards["A/子类/原文.pdf"]
+        self.assertEqual(self.services.library.get(paper_id)["folder"], "A/子类")
+        self.assertFalse(self.services.library.get(cards["根目录.pdf"]).get("folder"))
+        self.assertTrue(self.services.fulltext.has(paper_id))
+        self.assertEqual(self._scan()["imported"], [])
+
+        self.services.library.update(paper_id, {"notes": "retain existing card"})
+        (root / "B/副本.pdf").unlink()
+        (root / "A/子类/原文.pdf").rename(root / "B/重命名.pdf")
+        repeat = self._scan()
+        self.assertEqual(repeat["relinked"], 1)
+        self.assertEqual(repeat["imported"], [])
+        paper = self.services.library.get(paper_id)
+        self.assertEqual(paper["pdfFile"], "B/重命名.pdf")
+        self.assertEqual(paper["folder"], "B")
+        self.assertEqual(paper["notes"], "retain existing card")
+        self.assertFalse((root / "未分类").exists())
+
+    def test_upload_and_edit_place_the_pdf_in_the_selected_directory(self):
+        first = self.services.folders.ensure("A")
+        self.services.library.update(self.paper["id"], {"folder": first})
+        ctx = self.upload()
+        self.assertEqual(ctx.status, 201)
+        original = self.store.papers_dir / ctx.payload["pdfFile"]
+        self.assertEqual(original.parent.name, "A")
+        ctx = FakeCtx(self.services, method="PATCH", params={"id": self.paper["id"]}, json_body={"folder": "B"})
+        papers_api.update(ctx)
+        self.assertEqual(ctx.status, 200)
+        current = self.store.papers_dir / ctx.payload["paper"]["pdfFile"]
+        self.assertEqual(current.parent.name, "B")
+        self.assertTrue(current.is_file())
+        self.assertFalse(original.exists())
 
 
 class ImportEndpointsTest(Base):
