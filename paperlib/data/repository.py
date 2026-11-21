@@ -325,6 +325,15 @@ class Repository:
                 (paper_id, kind, json.dumps(payload, ensure_ascii=False), now_iso()),
             )
 
+    def rename_analysis(self, paper_id, old_kind, new_kind):
+        with self._lock, self.conn:
+            self.conn.execute("UPDATE OR REPLACE analysis SET kind = ? WHERE paper_id = ? AND kind = ?",
+                              (new_kind, paper_id, old_kind))
+
+    def delete_analysis(self, paper_id, kind):
+        with self._lock, self.conn:
+            self.conn.execute("DELETE FROM analysis WHERE paper_id = ? AND kind = ?", (paper_id, kind))
+
     def list_analysis(self, kind=None, limit=100):
         with self._lock:
             if kind:

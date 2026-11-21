@@ -27,6 +27,8 @@ import * as foldersUi from '../folders.mjs'
     const timers = new Set()
     let scrollFrame = null
     let activePdfViewer = null
+    let pdfTabController = null
+    let readingOriginal = false
 
     function later (callback, delay) {
       if (isStale()) return null
@@ -56,6 +58,8 @@ import * as foldersUi from '../folders.mjs'
       timers.forEach(clearTimeout)
       timers.clear()
       if (scrollFrame !== null) window.cancelAnimationFrame(scrollFrame)
+      activePdfViewer?.closeAnnotationEditor()
+      if (pdfTabController) pdfTabController.abort()
       activePdfViewer = null
     }, { once: true })
 
@@ -96,77 +100,56 @@ import * as foldersUi from '../folders.mjs'
     const paper = data.paper
     const pdfOk = data.pdfExists
 
-    /* ---------- PDF 批注（荧光笔 / 便签） ---------- */
-    // 阅读器只管画和改，数据从这里读写：打开时先取一次，改完由 savePdfAnnotations 落库。
-    //
-    // 这里有一层「存不下也不丢」的兜底（踩过一次：后台进程还是旧代码，PUT 回
-    // 404「接口不存在：/api/papers/<id>/annotations」，标了一屏，一刷新全没了）：
-    //   ① 读失败不拦页面，当作「这篇还没有批注」；
-    //   ② 写失败先把这一份整表快照 + 期间删掉的 id 记进 localStorage（按文献 id 分键）；
-    //   ③ 下次打开这篇：服务端那份与本地草稿合并 → 静默补写一次 → 成功后清草稿；
-    //   ④ 同样的失败只提示一次，不会每标一笔弹一个红框。
-    let pdfAnnotations = []
-    let annotLoaded = false              // 是否真的读到了服务端那一份（读失败时不能拿空表去覆盖）
-    if (pdfOk) {
+    /* ---------- PDF 批注（原文与每份 SI 分别写入） ---------- */
+    async function loadPdfAnnotations (tab, viewSignal) {
+      const { file } = tab
+      const key = file ? paper.id + '/attachment/' + encodeURIComponent(file) + '/' + (tab.addedAt || '') : paper.id
+      await pendingAnnotationSaves.get(key)
+      if (viewSignal.aborted) return null
+      let items = []
+      let loaded = false
       try {
-        await pendingAnnotationSaves.get(paper.id)
-        if (isStale()) return
-        const res = await api.getAnnotations(paper.id, signal)
-        pdfAnnotations = Array.isArray(res && res.items) ? res.items : []
-        annotLoaded = true
+        const res = await api.getAnnotations(paper.id, viewSignal, file)
+        items = Array.isArray(res && res.items) ? res.items : []
+        loaded = true
       } catch (err) {
-        pdfAnnotations = []
+        // 草稿仍可读取。只有成功读到服务端列表后，才会静默补存草稿。
       }
-      if (isStale()) return
+      if (viewSignal.aborted) return null
+      const draft = readAnnotDraft(key)
+      const state = { file, key, knownIds: items.map(item => item.id), removed: new Set(draft.removed), warned: false }
+      if (draft.items.length || draft.removed.length) {
+        items = mergeAnnotations(items, draft.items).filter(item => !state.removed.has(item.id))
+        if (loaded) savePdfAnnotations(state, items, true)
+      }
+      return { state, items }
     }
 
-    const annotDraft = readAnnotDraft(paper.id)
-    const hasAnnotDraft = annotDraft.items.length > 0 || annotDraft.removed.length > 0
-    if (hasAnnotDraft) {
-      pdfAnnotations = mergeAnnotations(pdfAnnotations, annotDraft.items)
-        .filter(item => annotDraft.removed.indexOf(item.id) < 0)
-    }
-
-    // 串行写：连着标两处时，两个 PUT 按顺序落地，慢的那个不会把新的覆盖掉
-    let annotKnownIds = pdfAnnotations.map(item => item.id)   // 上一次「服务端确实存住了」的 id 集合
-    let annotWarned = false                                   // 同类错误只提醒一次
-
-    /**
-     * 保存批注（整表覆盖）。失败先落本地草稿，再给一次「照着做就能修好」的提示。
-     * @param {Array} items
-     * @param {{silent?:boolean}} [options] silent = 补写草稿时不打扰用户
-     */
-    function savePdfAnnotations (items, options) {
-      const opts = options || {}
+    function savePdfAnnotations (state, items, silent = false) {
+      const { key, file } = state
       const list = Array.isArray(items) ? items : []
       const ids = list.map(item => item && item.id).filter(Boolean)
-      const removed = annotKnownIds.filter(id => ids.indexOf(id) < 0)
-      const saving = (pendingAnnotationSaves.get(paper.id) || Promise.resolve())
-        .then(() => api.saveAnnotations(paper.id, list))
+      const saving = (pendingAnnotationSaves.get(key) || Promise.resolve())
+        .then(() => api.saveAnnotations(paper.id, list, file))
         .then(() => {
-          annotKnownIds = ids
-          annotWarned = false
-          clearAnnotDraft(paper.id)          // 服务端已经存住了，本地草稿可以扔
+          state.knownIds = ids
+          state.removed.clear()
+          state.warned = false
+          clearAnnotDraft(key)
         })
         .catch(err => {
-          writeAnnotDraft(paper.id, list, removed)   // 兜底：先存本机，下次打开自动补
-          if (isStale() || opts.silent || annotWarned) return
-          annotWarned = true
-          if (err && err.status === 404) {
-            // 404 = 这台服务还没有批注接口：几乎都是「后台进程还是旧代码」（路由表在启动时
-            // 就 import 进内存了，改了 routes.py 也不会热更）。提示要能照着做，别只报错。
-            toast('批注暂存在本机：文献库后台还没这个接口（多半是旧进程）。重启一次文献库，重开这篇会自动补存。', 'warn')
-          } else {
-            toast('批注保存失败：' + err.message + '（已暂存在本机，下次打开会自动重试）', 'error')
-          }
+          for (const id of state.knownIds) if (!ids.includes(id)) state.removed.add(id)
+          for (const id of ids) state.removed.delete(id)
+          writeAnnotDraft(key, list, [...state.removed])
+          if (isStale() || silent || state.warned) return
+          state.warned = true
+          toast('批注保存失败：' + err.message + '（已暂存在本机，下次打开会自动重试）', 'error')
         })
         .finally(() => {
-          if (pendingAnnotationSaves.get(paper.id) === saving) pendingAnnotationSaves.delete(paper.id)
+          if (pendingAnnotationSaves.get(key) === saving) pendingAnnotationSaves.delete(key)
         })
-      pendingAnnotationSaves.set(paper.id, saving)
+      pendingAnnotationSaves.set(key, saving)
     }
-    // 上次留下的草稿：静默补写一次。服务端已支持就当场同步掉；还是旧进程就继续留草稿，不再打扰。
-    if (hasAnnotDraft && annotLoaded) savePdfAnnotations(pdfAnnotations, { silent: true })
 
     /* ---------- 顶部 ---------- */
 
@@ -875,13 +858,12 @@ import * as foldersUi from '../folders.mjs'
       }
     })
 
-    // 内置 PDF 阅读器的挂载点。真正的渲染在页面组装之后异步进行：
-    // 成功用自绘阅读器（风格跟网站一致），失败/没装可选依赖就回退到浏览器自带查看器。
-    const pdfHost = h('div.pdf-viewer-host', { id: 'pdf-viewer-host' })
-
-    const pdfPanel = h('section.panel', { id: 'pdf-panel' },
-      h('div.panel-head', 'PDF 原文',
-        h('div.right',
+    const pdfTabs = new Map([['', { file: '', title: 'PDF 原文', url: pdfOk ? api.pdfUrl(paper.id) : '' }]])
+    let activePdfTab = ''
+    let pdfMount = null
+    const pdfTabBar = h('div.pdf-doc-tabs', { role: 'tablist', 'aria-label': 'PDF 文档' })
+    const pdfBody = h('div', { id: 'pdf-document-panel', role: 'tabpanel' })
+    const originalPdfActions = h('div.right.pdf-original-actions',
           pdfOk ? h('a.btn.sm', { href: api.pdfUrl(paper.id), target: '_blank', rel: 'noopener' }, '新标签页打开') : null,
           h('button.btn.sm', { type: 'button', onclick: () => uploadInput.click() }, paper.pdfFile ? '更换文件' : '上传 PDF'),
           paper.pdfFile ? h('button.btn.sm.danger', {
@@ -902,18 +884,122 @@ import * as foldersUi from '../folders.mjs'
               } catch (err) { toast(err.message, 'error') }
             }
           }, '取消关联') : null
-        )
-      ),
-      uploadInput,
-      pdfOk
-        ? pdfHost
-        : h('div.pdf-empty',
+    )
+    const originalEmpty = h('div.pdf-empty',
           h('div', { text: paper.pdfFile ? '关联的 PDF 文件不见了：' + paper.pdfFile : '这条文献还没有关联 PDF。' }),
           h('div', { style: { fontSize: '13px', color: 'var(--faint)', maxWidth: '560px' } },
             '上传后文件会复制到数据目录的 papers/ 文件夹，之后无论原文件挪到哪里都能继续打开。也可以在编辑页填写「PDF 文件名」来关联 papers/ 目录里已有的文件。'),
           h('button.btn.primary', { type: 'button', onclick: () => uploadInput.click() }, '选择 PDF 文件上传')
-        )
     )
+    const pdfPanel = h('section.panel', { id: 'pdf-panel' },
+      h('div.panel-head', pdfTabBar, originalPdfActions), uploadInput, pdfBody
+    )
+
+    function paintPdfTabs () {
+      const files = [...pdfTabs.keys()]
+      pdfTabBar.replaceChildren(...files.map((file, index) => {
+        const tab = pdfTabs.get(file)
+        const selected = file === activePdfTab
+        const buttonId = 'pdf-document-tab-' + index
+        if (selected) pdfBody.setAttribute('aria-labelledby', buttonId)
+        return h('div.pdf-doc-tab', { role: 'presentation', 'data-active': String(selected) },
+          h('button.pdf-doc-tab-name', {
+            id: buttonId, type: 'button', role: 'tab', title: tab.title,
+            'aria-controls': pdfBody.id, 'aria-selected': String(selected), tabindex: selected ? 0 : -1,
+            onclick: () => selectPdfTab(file, true),
+            onkeydown: ev => {
+              const step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key]
+              if (step === undefined && ev.key !== 'Home' && ev.key !== 'End') return
+              ev.preventDefault()
+              const next = ev.key === 'Home' ? 0 : ev.key === 'End' ? files.length - 1 : (index + step + files.length) % files.length
+              selectPdfTab(files[next], true)
+            }
+          }, tab.title),
+          file ? h('button.pdf-doc-tab-close', {
+            type: 'button', title: '关闭标签页', 'aria-label': '关闭 ' + tab.title,
+            onclick: () => closePdfTab(file, true)
+          }, '×') : null)
+      }))
+      originalPdfActions.hidden = activePdfTab !== ''
+    }
+
+    function selectPdfTab (file, focus = false) {
+      if (file === activePdfTab && pdfMount) {
+        if (focus) pdfTabBar.querySelector('[aria-selected="true"]')?.focus()
+        return pdfMount
+      }
+      if (readingOriginal) {
+        toast('正在识图识别全文，完成后可切换标签页', 'warn')
+        return null
+      }
+      const previous = pdfTabs.get(activePdfTab)
+      if (previous && activePdfViewer) previous.view = activePdfViewer.getViewState()
+      activePdfViewer?.closeAnnotationEditor()
+      if (pdfTabController) pdfTabController.abort()
+      pdfTabController = new AbortController()
+      activePdfViewer = null
+      activePdfTab = file
+      paintPdfTabs()
+      const selected = pdfTabBar.querySelector('[aria-selected="true"]')
+      if (focus || file) selected?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      if (focus) selected?.focus()
+      pdfMount = openPdfDocument(pdfTabs.get(file), pdfTabController.signal)
+      return pdfMount
+    }
+
+    async function openPdfDocument (tab, viewSignal) {
+      if (!tab.url) {
+        pdfBody.replaceChildren(originalEmpty)
+        syncHeight()
+        return null
+      }
+      const host = h('div.pdf-viewer-host', { id: 'pdf-viewer-host' }, h('div.pdf-empty', '正在打开 PDF…'))
+      pdfBody.replaceChildren(host)
+      syncHeight()
+      const annotations = await loadPdfAnnotations(tab, viewSignal)
+      if (!annotations || viewSignal.aborted) return null
+      host.replaceChildren()
+      const viewer = await mountPdfViewer(host, {
+        url: tab.url, title: tab.title, downloadUrl: tab.url, signal: viewSignal, initialView: tab.view,
+        annotations: annotations.items,
+        onAnnotationsChange: items => { if (!viewSignal.aborted) savePdfAnnotations(annotations.state, items) },
+        onRegionSelected: (dataUrl, info) => {
+          if (!viewSignal.aborted) openRegionAsk(dataUrl, { ...info, source: tab.file ? tab.title : '' })
+        }
+      })
+      if (viewSignal.aborted) return null
+      activePdfViewer = viewer
+      syncHeight()
+      return viewer
+    }
+
+    function openPdfAttachment (att) {
+      if (!/\.pdf$/i.test(att.file)) {
+        toast('此格式不支持在 PDF 阅读器中打开，可下载原文件。', 'warn')
+        return
+      }
+      if (readingOriginal) {
+        toast('正在识图识别全文，完成后可切换标签页', 'warn')
+        return
+      }
+      if (!pdfTabs.has(att.file)) {
+        pdfTabs.set(att.file, { file: att.file, addedAt: att.addedAt, title: att.originalName || att.file,
+          url: api.attachmentUrl(paper.id, att.file) })
+      }
+      selectPdfTab(att.file)
+      pdfPanel.scrollIntoView({ block: 'nearest' })
+    }
+
+    function closePdfTab (file, focus = false) {
+      if (!pdfTabs.has(file) || !file) return
+      const files = [...pdfTabs.keys()]
+      pdfTabs.delete(file)
+      if (file === activePdfTab) selectPdfTab(files[files.indexOf(file) - 1], focus)
+      else {
+        paintPdfTabs()
+        if (focus) pdfTabBar.querySelector('[aria-selected="true"]')?.focus()
+      }
+    }
 
     /* ---------- AI 总结（放在 PDF 右边） ---------- */
 
@@ -969,7 +1055,7 @@ import * as foldersUi from '../folders.mjs'
 
     // 扫描件识图：逐页渲染 → 模型抄录 → 最后存成这篇的正文
     ocrButton.addEventListener('click', async () => {
-      const viewer = activePdfViewer
+      const viewer = await selectPdfTab('')
       if (!viewer || typeof viewer.capturePage !== 'function') {
         toast('内置阅读器还没就绪（或没装 pdfjs-dist），暂时无法逐页识图', 'warn')
         return
@@ -983,7 +1069,8 @@ import * as foldersUi from '../folders.mjs'
         okText: '开始识别',
         danger: false
       })
-      if (!ok) return
+      if (!ok || isStale() || viewer !== activePdfViewer || readingOriginal) return
+      readingOriginal = true
       ocrButton.setAttribute('disabled', '')
       const parts = []
       try {
@@ -1012,6 +1099,7 @@ import * as foldersUi from '../folders.mjs'
         ftStatus.style.color = 'var(--danger)'
         toast('识图失败：' + err.message, 'error')
       } finally {
+        readingOriginal = false
         ocrButton.removeAttribute('disabled')
         ocrButton.textContent = '识图识别全文'
       }
@@ -1453,7 +1541,7 @@ import * as foldersUi from '../folders.mjs'
      * 你也可以改成自己的问题；答完自动进对话历史。
      */
     function openRegionAsk (dataUrl, info) {
-      const pageLabel = '第 ' + ((info && info.page) || '?') + ' 页框选'
+      const pageLabel = (info?.source ? info.source + ' · ' : '') + '第 ' + (info?.page || '?') + ' 页框选'
       const preview = h('img', { src: dataUrl, alt: '框选区域预览', style: { maxWidth: '100%', maxHeight: '180px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' } })
       const input = h('textarea.textarea', { rows: 3 },
         '解释这张图/表说明了什么。如果是表格，请说明各列含义与主要数据；如果是电镜/形貌图，请描述形貌特征（形状、大小量级、是否聚集）。')
@@ -1619,14 +1707,14 @@ import * as foldersUi from '../folders.mjs'
         const shown = attExpanded ? list : list.slice(0, ATT_VISIBLE)
         const restCount = list.length - shown.length
         const rows = shown.map(att => h('div.att-row',
-          h('a.att-name', {
-            href: api.attachmentUrl(paper.id, att.file),
-            target: '_blank',
-            rel: 'noopener',
+          h('button.att-name', {
+            type: 'button', onclick: () => openPdfAttachment(att),
             title: att.originalName + ' · ' + util.fileSize(att.size) +
               (att.hasText ? ' · 已抽取 ' + att.textChars + ' 字（用于总结与问答）' : ' · 尚未抽取文字')
           }, att.originalName),
           att.hasText ? h('span.att-flag', { title: '已抽取文字，会用于 AI 总结与问答' }, '已读入') : null,
+          h('a.att-download', { href: api.attachmentUrl(paper.id, att.file), download: att.originalName || att.file,
+            title: '下载原文件', 'aria-label': '下载 ' + att.originalName }, '↓'),
           h('button.att-del', {
             type: 'button',
             title: '删除这个补充材料',
@@ -1640,6 +1728,7 @@ import * as foldersUi from '../folders.mjs'
               if (!ok) return
               try {
                 await api.deleteAttachment(paper.id, att.file)
+                closePdfTab(att.file)
                 toast('已删除')
                 await loadAttachments()
               } catch (err) { toast(err.message, 'error') }
@@ -1668,7 +1757,7 @@ import * as foldersUi from '../folders.mjs'
     // 反馈：这块只是上传补充材料的地方，越紧凑越好——只留一行文件名，其余信息放进 hover 提示
     const moreUploadBtn = h('button.btn.sm.ghost', {
       type: 'button',
-      title: '上传补充材料，可抽取 PDF、DOCX、DOC、RTF、XLSX 和纯文本',
+      title: '上传补充材料。PDF 可在阅读器中打开并批注。',
       onclick: () => attInput.click()
     }, '＋ 上传')
     const morePanel = h('section.panel.compact', { id: 'more-panel' },
@@ -1759,20 +1848,7 @@ import * as foldersUi from '../folders.mjs'
 
     /* ---------- 内置 PDF 阅读器（失败自动回退到浏览器自带查看器） ---------- */
 
-    if (pdfOk) {
-      const url = api.pdfUrl(paper.id)
-      mountPdfViewer(pdfHost, {
-        url,
-        signal,
-        title: 'PDF 原文',
-        downloadUrl: url,
-        annotations: pdfAnnotations,
-        onAnnotationsChange: items => { if (!isStale()) savePdfAnnotations(items) },
-        onRegionSelected: (dataUrl, info) => { if (!isStale()) openRegionAsk(dataUrl, info || {}) }
-      }).then(viewer => {
-        if (!isStale()) activePdfViewer = viewer
-      })
-    }
+    selectPdfTab('')
 
     // 右列高度对齐左边 PDF 框：CSS 里两边已经用了同一个 --read-h，
     // 这里再按实测像素补一次（阅读器加载完成后尺寸可能变），保证任何窗口尺寸下都齐平。

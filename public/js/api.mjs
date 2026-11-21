@@ -47,6 +47,15 @@
     return s ? '?' + s : ''
   }
 
+  function attachmentUrl (id, file) {
+    return '/api/papers/' + encodeURIComponent(id) + '/attachments/' + encodeURIComponent(file)
+  }
+
+  function annotationUrl (id, file) {
+    const documentUrl = file ? attachmentUrl(id, file) : '/api/papers/' + encodeURIComponent(id)
+    return documentUrl + '/annotations'
+  }
+
   /**
    * 读一个 SSE 流（服务端的 {type:'start'|'delta'|'done'|'error'} 协议）。
    * 对话、识图都用它，避免两份几乎一样的解析代码。
@@ -224,14 +233,14 @@
 
     // PDF 批注（荧光笔 / 便签）：整表读写。坐标是「相对该页的 0~1 归一化值」，
     // 缩放 / 适宽 / 换屏幕都不用重算，前端只管按百分比画。
-    getAnnotations: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/annotations', { signal }),
-    saveAnnotations: (id, items) => request('PUT', '/api/papers/' + encodeURIComponent(id) + '/annotations',
+    getAnnotations: (id, signal, file) => request('GET', annotationUrl(id, file), { signal }),
+    saveAnnotations: (id, items, file) => request('PUT', annotationUrl(id, file),
       { body: { items: Array.isArray(items) ? items : [] } }),
 
     // 「更多信息」补充材料
     listAttachments: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/attachments', { signal }),
     deleteAttachment: (id, file) => request('DELETE', '/api/papers/' + encodeURIComponent(id) + '/attachments/' + encodeURIComponent(file)),
-    attachmentUrl: (id, file) => '/api/papers/' + encodeURIComponent(id) + '/attachments/' + encodeURIComponent(file),
+    attachmentUrl,
     uploadAttachment: function (id, file) {
       return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest()

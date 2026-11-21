@@ -840,6 +840,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
    * @param {HTMLElement} container 挂载点（调用方保证它有确定的宽高）
    * @param {{
    *   url:string, title?:string, downloadUrl?:string,
+   *   initialView?:{page:number, scale:number, preset:string|null},
    *   onRegionSelected?:(dataUrl:string, info:object)=>void,
    *   annotations?:Array<object>, onAnnotationsChange?:(items:Array<object>)=>void
    * }} options 批注（荧光笔 / 便签）由调用方传入并自行落库，阅读器不碰网络
@@ -1246,8 +1247,10 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       if (ui.total) ui.total.textContent = '/ ' + total
       if (ui.pageInput && viewer) ui.pageInput.value = String(viewer.currentPageNumber || 1)
       syncPageButtons()
-      applyFit(state.presetScale || 'page-width')   // 默认「适应宽度」
-      syncZoom()
+      const prior = opts.initialView
+      if (prior && prior.preset === null && Number.isFinite(prior.scale)) applyZoom(prior.scale)
+      else applyFit(prior?.preset === 'page-fit' ? 'page-fit' : 'page-width')
+      if (prior && prior.page > 1) jumpToPage(prior.page)
       hideStatus()
       // 批注：页已经排好版，把传进来的批注画上去（之后每页渲染完 pagerendered 会再补一次）
       paintAllAnnotations()
@@ -3166,8 +3169,11 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
         startRegionSelect: startRegionSelect,
         cancelRegionSelect: cancelRegionSelect,
         goToPage: goToPage,
+        getViewState: () => ({ page: state.pdfViewer?.currentPageNumber || 1,
+          scale: state.pdfViewer?.currentScale, preset: state.presetScale }),
         isInverted: isInverted,
         // 批注：读写整组 / 跳到某一条（数据本身仍由调用方落库）
+        closeAnnotationEditor: () => closeAnnotPop(),
         getAnnotations: getAnnotations,
         setAnnotations: setAnnotations,
         goToAnnotation: locateAnnotation

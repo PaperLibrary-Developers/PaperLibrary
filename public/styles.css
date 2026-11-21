@@ -884,7 +884,7 @@ a.external-title:hover { color: var(--accent-text); }
   align-items: start;
 }
 /* 左边 PDF 面板保持自己的自然高度：右列内容多时也不要把它拉长 */
-#pdf-panel { align-self: start; }
+#pdf-panel { align-self: start; scroll-margin-top: 76px; }
 /* 右列：固定高度 = 左边 PDF 面板高度；合并模块吃掉剩余空间，补充材料只占自己那一行 */
 .read-side {
   display: flex;
@@ -948,6 +948,17 @@ a.external-title:hover { color: var(--accent-text); }
 .pdf-viewer-host.pdf-fallback { background: transparent; }
 .pdf-viewer-host .pdf-frame { height: 100%; border-radius: 0; }
 .read-grid .pdf-frame { height: var(--read-h, clamp(560px, 84vh, 1500px)); }
+.pdf-doc-tabs { display: flex; flex: 1 1 12rem; min-width: 0; gap: 5px; overflow-x: auto; padding: 2px; }
+.pdf-doc-tab {
+  display: flex; flex: 0 0 auto; align-items: center; max-width: min(16rem, 100%);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.pdf-doc-tab[data-active="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.pdf-doc-tab button { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.pdf-doc-tab-name { padding: 4px 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-doc-tab-close { margin-right: 3px; padding: 0 4px; border-radius: 4px; }
+.pdf-doc-tab-close:hover { background: var(--surface-3); color: var(--danger); }
+.pdf-original-actions[hidden] { display: none; }
 
 /* 合并模块：标题栏左上角切换「AI 总结 / 与文献对话」，内容区撑满剩余高度 */
 /* ---------- 贴图提问：待发送的缩略图 ---------- */
@@ -1161,7 +1172,8 @@ a.external-title:hover { color: var(--accent-text); }
 .panel.compact .panel-body.more-body:empty { display: none; }
 .att-row { display: flex; align-items: center; gap: 8px; font-size: 12.8px; min-width: 0; }
 .att-name {
-  flex: 1 1 auto; min-width: 0; color: var(--text); text-decoration: none;
+  flex: 1 1 auto; min-width: 0; border: 0; padding: 0; background: none;
+  color: var(--text); font: inherit; text-align: left; cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .att-name:hover { color: var(--accent-text); text-decoration: underline; }
@@ -1171,6 +1183,8 @@ a.external-title:hover { color: var(--accent-text); }
 }
 .att-del { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: 14px; line-height: 1; padding: 1px 4px; }
 .att-del:hover { color: var(--danger); }
+.att-download { color: var(--muted); text-decoration: none; padding: 0 2px; }
+.att-download:hover { color: var(--accent-text); }
 .hint.compact { font-size: 12.5px; }
 .att-more {
   justify-self: start; border: 0; background: transparent; color: var(--faint);

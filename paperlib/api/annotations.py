@@ -1,4 +1,4 @@
-"""PDF 批注端点（荧光笔标注 / 字符便签贴）。
+"""原文与补充材料 PDF 的荧光笔和便签批注端点。
 
   GET /api/papers/:id/annotations   读这篇文献的全部批注
   PUT /api/papers/:id/annotations   { items: [...] } 整表覆盖（一次请求写完，最原子）
@@ -166,11 +166,31 @@ def _norm_item(raw, stamp=False):
 
 
 # ------------------------------------------------------------------ 端点
+def attachment_annotation_kind(file):
+    return KIND + ":attachment:" + file
+
+
+def _document_kind(ctx, paper):
+    file = (ctx.params or {}).get("file")
+    if file is None:
+        return KIND
+    if not any(item.get("file") == file for item in paper.get("attachments") or []):
+        ctx.fail(404, "找不到这个附件")
+        return None
+    if not file.lower().endswith(".pdf"):
+        ctx.fail(400, "只有 PDF 附件支持批注")
+        return None
+    return attachment_annotation_kind(file)
+
+
 def get_annotations(ctx):
     paper = require_paper(ctx)
     if not paper:
         return None
-    payload = ctx.services.db.repo.get_analysis(paper.get("id"), KIND) or {}
+    kind = _document_kind(ctx, paper)
+    if kind is None:
+        return None
+    payload = ctx.services.db.repo.get_analysis(paper.get("id"), kind) or {}
     raw_items = payload.get("items") if isinstance(payload, dict) else None
     items = []
     for raw in raw_items if isinstance(raw_items, list) else []:
@@ -210,5 +230,13 @@ def put_annotations(ctx):
         items.append(item)
 
     payload = {"items": items, "updatedAt": now_iso()}
-    ctx.services.db.repo.save_analysis(paper.get("id"), KIND, payload)
+    store = ctx.services.db
+    with store.paper_writes():
+        current = require_paper(ctx)
+        if not current:
+            return None
+        kind = _document_kind(ctx, current)
+        if kind is None:
+            return None
+        store.repo.save_analysis(current.get("id"), kind, payload)
     return ctx.json(200, {"ok": True, "items": items, "updatedAt": payload["updatedAt"]})

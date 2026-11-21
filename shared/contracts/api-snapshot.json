@@ -439,6 +439,26 @@
       "kind": "api"
     },
     {
+      "id": "papers-attachment-annotations-get-missing",
+      "method": "GET",
+      "path": "/api/papers/0000000000000000/attachments/a.pdf/annotations",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": ["error", "ok"],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
+      "id": "papers-attachment-annotations-put-missing",
+      "method": "PUT",
+      "path": "/api/papers/0000000000000000/attachments/a.pdf/annotations",
+      "status": 404,
+      "statusClass": "4xx",
+      "jsonKeys": ["error", "ok"],
+      "contentType": "application/json",
+      "kind": "api"
+    },
+    {
       "id": "papers-attachment-delete-missing",
       "method": "DELETE",
       "path": "/api/papers/0000000000000000/attachments/a.bin",

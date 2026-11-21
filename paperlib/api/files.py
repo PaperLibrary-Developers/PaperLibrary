@@ -26,6 +26,7 @@ import re
 from pathlib import Path
 from urllib.parse import unquote
 
+from paperlib.api.annotations import attachment_annotation_kind
 from paperlib.api.paper_scope import require_paper
 from paperlib.domain import naming
 from paperlib.util import ensure_dir, now_iso, safe_path_join, sanitize_file_name
@@ -292,16 +293,19 @@ def attachment_remove(ctx):
         remaining = [a for a in attachments if a.get("file") != wanted]
         return {"attachments": remaining} if len(remaining) != len(attachments) else None
 
-    updated = services.library.update(paper.get("id"), remove_attachment)
-    if updated is None:
-        return ctx.fail(404, "找不到这个附件")
-    abs_path = safe_path_join(services.db.attachments_dir, wanted)
-    if abs_path and os.path.isfile(abs_path):
-        try:
-            os.unlink(abs_path)
-        except OSError:
-            pass
-    services.fulltext.remove_attachment_text(paper.get("id"), wanted)
+    with services.db.paper_writes():
+        updated = services.library.update(paper.get("id"), remove_attachment)
+        if updated is None:
+            return ctx.fail(404, "找不到这个附件")
+        abs_path = safe_path_join(services.db.attachments_dir, wanted)
+        if abs_path and os.path.isfile(abs_path):
+            try:
+                os.unlink(abs_path)
+            except OSError:
+                pass
+        services.fulltext.remove_attachment_text(paper.get("id"), wanted)
+        if wanted.lower().endswith(".pdf"):
+            services.db.repo.delete_analysis(paper.get("id"), attachment_annotation_kind(wanted))
     ctx.json(200, {"ok": True, "attachments": updated.get("attachments") or []})
 
 

@@ -23,6 +23,7 @@ import os
 import threading
 from pathlib import Path
 
+from paperlib.api.annotations import attachment_annotation_kind
 from paperlib.api.paper_scope import require_paper
 from paperlib.assets import parent_path, unique_path
 from paperlib.domain.folders import FolderError
@@ -97,8 +98,11 @@ def _fulltext_excerpts(fulltext, paper_id, query, limit):
         return []
 
 
-def _rename_attachment_text(services, paper_id, old_file, new_file):
-    """附件改名后同步抽取文本的文件名（方法名在 T3 落地前可能是两种写法）。"""
+def _rename_attachment_references(services, paper_id, old_file, new_file):
+    """附件改名后同步批注与抽取文本的文件名。"""
+    if old_file.lower().endswith(".pdf"):
+        services.db.repo.rename_analysis(paper_id, attachment_annotation_kind(old_file),
+                                         attachment_annotation_kind(new_file))
     fulltext = services.fulltext
     for name in ("rename_attachment_text", "renameAttachmentText"):
         fn = getattr(fulltext, name, None)
@@ -320,7 +324,7 @@ def tidy_pdf_names(ctx):
     services = ctx.services
     pdf = services.library.tidy_pdf_names()
     attachments = services.library.tidy_attachment_names(
-        lambda paper_id, old_file, new_file: _rename_attachment_text(
+        lambda paper_id, old_file, new_file: _rename_attachment_references(
             services, paper_id, old_file, new_file))
     merged = dict(pdf)
     merged["attachments"] = attachments

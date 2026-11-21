@@ -148,6 +148,8 @@ ROUTES = [
     # PDF 批注（荧光笔 / 便签）：整表读写，坐标是每页 0~1 的归一化值
     {"name": "papers-annotations-get", "methods": ("GET",), "pattern": "/api/papers/:id/annotations", "handler": annotations.get_annotations},
     {"name": "papers-annotations-put", "methods": ("PUT",), "pattern": "/api/papers/:id/annotations", "handler": annotations.put_annotations},
+    {"name": "papers-attachment-annotations-get", "methods": ("GET",), "pattern": "/api/papers/:id/attachments/:file/annotations", "handler": annotations.get_annotations},
+    {"name": "papers-attachment-annotations-put", "methods": ("PUT",), "pattern": "/api/papers/:id/attachments/:file/annotations", "handler": annotations.put_annotations},
 
     {"name": "papers-cite", "methods": ("GET",), "pattern": "/api/papers/:id/cite", "handler": files.cite},
     {"name": "papers-pdf", "methods": ("GET", "HEAD"), "pattern": "/api/papers/:id/pdf", "handler": files.pdf},

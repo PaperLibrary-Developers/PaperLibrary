@@ -12,7 +12,9 @@
 """
 from __future__ import annotations
 
+import json
 import unittest
+from urllib.parse import quote
 
 from test.test_api_smoke import ServerFixture
 
@@ -158,6 +160,47 @@ class AnnotationsApiTest(unittest.TestCase):
     def test_06_method_not_allowed(self):
         status, data = self.fx.json("POST", PATH % self.paper_id, {"items": []})
         self.assertEqual(status, 404)       # 路由表里没有 POST 这一条（与其它端点一致）
+
+    def test_attachment_pdf_annotations_are_isolated_and_follow_rename(self):
+        status, data = self.fx.json("POST", "/api/papers", {"title": "Attachment annotation fixture"})
+        self.assertEqual(status, 201)
+        paper_id = data["paper"]["id"]
+        attachments = "/api/papers/" + paper_id + "/attachments"
+
+        def upload(name, data):
+            status, _, payload = self.fx.call("POST", attachments, raw=(data, {"X-Filename": quote(name)}))
+            self.assertEqual(status, 201, payload)
+            return json.loads(payload)["attachment"]["file"]
+
+        def annotation_path(file):
+            return attachments + "/" + quote(file, safe="") + "/annotations"
+
+        first = upload("方法.pdf", b"%PDF-1.4\n% first fixture")
+        second = upload("figures.pdf", b"%PDF-1.4\n% second fixture")
+        table = upload("data.csv", b"sample,value\n1,2\n")
+        self.assertEqual(self.fx.call("GET", attachments + "/" + quote(first), headers={"Range": "bytes=0-4"}),
+                         (206, "application/pdf", b"%PDF-"))
+        self.assertEqual(self.fx.json("PUT", PATH % paper_id, {"items": [highlight("main")]})[0], 200)
+        self.assertEqual(self.fx.json("PUT", annotation_path(first), {"items": [note("si-note")]})[0], 200)
+        for path, expected in ((PATH % paper_id, ["main"]), (annotation_path(first), ["si-note"]),
+                               (annotation_path(second), [])):
+            status, data = self.fx.json("GET", path)
+            self.assertEqual(status, 200)
+            self.assertEqual([item["id"] for item in data["items"]], expected)
+        self.assertEqual(self.fx.json("PUT", annotation_path(table), {"items": []})[0], 400)
+
+        self.assertEqual(self.fx.json("PATCH", "/api/papers/" + paper_id, {"title": "Renamed fixture"})[0], 200)
+        status, result = self.fx.json("POST", "/api/papers/tidy-pdf-names", {})
+        self.assertEqual(status, 200)
+        next_file = next(row["next"] for row in result["result"]["attachments"]["results"] if row["old"] == first)
+        self.assertNotEqual(first, next_file)
+        self.assertEqual(self.fx.json("GET", annotation_path(first))[0], 404)
+        status, data = self.fx.json("GET", annotation_path(next_file))
+        self.assertEqual(status, 200)
+        self.assertEqual([item["id"] for item in data["items"]], ["si-note"])
+        self.assertEqual(self.fx.json("DELETE", attachments + "/" + quote(next_file))[0], 200)
+        self.assertEqual(self.fx.json("GET", annotation_path(next_file))[0], 404)
+        self.assertEqual(self.fx.json("PUT", annotation_path(next_file), {"items": [note("old")]})[0], 404)
 
 
 if __name__ == "__main__":

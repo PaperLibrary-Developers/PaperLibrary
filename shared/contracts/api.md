@@ -1,7 +1,7 @@
 # Sci-lib HTTP API 契约
 
 > 状态：P5 契约固化。**这份文档是行为事实的规格化**，不是新设计。
-> 机器可校验的版本是 `api-snapshot.json`（74 条响应形状快照）；
+> 机器可校验的版本是 `api-snapshot.json`（76 条响应形状快照）；
 > 本文补上快照里没有的东西：入参、错误码、SSE 帧、上传与 Range 语义。
 > 接口改动需同步修订本文件与快照，可运行 `python tools/contract_check.py` 校验。
 
@@ -118,7 +118,7 @@ data: {"type":"done", ...}
 
 `ai` 与 `chat` 拆开、`files` 与 `papers` 拆开，是为了让每个文件都 ≤450 行且各自只做一类事；**路由表（server/routes.js）才是端点的唯一事实来源**，域文件只是它的实现落点。
 
-## 3. 端点清单（74 条，与 `api-snapshot.json` 逐条对齐）
+## 3. 端点清单（76 条，与 `api-snapshot.json` 逐条对齐）
 
 快照 id 与本文行一一对应；`network=true` 的端点只做状态类别比较（外部网络波动）。
 
@@ -189,6 +189,8 @@ data: {"type":"done", ...}
 | POST | `/api/papers/:id/attachments` | 原始流 + `X-Filename` | `{ok, attachment, attachments}` | 404 |
 | GET/HEAD | `/api/papers/:id/attachments/:file` | — | 文件流 | 404 |
 | DELETE | `/api/papers/:id/attachments/:file` | — | `{ok, attachments[]}` | 404 |
+| GET | `/api/papers/:id/attachments/:file/annotations` | — | `{ok, items[], updatedAt}` | 400（附件格式）/ 404 |
+| PUT | `/api/papers/:id/attachments/:file/annotations` | `{items[]}` | `{ok, items[], updatedAt}` | 400 / 404 |
 | GET | `/api/papers/:id/chat` | — | `{ok, messages[]}` | 404 |
 | DELETE | `/api/papers/:id/chat` | `pair?`（query，提问下标；缺省=清空全部） | `{ok, messages[], removed?}` | 400（pair 越界）/ 404 |
 | POST | `/api/papers/:id/chat` | `{question, useLocal?, useExternal?}` | **SSE** | 404 |
