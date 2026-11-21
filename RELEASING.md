@@ -90,8 +90,18 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 任一 FAIL 即判定发布失败；WARN 需人工确认（例如历史资产没有 version.json）。
 
-## 5. 当前状态（2026-11-20）
+## 5. 当前状态（2026-11-21）
 
+- **v1.8.5 已发布**（tag `v1.8.5`（annotated `42af375a`）→ **`ca9bba35`**，扩展补充材料抽取格式 + 修复更新成功后重复弹窗）：
+  - zip `PaperLibrary.v1.8.5.Nexus.zip` 44,091,018 字节，sha256 `2e0fd717d6f6c56aefae8c45f0f6495654a13a569c571a3702bfb9e20549708c`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.5.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、匿名下载、字节数与 SHA-256、zip 无 `data/`、含 `PaperLibrary.exe`）。
+  - 发布前验证：Python 全量 **738 项 / 1 跳过 / 0 失败**；Node **15 项**；API 契约 **61 通过 / 0 失败 / 13 跳过**；
+    `tools/check_windows.ps1` 完整模式通过（仓库外重建运行时 → 738 项 → Node → 契约 → 打包 1040 文件 / 42.0 MB → 解包后再跑契约 61/0/13）。
+  - 打 tag 后复跑 `test_update_publish` **8 项全通过、0 跳过**。
+  - 本版内容：`ec8cebe9`（DOCX/DOC/RTF/XLSX 抽取、编码回退、旧附件补抽）+ `daafeb38`（成功状态不再弹窗，失败/回滚提示保留）。
+  - 推送注意：GitHub 开启了邮箱隐私保护（GH007），两个待推送提交改写为 noreply 邮箱后推送，本地仓库 `user.email` 现为
+    `340846053+Whisssssss@users.noreply.github.com`；提交内容未变，hash 由 `a64cb509`/`0186bb76` 变为 `ec8cebe9`/`daafeb38`。
 - **v1.8.4 已发布**（tag `v1.8.4`（annotated `4dedec0a`）→ **`853eaa17`**，文献总结与问答改为一次发送全文、默认输出上限 128000）：
   - zip `PaperLibrary.v1.8.4.Nexus.zip` 43,498,053 字节，sha256 `9cc248a81274a44b65fae2604fe8c99f8ad4402fe28bcd2062d2f1173cbfa044`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.4.json`；
