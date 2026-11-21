@@ -90,8 +90,21 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 任一 FAIL 即判定发布失败；WARN 需人工确认（例如历史资产没有 version.json）。
 
-## 5. 当前状态（2026-11-21）
+## 5. 当前状态（2026-11-22）
 
+- **v1.9 已发布**（版本 `1.9.0`；tag `v1.9`（annotated `b36d270f`）→ **`4d0a5f73`**，设置页四栏折叠重构、分类目录与磁盘同步 + 递归扫描入库、PDF 补充材料标签页与批注、修复安装成功后仍提示立即安装）：
+  - zip `PaperLibrary.v1.9.Nexus.zip` 44,098,077 字节，sha256 `154daab20741338a4363099da94fd86c7ce30b9bb2939cf95c44a3e48cc0c1dc`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.9.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、匿名下载、字节数与 SHA-256、zip 无 `data/`、含 `PaperLibrary.exe`）。
+  - 发布前验证：Python 全量 **744 项 / 1 跳过 / 0 失败**；Node **15 项**；API 契约 **64 通过 / 0 失败 / 12 跳过（共 76）**；
+    `tools/check_windows.ps1` 完整模式通过（仓库外重建运行时 → 744 项 → Node → 契约 → 打包 1041 文件 / 42.1 MB → 解包后再跑契约 64/0/12）。
+  - 打 tag 后复跑 `test_update_publish` **8 项全通过、0 跳过**。
+  - 版本命名：`1.9.0` 的 patch=0，按 `paperlib/version.py` 规则 tag 用两段 **`v1.9`**（与 v1.8.0→`v1.8` 一致）；
+    客户端比较 `version` 字段（1.9.0），包名为 `PaperLibrary.v1.9.Nexus.zip`，三处一致（`version.json` / tag / 清单）。
+  - 本版内容：`909ec77d` + `45d14227`（设置页四栏折叠与细化，下线 `POST /api/release/build`、导入上限固定 200）、
+    `3232c082`（分类树读真实目录、递归扫描、内容指纹恢复关联）、`39141935`（安装成功后回收同版本下载缓存）、
+    `760e44c1`（PDF 补充材料标签页与逐份批注）。
+  - 兼容性：移除 `POST /api/release/build`（外部脚本调用 404）；契约快照 74→76 条；导入单批上限 20→200。
 - **v1.8.5 已发布**（tag `v1.8.5`（annotated `42af375a`）→ **`ca9bba35`**，扩展补充材料抽取格式 + 修复更新成功后重复弹窗）：
   - zip `PaperLibrary.v1.8.5.Nexus.zip` 44,091,018 字节，sha256 `2e0fd717d6f6c56aefae8c45f0f6495654a13a569c571a3702bfb9e20549708c`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.8.5.json`；
