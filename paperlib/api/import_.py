@@ -87,8 +87,9 @@ def pdf_preflight(ctx):
         existing = [f for f in os.listdir(directory) if re.search(r"\.pdf$", f, re.I)]
         max_files = services.prefs.import_max_files()
         if len(existing) >= max_files:
-            return ctx.fail(400, "一个批次最多 %d 个文件（可在「设置 → 资产与备份 → 导入上限」里调大），请分批导入"
-                             % max_files)
+            # 上限固定 200（设置页那个旋钮已去掉），所以这里只教用户「分批」，
+            # 不再指路到一个已经不存在的设置项
+            return ctx.fail(400, "一个批次最多 %d 个文件，请分批导入" % max_files)
         # 用「当前最大编号 + 1」而不是「文件个数 + 1」：部分导入后目录里会留下
         # 没导入的 2.pdf，如果按个数算会再次分配 2，把还没导入的临时文件覆盖掉。
         numbers = []

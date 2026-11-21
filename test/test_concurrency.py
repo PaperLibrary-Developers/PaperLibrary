@@ -3,8 +3,7 @@
 覆盖：
   · 30 并发 GET /api/papers + 20 并发 POST /api/papers 全部成功；
   · 并发写后 SQLite integrity_check = ok；
-  · Range 越界 → 416 + Content-Range: bytes */<size>；
-  · POST /api/release/build 并发两发 → 200 / 409（需要 runtime/portable 存在）。
+  · Range 越界 → 416 + Content-Range: bytes */<size>。
 """
 from __future__ import annotations
 
@@ -174,27 +173,6 @@ class ConcurrencyTest(unittest.TestCase):
                                            headers={"Range": "bytes=99999999-"})
         self.assertEqual(status, 416)
         self.assertIn("bytes */", headers.get("Content-Range", ""))
-
-    @unittest.skipUnless((ROOT / "runtime" / "portable" / "python.exe").is_file(),
-                         "需要 runtime/portable（先跑 tools/make_portable.py）")
-    def test_release_build_concurrent_409(self):
-        results = []
-        lock = threading.Lock()
-
-        def build():
-            try:
-                status, _h, body = self.call("POST", "/api/release/build", {})
-            except Exception as exc:  # noqa: BLE001
-                status, body = 0, str(exc)
-            with lock:
-                results.append(status)
-
-        threads = [threading.Thread(target=build) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        self.assertEqual(sorted(results), [200, 409], results)
 
 
 if __name__ == "__main__":

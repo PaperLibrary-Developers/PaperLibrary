@@ -829,10 +829,6 @@
       "kind": "api"
     },
     {
-      "id": "release-build",
-      "skipped": true
-    },
-    {
       "id": "static-index",
       "method": "GET",
       "path": "/",

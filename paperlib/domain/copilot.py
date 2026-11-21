@@ -418,7 +418,7 @@ def stats_markdown(snapshot):
     s = snapshot or {}
     total = s.get("total") or 0
     if not total:
-        return "当前文献库还是空的。可以先到「＋ 新增文献」拖入 PDF，或在「设置 → 资产与备份 → 导入」里导入备份。"
+        return "当前文献库还是空的。可以先到「＋ 新增文献」拖入 PDF，或在「设置 → 资产与备份 → 导出与备份」里选 JSON 文件导入备份。"
 
     lines = ["**当前库藏**：共 **%d** 篇文献" % total]
     bits = []

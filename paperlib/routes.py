@@ -43,7 +43,6 @@ ROUTES = [
     {"name": "stats", "methods": ("GET",), "pattern": "/api/stats", "handler": system.stats},
     {"name": "shutdown-status", "methods": ("GET",), "pattern": "/api/shutdown/status", "handler": system.shutdown_status},
     {"name": "shutdown", "methods": ("POST",), "pattern": "/api/shutdown", "handler": system.shutdown_now},
-    {"name": "release-build", "methods": ("POST",), "pattern": "/api/release/build", "handler": system.release_build},
     # 文件夹分类（库内分类，类似资源管理器）：树 / 新建 / 重命名 / 删除 / 移动文献
     {"name": "folders-list", "methods": ("GET",), "pattern": "/api/folders", "handler": folders.list_folders},
     {"name": "folders-create", "methods": ("POST",), "pattern": "/api/folders", "handler": folders.create_folder},

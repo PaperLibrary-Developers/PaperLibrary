@@ -28,11 +28,11 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
     return h('section.panel.flat', h('div.panel-body', body))
   }
 
-  /* ---------------- 四栏折叠 ----------------
+  /* ---------------- 折叠（栏与栏内子面板共用一套状态） ----------------
      改造前 10 个面板平铺一页：1440 宽下整页 4256px，改个主题也要先滚过「大模型」的整段提示词。
-     现在按用途收成 4 栏（外观与偏好 / 资产与备份 / API服务 / 关于），默认只展开第一栏；
-     展开状态记在 localStorage（与侧栏收起、文件夹折叠同一套做法），下次进来还是原样，
-     隐私模式下写不进去就退回默认，不报错。
+     现在按用途收成 4 栏（外观与偏好 / 资产与备份 / API服务 / 关于），栏内还会再套一层子面板，
+     默认只展开第一栏；展开状态统一记在 localStorage（与侧栏收起、文件夹折叠同一套做法），
+     下次进来还是原样，隐私模式下写不进去就退回默认，不报错。
      折叠本身用原生 <details>/<summary>：键盘可达、Ctrl+F 能自动展开、没有脚本状态机要维护。 */
   const SEC_KEY = 'set.sections'
 
@@ -47,10 +47,14 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
     try { localStorage.setItem(SEC_KEY, JSON.stringify(all)) } catch (err) { /* 隐私模式：只影响记忆，不影响折叠 */ }
   }
 
-  function section (id, title, hint, panels, defaultOpen) {
+  /** 打开状态：没存过就用默认值（存过 'false' 也要照用户的选择来） */
+  function foldState (id, defaultOpen) {
     const saved = readSectionState()[id]
-    const open = saved == null ? !!defaultOpen : !!saved
-    const el = h('details.set-sec', { id: 'set-sec-' + id, open: open || null },
+    return saved == null ? !!defaultOpen : !!saved
+  }
+
+  function section (id, title, hint, panels, defaultOpen) {
+    const el = h('details.set-sec', { id: 'set-sec-' + id, open: foldState(id, defaultOpen) || null },
       h('summary.set-sec-sum',
         h('span.set-sec-name', title),
         h('span.set-sec-hint', hint),
@@ -63,9 +67,25 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
     return el
   }
 
-  /** 「全部展开 / 全部收起」：想用 Ctrl+F 通页找关键词时，手动点两下比逐个展开快 */
+  /** 栏内子面板：标题条本身是 <summary>，点一下展开/收起，状态同样记在 set.sections 里。
+      标题栏右侧的东西（如「申请密钥 ↗」）要挡住冒泡，否则点它会顺带把面板收起。 */
+  function foldPanel (id, title, body, right, defaultOpen) {
+    const el = h('details.panel.sub', { id: 'set-sub-' + id, open: foldState(id, defaultOpen) || null },
+      h('summary.panel-head',
+        h('span.sub-mark', { 'aria-hidden': 'true' }),
+        title,
+        right ? h('div.right', { onclick: ev => ev.stopPropagation() }, right) : null
+      ),
+      h('div.panel-body', body)
+    )
+    el.addEventListener('toggle', () => writeSectionState(id, el.open))
+    return el
+  }
+
+  /** 「全部展开 / 全部收起」：想用 Ctrl+F 通页找关键词时，点两下比逐个展开快。
+      栏和子面板一起摊开，否则摊开的栏里还是收着的块。 */
   function expandAll (root, open) {
-    root.querySelectorAll('details.set-sec').forEach(item => { item.open = !!open })
+    root.querySelectorAll('details').forEach(item => { item.open = !!open })
   }
 
   async function settingsHandler (ctx) {
@@ -131,85 +151,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
         ))
     ))
 
-    /* ---------- 导出 ---------- */
-
-    /** 打更新包：把当前代码打成 updates/PaperLibrary-<日期>.zip（服务端跑 make-release.js） */
-    const releaseStatus = h('div.hint', '')
-    const releaseResult = h('div', { style: { display: 'grid', gap: '5px', marginTop: '8px' } })
-    const releaseButton = h('button.btn', {
-      type: 'button',
-      title: '把当前代码打成发布包，覆盖 updates/ 里同一天的上一份',
-      onclick: async ev => {
-        const btn = ev.currentTarget
-        btn.setAttribute('disabled', '')
-        const label = btn.textContent
-        btn.textContent = '正在打包…'
-        releaseStatus.style.color = ''
-        releaseStatus.textContent = '正在组装 + 隐私扫描 + 解压实测（约 10~20 秒，别关页面）…'
-        releaseResult.replaceChildren()
-        try {
-          const res = await api.buildRelease()
-          const when = new Date(res.mtime)
-          const stamp = when.toLocaleString('zh-CN', { hour12: false })
-          releaseStatus.style.color = 'var(--accent-text)'
-          releaseStatus.textContent = `已生成 ${res.name}（${(res.size / 1048576).toFixed(1)} MB，用时 ${res.seconds} 秒）`
-          releaseResult.replaceChildren(
-            h('div', { style: { fontSize: '13px' } }, '→ ' + res.relPath + '　' + stamp),
-            h('div.hint', res.note || ''),
-            h('div.hint', rich('库里当前 ' + res.papers + ' 条文献都在 data/ 里，**不会**进这个包；发给同学的就是这个 zip。')),
-            h('button.btn.sm', {
-              type: 'button',
-              title: '再打一次（比如刚又改了代码）',
-              onclick: () => releaseButton.click()
-            }, '再打一次')
-          )
-        } catch (err) {
-          releaseStatus.style.color = 'var(--danger)'
-          if (err && err.status === 409) {
-            releaseStatus.textContent = err.message
-          } else if (/隐私扫描/.test(err.message)) {
-            releaseStatus.textContent = '已中止：包里发现了不该出现的内容，没有生成新包（上一份还在）。'
-            releaseResult.replaceChildren(
-              h('pre.import-error', { style: { whiteSpace: 'pre-wrap', margin: 0, fontSize: '12.5px' } },
-                String(err.message).split('\n').slice(1).join('\n').trim() || '（明细见服务端日志）'),
-              h('div.hint', '照上面指出的文件与类型改掉那一处，再点一次即可——每次都是重新扫描当前代码。'),
-              h('button.btn.sm', { type: 'button', onclick: () => releaseButton.click() }, '改好了，重试')
-            )
-          } else {
-            releaseStatus.textContent = '打包失败：' + err.message
-            releaseResult.replaceChildren(h('button.btn.sm', { type: 'button', onclick: () => releaseButton.click() }, '重试'))
-          }
-        } finally {
-          btn.removeAttribute('disabled')
-          btn.textContent = label
-        }
-      }
-    }, '导出更新包')
-
-    const exportPanel = panel('导出与备份',
-      h('div', { style: { display: 'grid', gap: '10px' } },
-        h('p', { style: { color: 'var(--muted)', margin: 0 } },
-          '建议每隔一段时间导出一份 JSON 存档，它包含全部文献题录、标签、AI 总结与对话记录，可以用下面的「导入」原样恢复。'),
-        h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
-          h('button.btn.primary', { type: 'button', onclick: () => download(api.exportUrl('json')) }, '导出全部（JSON 备份）'),
-          h('button.btn', { type: 'button', onclick: () => download(api.exportUrl('bibtex')) }, '导出 BibTeX（.bib）'),
-          h('button.btn', { type: 'button', onclick: () => download(api.exportUrl('markdown')) }, '导出 Markdown（.md）')
-        ),
-        h('div.hint', 'BibTeX 可以直接导入 Zotero、EndNote、LaTeX；Markdown 适合放进笔记软件或 Git 仓库。'),
-        h('hr', { style: { border: 0, borderTop: '1px solid var(--border)', margin: '2px 0' } }),
-        h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
-          '改了代码想更新发布包时用下面这个：把当前代码打成离线完整版（含便携 Node），' +
-          '产物落在 updates/ 目录，同一天重复打包会覆盖上一份。'),
-        h('div', { style: { display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' } },
-          releaseButton,
-          h('span.hint', '打包前会扫描整包，确认没有你的 Key、文献标题与用户名')
-        ),
-        releaseStatus,
-        releaseResult
-      )
-    )
-
-    /* ---------- 导入 ---------- */
+    /* ---------- 导出与备份（导出 + 导入合成一块） ---------- */
 
     const importInput = h('input', {
       type: 'file', accept: '.json,application/json', style: { display: 'none' },
@@ -246,15 +188,26 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       }
     })
 
-    const importPanel = panel('导入',
-      h('div', { style: { display: 'grid', gap: '10px' } },
-        h('p', { style: { color: 'var(--muted)', margin: 0 } }, '支持导入本应用导出的 JSON 备份（或任何包含 papers 数组的同结构文件）。'),
-        h('div', { style: { display: 'flex', gap: '8px' } },
-          h('button.btn', { type: 'button', onclick: () => importInput.click() }, '选择 JSON 文件…')
+    // 导出与导入本来就是一件事（导出的 JSON 就是导入要吃的文件），合成一块，按「先出后进」排序：
+    // 上面三个导出按钮产出备份，下面这一段把备份吃回来，省掉一块只有一行按钮的面板。
+    const exportPanel = foldPanel('assets-export', '导出与备份',
+      h('div', { style: { display: 'grid', gap: '11px' } },
+        h('p', { style: { color: 'var(--muted)', margin: 0 } },
+          '建议每隔一段时间导出一份 JSON 存档，它包含全部文献题录、标签、AI 总结与对话记录；换电脑或误删时用下面的「导入」原样恢复。'),
+        h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+          h('button.btn.primary', { type: 'button', onclick: () => download(api.exportUrl('json')) }, '导出全部（JSON 备份）'),
+          h('button.btn', { type: 'button', onclick: () => download(api.exportUrl('bibtex')) }, '导出 BibTeX（.bib）'),
+          h('button.btn', { type: 'button', onclick: () => download(api.exportUrl('markdown')) }, '导出 Markdown（.md）')
         ),
+        h('div.hint', 'BibTeX 可以直接导入 Zotero、EndNote、LaTeX；Markdown 适合放进笔记软件或 Git 仓库。'),
+        h('div', { style: { borderTop: '1px solid var(--border)', margin: '1px 0 0' } }),
+        h('div.field', h('label', '导入 JSON 备份'),
+          h('div', { style: { display: 'flex', gap: '9px', flexWrap: 'wrap', alignItems: 'center' } },
+            h('button.btn', { type: 'button', onclick: () => importInput.click() }, '选择 JSON 文件…'),
+            h('span.hint', '支持本应用导出的 JSON（或任何含 papers 数组的同结构文件）；选完会让你挑「合并」还是「覆盖」。')
+          )),
         importInput
-      )
-    )
+      ))
 
     /* ---------- PDF 目录 ---------- */
 
@@ -481,7 +434,8 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       scanBox.replaceChildren(...rows)
     }
 
-    const pdfPanel = panel('原文与补充材料',
+    // 「原文与补充材料」单独一格也会占掉半屏，收起来；扫描结果在展开后才显示，runScan 照旧在加载时先跑一遍
+    const pdfPanel = foldPanel('assets-pdf', '原文与补充材料',
       h('div', { style: { display: 'grid', gap: '10px' } },
         h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
           '原文 PDF 与补充材料（SI）都放在 data/article/ 下面（原文在 papers/，补充材料在 attachments/），' +
@@ -735,7 +689,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       }
     }, '保存并测试')
 
-    const sourcesPanel = panel('学术检索来源（OpenAlex）',
+    const sourcesPanel = foldPanel('api-sources', '学术检索来源（OpenAlex）',
       h('div', { style: { display: 'grid', gap: '13px' } },
         h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
           rich('OpenAlex 现在按「每日额度」计费：不填密钥时额度按**共享 IP** 计算（别人用完你就会被限流，' +
@@ -865,7 +819,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       return res
     }
 
-    const webPanel = panel('网络检索（Exa）',
+    const webPanel = foldPanel('api-web', '网络检索（Exa）',
       h('div', { style: { display: 'grid', gap: '13px' } },
         webStatus,
         h('div.field', h('label', 'Exa API Key'), fExaKey,
@@ -992,26 +946,71 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       }
     })
 
+    /* 隐私提示：这段话是「数据会发给谁」，属于看一次就够、但必须能查到的东西。
+       平铺在表单底部会挤掉真正要填的参数，所以收进标题栏的琥珀色三角「⚠」：点开在图标右侧展开，
+       点页面别处或按 Esc 收起。监听只在打开期间挂着，页面重绘不会越积越多。 */
+    const privacyNote = h('div.privacy-note', {
+      hidden: '', role: 'note',
+      // 气泡长在 <summary> 里：不挡冒泡的话，点文字、拖选都会把面板收起
+      onclick: ev => ev.stopPropagation()
+    },
+      '生成总结或提问时，文献题录、正文与补充材料（SI）的可提取全文会一次发给你选择的模型服务商。' +
+      '问答请求也会发送已有的 AI 总结和近期对话。')
+    let privacyOutside = null
+    let privacyKey = null
+    function setPrivacyOpen (open) {
+      privacyNote.hidden = !open
+      privacyBtn.setAttribute('aria-expanded', open ? 'true' : 'false')
+      privacyBtn.classList.toggle('on', !!open)
+      if (open) {
+        privacyOutside = ev => {
+          if (privacyNote.contains(ev.target) || privacyBtn.contains(ev.target)) return
+          setPrivacyOpen(false)
+        }
+        privacyKey = ev => { if (ev.key === 'Escape') setPrivacyOpen(false) }
+        document.addEventListener('click', privacyOutside)
+        document.addEventListener('keydown', privacyKey)
+      } else {
+        if (privacyOutside) document.removeEventListener('click', privacyOutside)
+        if (privacyKey) document.removeEventListener('keydown', privacyKey)
+        privacyOutside = null
+        privacyKey = null
+      }
+    }
+    const privacyBtn = h('button.privacy-btn', {
+      type: 'button',
+      title: '生成总结 / 提问时，哪些内容会被发出去',
+      'aria-label': '生成总结 / 提问时，哪些内容会被发出去',
+      'aria-expanded': 'false',
+      // 标题栏在 <summary> 里：不挡住冒泡的话，点 ⚠ 会顺手把面板收起
+      onclick: ev => {
+        ev.preventDefault()
+        ev.stopPropagation()
+        setPrivacyOpen(privacyNote.hidden)
+      }
+    }, h('span.privacy-mark', { 'aria-hidden': 'true' }, '!'))
+    const privacyBox = h('span.privacy', privacyBtn, privacyNote)
+
     const testResult = h('div.hint', '')
-    const aiPanel = panel('大模型',
+    const aiPanel = foldPanel('api-ai', '大模型',
       h('div', { style: { display: 'grid', gap: '13px' } },
         aiStatus,
-        h('div.form-grid',
+        // 成对的字段用两列等宽（.form-grid.pair）：auto-fit 会在宽屏切出 5 列，
+        // 服务商和模型名称就会一宽一窄、右边对不齐
+        h('div.form-grid.pair',
           h('div.field', h('label', '服务商'), presetSelect),
-          h('div.field', h('label', '模型名称'), fModel,
-            h('div.hint', rich('要填接口的**模型 id**（DeepSeek 就是 deepseek-chat），不是网页版上显示的名字')))
+          h('div.field', h('label', '模型名称'), fModel)
         ),
         h('div.field', h('label', '接口地址（baseURL）'), fBase,
           h('div.hint', 'OpenAI 兼容接口即可。本地 Ollama 填 http://127.0.0.1:11434/v1，无需密钥。')),
         h('div.field', h('label', 'API 密钥'), fKey,
           h('div.hint', '密钥只保存在你这台电脑的 data/settings.json 里，不会上传到任何地方。')),
-        h('div.form-grid',
+        h('div.form-grid.pair',
           h('div.field', h('label', '温度 temperature'), fTemp, h('div.hint', '越低越稳定，0.2~0.4 适合总结')),
           h('div.field', h('label', { for: 'ai-max-tokens' }, '最大输出 max_tokens'), fTokens)
         ),
         h('div.field', h('label', '提示词（决定总结的结构）'), fPrompt),
-        h('div.field', h('label', '自动生成'), autoSummaryField,
-          h('div.hint', '关掉之后，中文一句话总结只在你手动点「译成中文 / 生成中文总结」时才生成。')),
+        h('div.field', h('label', '自动生成'), autoSummaryField),
         h('div', { style: { display: 'flex', gap: '9px', flexWrap: 'wrap', alignItems: 'center' } },
           h('button.btn.primary', {
             type: 'button',
@@ -1074,54 +1073,11 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
             }
           }, '保存并测试连接'),
           testResult
-        ),
-        h('div.hint', '隐私提示：生成总结或提问时，文献题录、正文与补充材料（SI）的可提取全文会一次发给你选择的模型服务商。问答请求也会发送已有的 AI 总结和近期对话。')
+        )
       ),
-      h('a.btn.sm.ghost', { href: 'https://platform.deepseek.com/api_keys', target: '_blank', rel: 'noopener' }, '申请 DeepSeek 密钥 ↗')
+      [privacyBox,
+        h('a.btn.sm.ghost', { href: 'https://platform.deepseek.com/api_keys', target: '_blank', rel: 'noopener' }, '申请 DeepSeek 密钥 ↗')]
     )
-
-    /* ---------- 导入上限（可调，防止电脑太卡） ---------- */
-
-    let limits = { importMaxFiles: 20 }
-    const limitRanges = {
-      importMaxFiles: [1, 200, 10]
-    }
-    try {
-      const res = await api.getPrefs()
-      const got = (res && res.prefs) || {}
-      for (const k of Object.keys(limits)) {
-        const v = Number(got[k])
-        if (Number.isFinite(v)) limits[k] = v
-      }
-    } catch (err) { /* 读不到就用默认值 */ }
-    if (isStale()) return
-    const limitStatus = h('div.hint', '')
-
-    function limitInput (key, label, hint) {
-      const [min, max, step] = limitRanges[key]
-      return h('div.field',
-        h('label', label),
-        h('input.input', {
-          type: 'number', min: String(min), max: String(max), step: String(step), value: String(limits[key]),
-          onchange: async ev => {
-            const raw = Number(ev.target.value)
-            const v = Number.isFinite(raw) ? Math.min(max, Math.max(min, Math.round(raw))) : limits[key]
-            ev.target.value = String(v)
-            if (v === limits[key]) return
-            limits[key] = v
-            try {
-              await api.savePrefs({ [key]: v })
-              limitStatus.style.color = 'var(--accent-text)'
-              limitStatus.textContent = '已保存：' + label + ' = ' + v
-            } catch (err) {
-              limitStatus.style.color = 'var(--danger)'
-              limitStatus.textContent = '保存失败：' + err.message
-            }
-          }
-        }),
-        h('div.hint', hint)
-      )
-    }
 
     /* ---------- 关于与更新（阶段 1：只检查，不下载/不安装） ---------- */
 
@@ -1490,24 +1446,12 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
       if (snapshot.phase !== 'idle') renderStatus(snapshot)
     }).catch(() => {})
 
-    const limitsPanel = panel('导入上限', h('div', { style: { display: 'grid', gap: '13px' } },
-      h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
-        '一次导入太多 PDF 会占内存、让电脑发卡；这个上限可以按你的机器调，改完立刻生效，不用重启。'),
-      h('div.form-grid',
-        limitInput('importMaxFiles', '一次最多导入几个 PDF', '范围 1–200，默认 20。超过会提示分批导入。')
-      ),
-      h('div.hint',
-        'AI 总结与「与文献对话」已改为完整读取正文和全部补充材料（SI）：超过单次上下文的全文会自动分段处理并汇总，' +
-        '不再按字符数截断。原来的「正文 / SI 字符上限」已不再生效。'),
-      limitStatus
-    ))
-
-    /* 四栏装配：栏名给人找东西，栏内面板保持原来的标题与结构（面板本身没改，只换了归属）。
-       折叠状态见文件顶部的 section()；栏上那行小字列出里面有什么，收起时也能定位。 */
+    /* 四栏装配：栏名给人找东西，栏内面板保持原来的标题与结构（内容没重写，只是换了归属与折叠层级）。
+       折叠状态见文件顶部的 section() / foldPanel()；栏上那行小字列出里面有什么，收起时也能定位。 */
     const prefsSec = section('prefs', '外观与偏好', '默认视图 · 每页条数 · 主题 · 快捷键',
       prefPanel, true)
-    const assetsSec = section('assets', '资产与备份', '原文与补充材料 · 导入上限 · 导出与备份 · 导入',
-      [pdfPanel, limitsPanel, exportPanel, importPanel])
+    const assetsSec = section('assets', '资产与备份', '原文与补充材料 · 导出与备份',
+      [pdfPanel, exportPanel])
     const apiSec = section('api', 'API服务', '大模型 · 学术检索来源（OpenAlex） · 网络检索（Exa）',
       [aiPanel, sourcesPanel, webPanel])
     const aboutSec = section('about', '关于', '关于与更新 · 服务与数据',
@@ -1515,7 +1459,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
 
     const allToggle = h('button.btn.sm.ghost', {
       type: 'button',
-      title: '展开/收起全部四栏（想用 Ctrl+F 通页找词时方便）',
+      title: '展开/收起全部（四栏与栏内面板都算，想用 Ctrl+F 通页找词时方便）',
       onclick: ev => {
         const btn = ev.currentTarget
         const open = btn.dataset.open !== '1'

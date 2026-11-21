@@ -350,8 +350,7 @@
     /** Obsidian 导出 zip 的下载地址（每篇一个 .md + media/ 图表） */
     obsidianExportUrl: () => '/api/export/obsidian',
 
-    /** 打一个发布更新包（服务端跑 tools/make-release.js，产物落到 updates/） */
-    buildRelease: () => request('POST', '/api/release/build', { body: {} }),
+    /** 导入 JSON 备份（服务端按 overwrite 决定合并还是覆盖） */
     importJson: payload => request('POST', '/api/import/json', { body: payload }),
 
     getPrefs: () => request('GET', '/api/prefs'),

@@ -1,9 +1,9 @@
 # Sci-lib HTTP API 契约
 
 > 状态：P5 契约固化。**这份文档是行为事实的规格化**，不是新设计。
-> 机器可校验的版本是 `tools/api-snapshot.json`（74 条响应形状快照，`npm test` 强制零差异）；
+> 机器可校验的版本是 `tools/api-snapshot.json`（73 条响应形状快照，`npm test` 强制零差异）；
 > 本文补上快照里没有的东西：入参、错误码、SSE 帧、上传与 Range 语义。
-> 任何实现改动都必须让 `npm test` 的 74 条快照保持零差异，除非显式修订本文件与快照。
+> 任何实现改动都必须让 `npm test` 的 73 条快照保持零差异，除非显式修订本文件与快照。
 
 ## 1. 通用约定
 
@@ -113,18 +113,16 @@ data: {"type":"done", ...}
 | `api/import.js` | — | PDF 建档（预检/确认/放弃）与 JSON 导入 |
 | `api/settings.js` | — | prefs / ai / sources / websearch 四组设置 |
 | `api/tags.js` | — | 标签列表 / 重命名 / 删除 |
-| `api/system.js` | — | health / stats / shutdown / release |
+| `api/system.js` | — | health / stats / shutdown |
 | `api/paper-scope.js` | 19 | 辅助：取 `:id` 或回 404（4 个域共用） |
 
 `ai` 与 `chat` 拆开、`files` 与 `papers` 拆开，是为了让每个文件都 ≤450 行且各自只做一类事；**路由表（server/routes.js）才是端点的唯一事实来源**，域文件只是它的实现落点。
 
-## 3. 端点清单（74 条，与 `tools/api-snapshot.json` 逐条对齐）
+## 3. 端点清单（73 条，与 `tools/api-snapshot.json` 逐条对齐）
 
 快照 id 与本文行一一对应；`network=true` 的端点只做状态类别比较（外部网络波动）。
 
-### 3.1 基础 / 运维（12）
-
-> `POST /api/release/build` 在快照里标记为 `skip`（它会真的跑 `tools/make-release.js` 打包），因此只在这里登记契约。
+### 3.1 基础 / 运维（11）
 
 | 方法 | 路径 | 入参 | 出参 | 错误 |
 |---|---|---|---|---|
@@ -139,7 +137,6 @@ data: {"type":"done", ...}
 | PUT/POST | `/api/prefs` | `{...}` 局部覆盖 | `{ok, prefs}` | — |
 | GET | `/api/shutdown/status` | — | `{ok, app, papers, dataDir, pid, port, uptimeSeconds}` | — |
 | POST | `/api/shutdown` | — | `{ok, message}` | 403（非回环地址） |
-| POST | `/api/release/build` | — | 200 `{ok, name, path, relPath, size, mtime, papers, files, seconds}`（`papers` 恒 0：发布包按设计不含 data/ 用户数据；`size` 取 release-manifest 口径） | 400（打包失败，仅回中文消息，详情写 data/logs/）/ 409（已有打包在跑）/ 500 |
 
 ### 3.2 标签（3）
 

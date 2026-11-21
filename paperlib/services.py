@@ -36,8 +36,12 @@ except Exception:  # noqa: BLE001
 class Prefs:
     """data/prefs.json：用户可调项（与 Node prefs.js 同语义，带范围保护）。"""
 
+    # 一批最多导入几个 PDF。原来这是设置页可调的 importMaxFiles（默认 20、上限 200），
+    # 2026-11 收敛设置页时把这个旋钮去掉了：上限本来就是 200，调到 20 只是让人多点几次
+    # 「分批导入」。现在固定 200；prefs.json 里残留的同名键不再读取（也不报错）。
+    IMPORT_MAX_FILES = 200
+
     LIMITS = {
-        "importMaxFiles": {"def": 20, "min": 1, "max": 200},
         "chatBodyChars": {"def": 14000, "min": 2000, "max": 60000},
         "chatAttachChars": {"def": 12000, "min": 2000, "max": 80000},
         "chatAttachTotalChars": {"def": 24000, "min": 2000, "max": 200000},
@@ -67,7 +71,7 @@ class Prefs:
         return min(spec["max"], max(spec["min"], int(round(value))))
 
     def import_max_files(self):
-        return self.limit("importMaxFiles")
+        return self.IMPORT_MAX_FILES
 
 
 def create_services(config, store):

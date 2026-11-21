@@ -1,4 +1,4 @@
-"""契约快照校验：起 Python 服务，逐条重放 shared/contracts/api-snapshot.json（74 行）。
+"""契约快照校验：起 Python 服务，逐条重放 shared/contracts/api-snapshot.json（73 行）。
 
 比较项（与 Node tools/api-snapshot 同口径）：状态码类别 + 顶层 JSON 键集合。
 network/skip 行（快照里没有 method 的行）标 SKIP；静态/vendor 行比较 content-type 与状态。
