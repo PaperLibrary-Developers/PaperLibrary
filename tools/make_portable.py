@@ -36,7 +36,7 @@ SELF_TEST = (
     "from importlib.metadata import version; "
     "import sqlite3, ssl, json, hashlib, urllib.request, zipfile, ctypes, http.server; "
     "import pymupdf; from PIL import Image; "
-    "from doc2docx import convert; from striprtf.striprtf import rtf_to_text; "
+    "from striprtf.striprtf import rtf_to_text; "
     "from openpyxl import load_workbook; import et_xmlfile; "
     "print('portable-ok', sys.version.split()[0], *(version(name) for name in sys.argv[1:]))"
 )
@@ -77,7 +77,7 @@ def copy_packages(source: Path, target: Path):
     target.mkdir(parents=True, exist_ok=True)
     copied = []
     for name in ("pymupdf", "fitz", "PIL", "pillow.libs", "pymupdf.libs",
-                 "doc2docx", "striprtf", "openpyxl", "et_xmlfile"):
+                 "striprtf", "openpyxl", "et_xmlfile"):
         src = source / name
         if src.is_dir():
             dst = target / name
