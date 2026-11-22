@@ -92,6 +92,19 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 ## 5. 当前状态（2026-11-22）
 
+- **v1.9.1 已发布**（tag `v1.9.1`（annotated `b8e948e4`）→ **`5bd167d6`**，全文检索漏匹配与分面计数不一致修复、移除逐篇全文查询、分面聚合提速、README 重写）：
+  - zip `PaperLibrary.v1.9.1.Nexus.zip` 44,106,998 字节，sha256 `c524e2cd1af82632e076fad1a19a34c78f6a14f11b63e80db0cdebd0cf94d7b6`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.9.1.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、匿名下载、字节数与 SHA-256、zip 无 `data/`、含 `PaperLibrary.exe`）。
+  - 发布前验证：Python 全量 **753 项 / 1 跳过 / 0 失败**；Node **15 项**；API 契约 **64 通过 / 0 失败 / 12 跳过（共 76，与 v1.9 相同）**；
+    `tools/check_windows.ps1` 完整模式通过（仓库外重建运行时 → 753 项 → Node → 契约 → 打包 1041 文件 / 42.1 MB → 解包后再跑契约 64/0/12）。
+  - 打 tag 后复跑 `test_update_publish` **8 项全通过、0 跳过**。
+  - 本版内容：`b29beb6c`（检索匹配与分面口径）、`a4fa66da`（去逐篇全文查询 + 增量索引）、`08befbc6`（分面直接聚合）、
+    `bc9b2886` + `b2695d56`（README 重写为使用手册 + 去掉硬编码版本号，两者在 v1.9 tag 之后、本版之前已推送）。
+  - 性能（配对基准，同机同便携 Python）：千条库分面中位数 55.1 ms → 5.1 ms，万条库 242.4 ms → 35.2 ms；
+    `fulltext:` 查询列表/分面由 60 / 0 变为 1,000 / 1,000。
+  - 已知：`tools/release.py` 的 `INCLUDE` 不含 `assets/`，包内 README 的 12 张截图不会被带上（包内 1041 文件里无 `assets/readme/`），
+    GitHub 页面显示正常；若要随包分发需在 INCLUDE 增加 `assets`，属未做的后续事项。
 - **v1.9 已发布**（版本 `1.9.0`；tag `v1.9`（annotated `b36d270f`）→ **`4d0a5f73`**，设置页四栏折叠重构、分类目录与磁盘同步 + 递归扫描入库、PDF 补充材料标签页与批注、修复安装成功后仍提示立即安装）：
   - zip `PaperLibrary.v1.9.Nexus.zip` 44,098,077 字节，sha256 `154daab20741338a4363099da94fd86c7ce30b9bb2939cf95c44a3e48cc0c1dc`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.9.json`；
