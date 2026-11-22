@@ -56,6 +56,8 @@ class StaticHandler:
         if versioned:
             pathname = "/" + versioned.group(1)
         rel = re.sub(r"^/shared/?", "", pathname)
+        if Path(rel).suffix.lower() != ".mjs":
+            return ctx.fail(404, "共享模块不存在：" + rel)
         abs_path = safe_path_join(self.shared_dir, rel)
         if not abs_path or not os.path.isfile(abs_path):
             return ctx.fail(404, "共享模块不存在：" + rel)

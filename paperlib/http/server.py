@@ -15,6 +15,91 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from paperlib.util import read_body, read_json_body
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+ALLOWED_FETCH_SITES = frozenset({"same-origin", "same-site", "none"})
+
+
+def _allowed_hosts(server_host: str) -> set[str]:
+    hosts = set(LOOPBACK_HOSTS)
+    bound = str(server_host or "").strip().strip("[]").lower()
+    if bound and bound not in ("0.0.0.0", "::"):
+        hosts.add(bound)
+    return hosts
+
+
+def _parse_host_header(raw_host: str) -> tuple[str, int | None] | None:
+    text = str(raw_host or "").strip()
+    if not text or any(ch in text for ch in (" ", "\t", "/", "@", "\\", "?", "#")):
+        return None
+    if text.startswith("["):
+        end = text.find("]")
+        if end < 0:
+            return None
+        hostname = text[1:end].lower()
+        rest = text[end + 1:]
+        if not rest:
+            return hostname, None
+        if not rest.startswith(":") or not rest[1:].isdigit():
+            return None
+        return hostname, int(rest[1:])
+    if text.count(":") > 1:
+        return None
+    if ":" in text:
+        hostname, port_text = text.rsplit(":", 1)
+        if not hostname or not port_text.isdigit():
+            return None
+        return hostname.lower(), int(port_text)
+    return text.lower(), None
+
+
+def is_allowed_host(raw_host: str, server_host: str, server_port: int) -> bool:
+    """只放行本机 Host（阻断 DNS Rebinding）。端口省略时（如原始测试）仅校验主机名。"""
+    parsed = _parse_host_header(raw_host)
+    if parsed is None:
+        return False
+    hostname, port = parsed
+    if hostname not in _allowed_hosts(server_host):
+        return False
+    if port is not None and server_port and port != int(server_port):
+        return False
+    return True
+
+
+def is_allowed_origin(raw_origin: str, server_host: str, server_port: int) -> bool:
+    """校验浏览器的 Origin 头：仅允许同端口的本机 http 源（拒绝 null 与外部站点）。"""
+    text = str(raw_origin or "").strip()
+    if not text:
+        return True
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        return False
+    if parsed.scheme.lower() != "http":
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return False
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in _allowed_hosts(server_host):
+        return False
+    try:
+        port = parsed.port or 80
+    except ValueError:
+        return False
+    if server_port and port != int(server_port):
+        return False
+    return True
+
+
+def is_allowed_fetch_site(raw_site: str) -> bool:
+    """校验 Sec-Fetch-Site 头：存在时拒绝 cross-site。"""
+    text = str(raw_site or "").strip().lower()
+    if not text:
+        return True
+    return text in ALLOWED_FETCH_SITES
+
 
 class Ctx:
     """一次请求的上下文：路径参数、查询串、请求体与响应写入口。"""
@@ -246,6 +331,20 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self):
         started = time.time()
         ctx = Ctx(self, self.command, self.path, self.router)
+        server_addr = getattr(getattr(self, "server", None), "server_address", ("127.0.0.1", 0))
+        server_host = server_addr[0] if len(server_addr) > 0 else "127.0.0.1"
+        server_port = server_addr[1] if len(server_addr) > 1 else 0
+        if not is_allowed_host(self.headers.get("Host") or "", server_host, server_port):
+            self.close_connection = True
+            return ctx.fail(403, "拒绝非本机 Host 请求")
+        if self.command in MUTATING_METHODS:
+            if not is_allowed_fetch_site(self.headers.get("Sec-Fetch-Site") or ""):
+                self.close_connection = True
+                return ctx.fail(403, "拒绝跨站写请求")
+            origin = self.headers.get("Origin") or ""
+            if origin and not is_allowed_origin(origin, server_host, server_port):
+                self.close_connection = True
+                return ctx.fail(403, "拒绝跨源写请求")
         # 任何一次请求都算「有人在用」：把自动停机的空闲计时归零
         # （网页的常规请求 + SSE 心跳都走这里；纯静态文件也算，宁可多续一次也别误停）
         presence = getattr(getattr(self.router, "services", None), "runtime", None)

@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from paperlib.util import read_json, write_json_atomic
 
@@ -84,6 +85,26 @@ def _num(value, fallback=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(fallback)
+
+
+def _url_origin(url):
+    """提取 (scheme, hostname, port)，用于判断 baseURL 是否切换了目标服务源。"""
+    try:
+        parts = urlsplit(str(url or "").strip())
+    except ValueError:
+        return ("", "", None)
+    scheme = (parts.scheme or "").lower()
+    host = (parts.hostname or "").lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is None:
+        if scheme == "https":
+            port = 443
+        elif scheme == "http":
+            port = 80
+    return (scheme, host, port)
 
 
 def _detail_of(text):
@@ -204,6 +225,7 @@ class LLM:
         是空的，用户点「保存并测试」会把它们整体写空，模型直接不可用（Node 版踩过这个坑）。
         """
         patch = patch or {}
+        old_origin = _url_origin(self.settings.get("baseURL"))
         nxt = dict(self.settings)
         for key in ("provider", "baseURL", "model", "promptTemplate"):
             if key not in patch:
@@ -219,16 +241,21 @@ class LLM:
             nxt["maxTokens"] = int(_num(patch.get("maxTokens"), nxt.get("maxTokens") or DEFAULT_MAX_TOKENS))
         if patch.get("autoSummaryZh") is not None:
             nxt["autoSummaryZh"] = bool(patch.get("autoSummaryZh"))
+        explicit_new_key = False
         if "apiKey" in patch:
             value = patch.get("apiKey")
             if value is None:
                 nxt["apiKey"] = ""
             elif isinstance(value, str) and value.strip() and "…" not in value:
                 nxt["apiKey"] = value.strip()
+                explicit_new_key = True
         # 兜底：历史数据被写空时补回默认值，避免模型彻底不可用
         for key in ("provider", "baseURL", "model", "promptTemplate"):
             if not nxt.get(key):
                 nxt[key] = DEFAULT_SETTINGS[key]
+        # 切换接口来源（scheme/host/port 变化）且未同时提供新密钥时，清空旧密钥，避免旧密钥发往新地址
+        if not explicit_new_key and _url_origin(nxt.get("baseURL")) != old_origin:
+            nxt["apiKey"] = ""
         self.settings = nxt
         self.save()
         return self.public_settings()

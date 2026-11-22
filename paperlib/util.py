@@ -167,7 +167,25 @@ def read_body(handler, limit: int = 40 * 1024 * 1024) -> bytes:
     return b"".join(chunks)
 
 
+FORBIDDEN_JSON_CONTENT_TYPES = frozenset({
+    "text/plain",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data",
+})
+
+
+class UnsupportedMediaTypeError(Exception):
+    """JSON 端点拒绝浏览器简单请求 Content-Type（防跨站 CSRF 走私 JSON）。"""
+
+    status = 415
+
+
 def read_json_body(handler, limit: int | None = None) -> Any:
+    headers = getattr(handler, "headers", None)
+    raw_ctype = str((headers.get("Content-Type") if headers else "") or "").strip()
+    media_type = raw_ctype.split(";", 1)[0].strip().lower()
+    if media_type in FORBIDDEN_JSON_CONTENT_TYPES:
+        raise UnsupportedMediaTypeError("JSON 接口不支持该 Content-Type，请使用 application/json")
     limit = limit or 40 * 1024 * 1024
     raw = read_body(handler, limit)
     if not raw:
