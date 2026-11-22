@@ -76,10 +76,9 @@ class Prefs:
 
 def create_services(config, store):
     started_at = getattr(config, "started_at", 0.0) or time.time()
-    library = Library(store)
-    folders = Folders(store)
-
     fulltext = FullText(store)
+    library = Library(store, fulltext)
+    folders = Folders(store)
     try:
         fulltext.load_all(store.list_papers())
     except NotImplementedError:
@@ -90,20 +89,6 @@ def create_services(config, store):
     prefs = Prefs(store)
     external.configure(sources)
     metadata.configure(sources)
-
-    # 布尔检索在 scope=fulltext 时要能看到正文；调用前设置预算，查询后自然归零
-    budget = {"value": 0}
-
-    def fulltext_text_for(paper_id):
-        if budget["value"] <= 0:
-            return ""
-        budget["value"] -= 1
-        try:
-            return fulltext.read(paper_id, 60000) or ""
-        except Exception:  # noqa: BLE001
-            return ""
-
-    library.fulltext_text_for = fulltext_text_for
 
     def extract_paper_fulltext(paper):
         if not paper or not paper.get("pdfFile"):
@@ -170,7 +155,6 @@ def create_services(config, store):
         extract_paper_fulltext=extract_paper_fulltext,
         extract_attachment_text=partial(extract_attachment_text, extract_pdf=fulltext.extract_from_file),
         trigger_auto_summary_zh=trigger_auto_summary_zh,
-        fulltext_budget=budget,
         update=UpdateService(config.root, config.data_dir),
     )
     return services

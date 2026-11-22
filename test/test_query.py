@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from paperlib.adapters.pdf import FullText
 from paperlib.data.store import Store
 from paperlib.domain.library import Library
 from paperlib.domain.query import QueryEngine, has_or_node, needs_evaluator, parse_query
@@ -253,12 +257,10 @@ class BooleanTest(QueryTestBase):
 
     @SKIP_BOOL
     def test_scope_fulltext_uses_body_and_keeps_boolean_query(self):
-        # api 层在 scope=fulltext 时清空 q、保留 booleanQuery、用全文命中的 ids 收窄；
-        # 这里照同一口径调用，验证求值器读的是正文而不是题录。
         body = {"p01": "cucurbituril binding in water", "p03": "molecular capsules in water"}
-        self.library.fulltext_text_for = lambda pid: body.get(pid, "")
-        result = self.library.query({"q": "", "booleanQuery": "water NOT capsules",
-                                     "scope": "fulltext", "ids": "p01,p03", "all": "true"})
+        self.library.query_engine.fulltext = SimpleNamespace(read=body.get)
+        result = self.library.query({"q": "water NOT capsules", "scope": "fulltext",
+                                     "ids": "p01,p03", "all": "true"})
         self.assertTrue(result["boolean"])
         self.assertEqual([p["id"] for p in result["items"]], ["p01"])
 
@@ -268,7 +270,7 @@ class BooleanTest(QueryTestBase):
         target = dict(FIXTURE[0])
         self.assertIn("Werner M. Nau", engine.searchable_text(target))
         self.assertNotIn("BODY-TOKEN", engine.searchable_text(target))
-        engine.fulltextTextFor = lambda pid: "BODY-TOKEN" if pid == "p01" else ""
+        engine.fulltext = SimpleNamespace(read=lambda pid: "BODY-TOKEN" if pid == "p01" else "")
         self.assertIn("BODY-TOKEN", engine.searchable_text(target, "fulltext"))
         self.assertEqual(engine.field_text(target, "year"), "2015")
         self.assertEqual(engine.field_text(target, "tag"), "supramolecular CB")
@@ -402,31 +404,6 @@ class HelperTest(unittest.TestCase):
 
 
 
-class FakeFullText:
-    """假的全文索引：只实现 api/papers.py 用到的形状（T3 落地前也能测通 scope=fulltext）。"""
-
-    def __init__(self, hits=None, bodies=None):
-        self.hits = hits or []
-        self.bodies = bodies or {}
-        self.search_calls = []
-
-    def search(self, query, limit):
-        self.search_calls.append((query, limit))
-        return list(self.hits)
-
-    def excerpts(self, paper_id, query, limit):
-        return ["…" + self.bodies.get(paper_id, "")[:20] + "…"]
-
-    def stats(self):
-        return {"available": None, "indexed": 0, "dir": "x", "tokens": 0}
-
-    def has(self, paper_id):
-        return paper_id in self.bodies
-
-    def remove(self, paper_id):
-        self.bodies.pop(paper_id, None)
-
-
 class FakeCtx:
     """最小的 ctx 桩：只给 api/papers.py 用到的成员。"""
 
@@ -457,79 +434,127 @@ class FakeCtx:
         return {}
 
 
-class ApiListFacetsTest(unittest.TestCase):
-    """api/papers.py 的 list/facets：fulltext 命中集联调（T3 未就绪时用假全文索引）。"""
+class ApiListFacetsTest(QueryTestBase):
+    """列表、分面、正文索引使用同一隔离库。"""
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.store = Store(self.tmp.name)
-        self.store.load()
-        self.library = Library(self.store)
-        self.addCleanup(self.store.repo.close)
-        for item in FIXTURE:
-            self.store.insert_paper(dict(item))
-            self.library.index.set(dict(item))
-        self.fulltext = FakeFullText(
-            hits=[{"id": "p03", "score": 2.0}, {"id": "p07", "score": 1.0}],
-            bodies={"p03": "capsules at interfaces in water", "p07": "capsule assembly"})
-        self.services = SimpleNamespace(
-            library=self.library, db=self.store, fulltext=self.fulltext,
-            fulltext_budget={"value": 0}, runtime=SimpleNamespace(data_dir=self.tmp.name),
-            llm=SimpleNamespace(settings={}, readiness=lambda: {"ready": False}),
-            trigger_auto_summary_zh=lambda paper_id: None)
+        super().setUp()
+        self.fulltext = FullText(self.store)
+        self.library.query_engine.fulltext = self.fulltext
+        self.fulltext.save("p03", "capsules at interfaces in water")
+        self.fulltext.save("p07", "capsules assembly in water")
+        self.services = SimpleNamespace(library=self.library, db=self.store, fulltext=self.fulltext)
 
     def run_list(self, query):
         from paperlib.api import papers as papers_api
 
         ctx = FakeCtx(self.services, query)
         papers_api.list_papers(ctx)
-        return ctx
-
-    def test_scope_fulltext_clears_q_and_uses_ids(self):
-        ctx = self.run_list({"q": "capsules", "scope": "fulltext"})
         self.assertEqual(ctx.status, 200)
-        ids = [item["id"] for item in ctx.payload["items"]]
-        self.assertEqual(ids, ["p03", "p07"])
-        self.assertEqual(ctx.payload["scope"], "fulltext")
-        self.assertTrue(all(item.get("fulltextExcerpt") for item in ctx.payload["items"]))
-        self.assertEqual(self.fulltext.search_calls[0][1], 200)
+        return ctx.payload
 
-    def test_scope_fulltext_keeps_boolean_query(self):
-        ctx = self.run_list({"q": "capsules NOT interfaces", "scope": "fulltext"})
-        # 粗筛用「全部正项词」（含字段项的值），这里没有字段项 → 原查询里的正项词
-        self.assertEqual(self.fulltext.search_calls[0][0], "capsules")
-        self.assertTrue(ctx.payload["boolean"])
-
-    def test_scope_metadata_does_not_touch_fulltext_index(self):
-        ctx = self.run_list({"q": "capsule"})
-        self.assertEqual(self.fulltext.search_calls, [])
-        self.assertEqual(ctx.payload["scope"], "metadata")
-        self.assertGreaterEqual(ctx.payload["total"], 1)
-
-    def test_scope_all_merges_fulltext_hits(self):
-        ctx = self.run_list({"q": "capsules", "scope": "all"})
-        ids = [item["id"] for item in ctx.payload["items"]]
-        self.assertIn("p03", ids)
-        self.assertIn("p07", ids)      # 只在正文里命中的 p07 也要并进结果
-
-    def test_budget_set_from_scope(self):
-        self.run_list({"q": "capsules", "scope": "fulltext"})
-        self.assertEqual(self.services.fulltext_budget["value"], 60)
-        self.run_list({"q": "capsule"})
-        self.assertEqual(self.services.fulltext_budget["value"], 0)
-
-    def test_facets_fulltext_branch_matches_list_semantics(self):
+    def run_facets(self, query):
         from paperlib.api import papers as papers_api
 
-        ctx = FakeCtx(self.services, {"q": "capsules", "scope": "fulltext"})
+        ctx = FakeCtx(self.services, query)
         papers_api.facets(ctx)
         self.assertEqual(ctx.status, 200)
-        self.assertEqual(ctx.payload["query"]["total"], 2)
-        types = {row["value"]: row["count"] for row in ctx.payload["query"]["types"]["items"]}
-        self.assertEqual(types, {"conference": 1, "journal": 1})   # p03 / p07
-        self.assertTrue(any(row["name"] == "supramolecular" for row in ctx.payload["tags"]))
-        self.assertIsNone(ctx.payload["fulltext"]["available"])   # 未探测 → null（与 Node 一致）
+        return ctx.payload
+
+    def test_scope_fulltext_keyword_does_not_require_metadata_match(self):
+        result = self.run_list({"q": "water", "scope": "fulltext"})
+        self.assertEqual(self.ids(result), ["p03", "p07"])
+        self.assertEqual(result["scope"], "fulltext")
+        self.assertEqual(result["total"], 2)
+        self.assertTrue(all("water" in row["fulltextExcerpt"] for row in result["items"]))
+
+    def test_scope_fulltext_boolean_reads_body_and_explicit_fields(self):
+        # 标题也含 interfaces 的 p03 只有在正文不含这个词时才通过 NOT。
+        self.fulltext.save("p03", "capsules in water")
+        result = self.run_list({"q": "capsules NOT interfaces AND type:conference", "scope": "fulltext"})
+        self.assertEqual(self.ids(result), ["p03"])
+        self.assertTrue(result["boolean"])
+
+    def test_scope_metadata_does_not_touch_body(self):
+        with patch.object(self.fulltext, "search") as search, patch.object(self.fulltext, "read") as read:
+            result = self.run_list({"q": "capsule"})
+        search.assert_not_called()
+        read.assert_not_called()
+        self.assertEqual(result["scope"], "metadata")
+        self.assertGreaterEqual(result["total"], 1)
+
+    def test_scope_all_merges_keyword_hits_and_matches_boolean_across_sources(self):
+        result = self.run_list({"q": "capsules", "scope": "all"})
+        self.assertIn("p03", self.ids(result))
+        self.assertIn("p07", self.ids(result))
+        combined = {"q": "water AND (coordination OR type:conference)", "scope": "all"}
+        self.assertEqual(set(self.ids(self.run_list(combined))), {"p03", "p07"})
+        self.assertEqual(self.run_facets(combined)["query"]["total"], 2)
+
+    def test_explicit_fulltext_field_includes_late_body_and_negation(self):
+        self.fulltext.save("p01", "前文 " * 30000 + " 末尾标记")
+        query = {"q": "fulltext:末尾标记 OR (type:conference AND NOT fulltext:assembly)"}
+        self.assertEqual(set(self.ids(self.run_list(query))), {"p01", "p03"})
+        self.assertEqual(self.run_facets(query)["query"]["total"], 2)
+        negated = {"q": "title:assembly AND NOT fulltext:capsules"}
+        self.assertEqual(self.run_list(negated)["total"], 0)
+        self.assertEqual(self.run_facets(negated)["query"]["total"], 0)
+
+    def test_overlapping_metadata_request_does_not_change_body_results(self):
+        query = {"q": "fulltext:water"}
+        entered = threading.Event()
+        proceed = threading.Event()
+        original = self.library.query
+
+        def interleave(opts):
+            if opts["q"] == query["q"]:
+                entered.set()
+                if not proceed.wait(5):
+                    raise TimeoutError("metadata query did not finish")
+            return original(opts)
+
+        with patch.object(self.library, "query", side_effect=interleave), ThreadPoolExecutor(2) as pool:
+            inflight = pool.submit(self.run_list, query)
+            try:
+                self.assertTrue(entered.wait(5))
+                self.run_list({"q": "capsule"})
+            finally:
+                proceed.set()
+            self.assertEqual(inflight.result(timeout=5)["total"], 2)
+        self.assertEqual(self.run_facets(query)["query"]["total"], 2)
+
+    def test_facets_fulltext_branch_matches_list_semantics(self):
+        params = {"q": "water", "scope": "fulltext"}
+        result = self.run_facets(params)
+        self.assertEqual(result["query"]["total"], self.run_list(params)["total"])
+        types = {row["value"]: row["count"] for row in result["query"]["types"]["items"]}
+        self.assertEqual(types, {"conference": 1, "journal": 1})
+        self.assertTrue(any(row["name"] == "supramolecular" for row in result["tags"]))
+
+    def test_fulltext_counts_beyond_old_caps_and_reads_excerpts_only_for_page(self):
+        extras = [paper(id=f"body{i:03}", venue="Body Journal", tags=["Body Tag"], year=2025,
+                        authors=["Body Author"]) for i in range(215)]
+        self.store.replace_all([*FIXTURE, *extras])
+        for entry in extras:
+            self.store.repo.set_text(entry["id"], "chelation audit phrase")
+        query = {"q": "chelation", "scope": "fulltext", "page": "11", "pageSize": "20"}
+        with patch.object(self.fulltext, "excerpts", wraps=self.fulltext.excerpts) as excerpts:
+            result = self.run_list(query)
+        self.assertEqual(result["total"], 215)
+        self.assertEqual(len(result["items"]), 15)
+        self.assertEqual(excerpts.call_count, 15)
+        self.assertTrue(all(item.get("fulltextExcerpt") for item in result["items"]))
+        for expression in ("chelation", 'chelation AND "audit phrase"'):
+            facets = self.run_facets({**query, "q": expression})["query"]
+            self.assertEqual(facets["total"], 215)
+            for name in ("years", "authors", "venues", "types", "tags"):
+                self.assertEqual(facets[name]["items"][0]["count"], 215)
+
+    def test_root_filter_without_children_only_matches_unfiled(self):
+        self.store.patch_paper("p03", {"folder": "Other"})
+        params = {"folder": "", "includeSubfolders": "false"}
+        self.assertEqual(self.run_list(params)["total"], 7)
+        self.assertEqual(self.run_facets(params)["query"]["total"], 7)
 
 
 if __name__ == "__main__":

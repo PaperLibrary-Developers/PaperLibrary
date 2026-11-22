@@ -27,11 +27,8 @@ from paperlib.api.annotations import attachment_annotation_kind
 from paperlib.api.paper_scope import require_paper
 from paperlib.assets import parent_path, unique_path
 from paperlib.domain.folders import FolderError
-from paperlib.domain.query import needs_evaluator, parse_query
+from paperlib.domain.query import parse_query
 from paperlib.util import now_iso, safe_path_join, to_string_array
-
-FULLTEXT_BUDGET = 60
-
 
 # ------------------------------------------------------------------ 小工具
 def _query_params(ctx):
@@ -76,26 +73,6 @@ def _fulltext_stats(services):
         "dir": str(getattr(services.db, "fulltext_dir", "") or ""),
         "tokens": 0,
     }
-
-
-def _fulltext_search(fulltext, terms, limit):
-    fn = getattr(fulltext, "search", None)
-    if not callable(fn):
-        return []
-    try:
-        return list(fn(terms, limit) or [])
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _fulltext_excerpts(fulltext, paper_id, query, limit):
-    fn = getattr(fulltext, "excerpts", None)
-    if not callable(fn):
-        return []
-    try:
-        return list(fn(paper_id, query, limit) or [])
-    except Exception:  # noqa: BLE001
-        return []
 
 
 def _rename_attachment_references(services, paper_id, old_file, new_file):
@@ -155,59 +132,22 @@ def _send_text(ctx, body, content_type, filename=None):
 # ------------------------------------------------------------------ 列表
 def list_papers(ctx):
     services = ctx.services
-    library = services.library
-    fulltext = services.fulltext
     params = _query_params(ctx)
-    params["all"] = params.get("all") == "true"
     scope = str(params.get("scope") or "metadata")
-
-    # 全文检索：拿到命中的 id 列表后按 id 过滤
-    excerpt_map = None
-    fulltext_query = params.get("q")  # 生成摘录要用原查询（下面的布尔逻辑会改写 params.q）
-    if params.get("q") and scope in ("fulltext", "all"):
-        # 布尔/字段限定查询：拿「全部正项词」去全文索引粗筛（粗筛只看词在不在正文里，
-        # 精确的字段判定由 library.query 的求值器完成）。
-        query_text = params.get("q") or ""
-        if needs_evaluator(query_text):
-            search_terms = " ".join((parse_query(query_text) or {}).get("allTerms") or [])
-        else:
-            search_terms = query_text
-        hits = _fulltext_search(fulltext, search_terms, 200) if search_terms else []
-        excerpt_map = {}
-        for hit in hits[:60]:
-            snippets = _fulltext_excerpts(fulltext, hit["id"], fulltext_query, 1)
-            excerpt_map[hit["id"]] = snippets[0] if snippets else ""
-        if scope == "fulltext":
-            # 只搜全文：命中集合已经由全文检索给出（params.ids），这里必须清掉 q，
-            # 否则 library 会再拿它筛一遍题录索引（全文命中的文献会被误杀）。
-            # 布尔逻辑仍然生效：library 会用保留下来的 booleanQuery 做后置过滤。
-            params["booleanQuery"] = params.get("q")
-            params["q"] = ""
-            if hits:
-                params["ids"] = ",".join(str(hit["id"]) for hit in hits)
-            else:
-                params.pop("ids", None)
-                params["idsEmpty"] = True
-        elif hits:
-            # 两者都搜：题录索引照常筛（q 保留），正文里命中的文献也一并并进结果。
-            params["fulltextIds"] = ",".join(str(hit["id"]) for hit in hits)
-
-    # 布尔检索要看正文时给一个预算（每次查询最多读这么多篇的全文）。
-    # 查询里显式写了 fulltext: 也要给预算——否则用户点名搜正文，却因为范围选择器
-    # 还在「题录与摘要」而永远 0 条。
-    field_terms = (parse_query(params.get("q") or "") or {}).get("fieldTerms") or []
-    wants_fulltext_field = any((term or {}).get("field") == "fulltext" for term in field_terms)
-    services.fulltext_budget["value"] = (
-        FULLTEXT_BUDGET if (scope in ("fulltext", "all") or wants_fulltext_field) else 0)
-
-    result = library.query(params)
-    if excerpt_map:
-        for item in result["items"]:
-            snippet = excerpt_map.get(item["id"])
-            if snippet:
-                item["fulltextExcerpt"] = snippet
-    return ctx.json(200, dict({"ok": True, "scope": scope,
-                               "fulltext": _fulltext_stats(services)}, **result))
+    query = params.get("q") or ""
+    result = services.library.query(params)
+    if query:
+        parsed = parse_query(query) or {}
+        terms = [term["value"] for term in parsed.get("fieldTerms", []) if term["field"] == "fulltext"]
+        if scope in ("fulltext", "all"):
+            terms.extend(parsed.get("terms", []) if parsed.get("needsEvaluator") else [query])
+        if terms:
+            excerpt_query = " ".join(terms)
+            for item in result["items"]:
+                snippets = services.fulltext.excerpts(item["id"], excerpt_query, 1)
+                if snippets:
+                    item["fulltextExcerpt"] = snippets[0]
+    return ctx.json(200, {"ok": True, **result, "fulltext": _fulltext_stats(services)})
 
 
 def create(ctx):
@@ -336,29 +276,7 @@ def facets(ctx):
     """高级搜索的联想数据：顶层是全库清单，query 是当前结果集内的 facet 计数。"""
     services = ctx.services
     library = services.library
-    fulltext = services.fulltext
     params = _query_params(ctx)
-    scope = str(params.get("scope") or "metadata")
-    # 与 /api/papers 列表处理器**完全对齐**：布尔/字段查询先粗筛 id；
-    # scope=fulltext 时必须像列表那样清掉 q，否则只出现在正文里的文献会被误杀，计数永远 0。
-    if params.get("q") and scope in ("fulltext", "all"):
-        query_text = params.get("q") or ""
-        if needs_evaluator(query_text):
-            terms = " ".join((parse_query(query_text) or {}).get("allTerms") or [])
-        else:
-            terms = query_text
-        hits = _fulltext_search(fulltext, terms, 200) if terms else []
-        if scope == "fulltext":
-            params["booleanQuery"] = params.get("q")
-            params["q"] = ""
-            if hits:
-                params["ids"] = ",".join(str(hit["id"]) for hit in hits)
-            else:
-                params.pop("ids", None)
-                params["idsEmpty"] = True
-        elif hits:
-            params["fulltextIds"] = ",".join(str(hit["id"]) for hit in hits)
-    services.fulltext_budget["value"] = FULLTEXT_BUDGET if scope in ("fulltext", "all") else 0
     try:
         result = library.facets(params)
     except Exception as exc:  # noqa: BLE001

@@ -3,8 +3,7 @@
 职责：组合过滤 + 排序 + 分页（query）、结果集内的 facet 计数（facets）、
 各字段的联想清单与统计（tags / authors / venues / stats）。
 
-语义与拆分前完全一致，三处最容易改坏的地方保留了原注释：
-  · 两个查询串（boolExpr / rawQ）不能混用；
+列表和分面共用命中集合：
   · facets 里**每类计数都要先剥掉本类自己的条件**（同类是 OR，跨类才是 AND）；
   · 含 OR 的查询必须按「并集」粗筛，否则只满足一支的文献在进求值器前就被砍掉。
 
@@ -16,7 +15,7 @@ from __future__ import annotations
 
 import math
 import os
-from functools import cmp_to_key
+from functools import cache, cmp_to_key
 from pathlib import Path
 
 from paperlib.domain.naming import display_file_name
@@ -55,6 +54,14 @@ def has_or_node(node):
         return True
     return (has_or_node(node.get("left")) or has_or_node(node.get("right"))
             or has_or_node(node.get("child")))
+
+
+def mentions_fulltext(node):
+    """即使 fulltext: 位于 NOT 分支中，也需要启用正文匹配。"""
+    return bool(node and (node.get("field") == "fulltext"
+                         or mentions_fulltext(node.get("left"))
+                         or mentions_fulltext(node.get("right"))
+                         or mentions_fulltext(node.get("child"))))
 
 
 def search_union(index, terms):
@@ -121,12 +128,10 @@ def _limit_of(value, fallback):
 
 
 class QueryEngine:
-    def __init__(self, db, index):
+    def __init__(self, db, index, fulltext=None):
         self.db = db
         self.index = index
-        # 「按 id 取正文」的钩子：scope=fulltext / fulltext: 时由 services 注入（带读取预算）。
-        # 默认不读正文，零 I/O。
-        self.fulltextTextFor = None
+        self.fulltext = fulltext
 
     # ------------------------------------------------------------------ 联想
     def tags(self):
@@ -216,7 +221,9 @@ class QueryEngine:
 
     # ------------------------------------------------------------------ 文本
     def searchable_text(self, paper, scope="metadata"):
-        """用于布尔/关键词匹配的文本；scope=fulltext 时把已提取的正文也算进来。"""
+        """按范围组合用于匹配的文本。"""
+        if scope == "fulltext":
+            return self._fulltext_of(paper.get("id"))
         parts = [
             paper.get("title"),
             " ".join(paper.get("authors") or []),
@@ -231,7 +238,7 @@ class QueryEngine:
             paper.get("doi"),
             paper.get("year"),
         ]
-        if scope in ("fulltext", "all"):
+        if scope == "all":
             parts.append(self._fulltext_of(paper.get("id")))
         return " \n ".join(str(part) for part in parts if part)
 
@@ -260,84 +267,88 @@ class QueryEngine:
             return str(paper.get("notes") or "")
         if name == "doi":
             return str(paper.get("doi") or "")
-        # 显式点名 fulltext: 时才读正文（预算由 services 设置的 fulltextTextFor 控制）
         if name == "fulltext":
             return self._fulltext_of(paper.get("id"))
         return ""
 
     def _fulltext_of(self, paper_id):
-        if not callable(self.fulltextTextFor):
+        if self.fulltext is None:
             return ""
-        try:
-            return str(self.fulltextTextFor(paper_id) or "")
-        except Exception:  # noqa: BLE001
-            return ""
+        return self.fulltext.read(paper_id) or ""
 
     # ------------------------------------------------------------------ 查询
+    def _boolean_match(self, paper, ast, scope):
+        @cache
+        def text(field):
+            if field == "fulltext":
+                return self._fulltext_of(paper.get("id"))
+            return self.field_text(paper, field) if field else self.searchable_text(paper)
+
+        def match(term):
+            field = term.get("field") or ""
+            value = term.get("value")
+            if field == "year":
+                return bool_query.year_hit(text(field), value)
+            phrase = term.get("phrase", False)
+            if not field and scope == "fulltext":
+                return bool_query.hit(text("fulltext"), value, phrase)
+            return (bool_query.hit(text(field), value, phrase)
+                    or (not field and scope == "all" and bool_query.hit(text("fulltext"), value, phrase)))
+
+        return bool_query.evaluate(ast, match)
+
+    def _matching_rows(self, opts):
+        raw_q = str(opts.get("q") or "").strip()
+        expression = raw_q or str(opts.get("booleanQuery") or "").strip()
+        scope = str(opts.get("scope") or "metadata")
+        parsed = parse_query(expression) if expression else None
+        if parsed and not parsed["needsEvaluator"]:
+            parsed = None
+        ast = parsed["ast"] if parsed else None
+        exact_body = parsed and (scope in ("fulltext", "all") or mentions_fulltext(ast))
+        terms = parsed["terms"] if parsed else []
+        index_query = (" ".join(terms) if parsed else raw_q) if scope != "fulltext" else ""
+        papers = self.db.list_papers()
+        rows, scored = papers, None
+        extra = set(to_string_array(opts.get("fulltextIds")))
+
+        if raw_q and not parsed and scope in ("fulltext", "all"):
+            hits = self.fulltext.search(raw_q, None) if self.fulltext else []
+            if scope == "fulltext":
+                body_ids = {hit["id"] for hit in hits}
+                rows = [paper for paper in papers if paper["id"] in body_ids]
+            else:
+                extra.update(hit["id"] for hit in hits)
+
+        if index_query:
+            hits = search_union(self.index, terms) if has_or_node(ast) else self.index.search(index_query)
+            scored = {hit["id"]: hit["score"] for hit in hits or []}
+            # 正文和题录的词可分布在不同字段，NOT/OR 也可能没有可用的正项。
+            # 涉及正文时，题录索引只提供排序分，精确求值负责决定是否命中。
+            if not exact_body:
+                rows = [paper for paper in papers if paper["id"] in scored or paper["id"] in extra]
+        if parsed:
+            rows = [paper for paper in rows if self._boolean_match(paper, ast, scope)]
+        return rows, scored, bool(parsed), bool(index_query)
+
+    def _sort_rows(self, rows, opts, scored, has_index_query):
+        # 无关键词评分时按更新时间排序，有显式排序则始终优先。
+        sort_key = opts.get("sort") if opts.get("sort") in SORTABLE else None
+        if sort_key is None and not has_index_query:
+            sort_key = "updatedAt"
+        if sort_key == "title":
+            return sorted(rows, key=lambda paper: _name_key(paper.get("title") or ""))
+        if sort_key:
+            return sorted(rows, key=cmp_to_key(SORTABLE[sort_key]))
+        if scored:
+            return sorted(rows, key=lambda paper: -scored.get(paper.get("id"), 0))
+        return rows
+
     def query(self, params):
         """列表查询：筛选 + 检索 + 排序 + 分页。"""
         opts = params or {}
-        # 这里有两个**不同**的查询串，别混用：
-        #   bool_expr —— 布尔表达式，交给 boolean_query 求值；
-        #   raw_q     —— 用来筛「题录与摘要」倒排索引的查询。
-        # scope=fulltext 时服务端会把 q 清空（命中的 id 已经由全文索引给出），
-        # 只把原查询留在 booleanQuery 里。这时若还拿 booleanQuery 去筛题录索引，
-        # 全文命中的文献会被全部误杀——搜正文永远 0 条（踩过）。
-        bool_expr = str(opts.get("booleanQuery") or "").strip()
-        raw_q = str(opts.get("q") or "").strip()
-        # 布尔语法**或字段限定**都必须走求值器，否则 `title:cucurbituril` 会被
-        # 当成字面词去索引里找，永远 0 条。
-        use_boolean = needs_evaluator(raw_q) or needs_evaluator(bool_expr)
-        # 粗筛只用「正项词」：parse().terms 已排除字段限定项（year:2013-2018 这类值
-        # 在索引里搜不到，混进去会把候选集清空），NOT 后面的词也不进 terms。
-        parsed_raw_q = parse_query(raw_q) if (raw_q and needs_evaluator(raw_q)) else None
-        index_query = " ".join(parsed_raw_q.get("terms") or []) if parsed_raw_q else raw_q
-        # 含 OR 时必须按「并集」粗筛：交集只留同时命中所有词的几篇，
-        # 另一支单独命中的文献会在求值器之前就被丢掉（`a OR b` 只回 1 篇的那种情况）。
-        or_query = has_or_node(parsed_raw_q.get("ast")) if parsed_raw_q else False
-        rows = self.db.list_papers()
-
-        scored = None
-        if index_query:
-            # search() 在查询里没有可检索词元时返回 None（例如整串都是标点）：
-            # 这种查询本来就没内容可匹配，明确给出空结果——不要把 None 当成「不过滤」。
-            hits = search_union(self.index, parsed_raw_q.get("terms") or []) if or_query \
-                else self.index.search(index_query)
-            if not hits:
-                rows = []
-            else:
-                scored = {hit["id"]: hit["score"] for hit in hits}
-                rows = [paper for paper in rows if paper.get("id") in scored]
-        # scope=all：正文里命中的文献也要算进结果（题录没命中、只有正文命中的那几篇）。
-        fulltext_ids = opts.get("fulltextIds")
-        if fulltext_ids is not None and str(fulltext_ids) != "":
-            extra = set(to_string_array(fulltext_ids))
-            if extra:
-                seen = {paper.get("id") for paper in rows}
-                for paper in self.db.list_papers():
-                    if paper.get("id") in extra and paper.get("id") not in seen:
-                        seen.add(paper.get("id"))
-                        rows.append(paper)
-        if use_boolean:
-            scope = opts.get("scope")
-            rows = bool_query.filter_items(
-                rows, raw_q or bool_expr,
-                lambda paper: self.searchable_text(paper, scope),
-                {"field_text": lambda paper, field: self.field_text(paper, field)})
-
-        rows = self._filter_rows(rows, opts)
-
-        # 排序：给了合法 sort 就按它；没给时——有关键词查询按相关度，否则按 updatedAt。
-        sort_key = opts.get("sort") if opts.get("sort") in SORTABLE else None
-        if sort_key is None and not index_query:
-            sort_key = "updatedAt"
-        if sort_key == "title":
-            # Node 这里用 localeCompare(..., 'zh-Hans-CN')：汉字在拉丁之前、拉丁不分大小写
-            rows = sorted(rows, key=lambda paper: _name_key(paper.get("title") or ""))
-        elif sort_key:
-            rows = sorted(rows, key=cmp_to_key(SORTABLE[sort_key]))
-        elif scored:
-            rows = sorted(rows, key=lambda paper: -(scored.get(paper.get("id")) or 0))
+        rows, scored, use_boolean, has_index_query = self._matching_rows(opts)
+        rows = self._sort_rows(self._filter_rows(rows, opts), opts, scored, has_index_query)
 
         total = len(rows)
         page = clamp_int(opts.get("page"), 1, 100000, 1)
@@ -399,8 +410,8 @@ class QueryEngine:
                             or str(p.get("folder") or "").startswith(prefix)]
                 else:
                     rows = [p for p in rows if str(p.get("folder") or "") == path]
-            elif deep:
-                # 根目录：未分类的文献（空 folder）
+            else:
+                # 根目录始终表示未分类。
                 rows = [p for p in rows if not str(p.get("folder") or "")]
         if opts.get("starred") is True or opts.get("starred") == "true":
             rows = [p for p in rows if p.get("starred")]
@@ -460,6 +471,7 @@ class QueryEngine:
         顶层联想清单（authors/venues/tags/years 全库）由 api 层组装（与 Node api/papers.js 一致）。
         """
         base = dict(opts or {})
+        matches, scored, _, has_index_query = self._matching_rows(base)
 
         def strip_year(target):
             target["yearFrom"] = ""
@@ -486,12 +498,11 @@ class QueryEngine:
         def list_for(cls):
             """取「去掉某类条件」之后的结果集（按列表项形状，计数用）。"""
             o = dict(base)
-            o["all"] = True
-            o["pageSize"] = 1
             stripper = strip_class.get(cls)
             if stripper:
                 stripper(o)
-            return self.query(o)["items"]
+            rows = self._sort_rows(self._filter_rows(matches, o), o, scored, has_index_query)
+            return [self.to_list_item(row) for row in rows]
 
         def count_by(items, pick, compare=None):
             counter = {}

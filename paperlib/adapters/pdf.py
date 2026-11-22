@@ -161,7 +161,8 @@ class FullText:
     def search(self, terms, limit=200):
         """全文检索：返回 [{id, score}] 按分数降序（无命中给空列表，不抛异常）。
 
-        语义：terms 是「正项词」用空白/逗号拼起来的字符串；**每个词的全部 token 都要命中**
+        limit=None 返回完整命中集，供分页和分面筛选使用。
+        语义：terms 用空白/逗号分隔；**每个词的全部 token 都要命中**
         才算这个词命中——中文 bigram 全命中就等于整词（「超分子」不会命中只有「超分」的正文）。
         打分沿用 Node：词频饱和 + 文档长度归一，避免长文档一味占优。
         """
@@ -170,7 +171,7 @@ class FullText:
             return []
         self._ensure_index()
         try:
-            wanted = int(limit or 200)
+            wanted = None if limit is None else max(0, int(limit or 200))
         except (TypeError, ValueError):
             wanted = 200
         scores = {}
@@ -198,7 +199,7 @@ class FullText:
                     freq = bucket.get(paper_id) or 0
                     total += (1 + math.log(1 + freq)) / norm
                 scores[paper_id] = scores.get(paper_id, 0.0) + total
-        ordered = sorted(scores.items(), key=lambda kv: -kv[1])[: max(0, wanted)]
+        ordered = sorted(scores.items(), key=lambda kv: -kv[1])[:wanted]
         return [{"id": paper_id, "score": score} for paper_id, score in ordered]
 
     def excerpts(self, paper_id, query, limit=1):

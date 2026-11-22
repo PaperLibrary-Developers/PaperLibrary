@@ -24,11 +24,11 @@ from paperlib.domain.search_index import create_search_index
 
 
 class Library:
-    def __init__(self, db):
+    def __init__(self, db, fulltext=None):
         self.db = db
         self.index = create_search_index()
         self.repository = Repository(db, self.index)
-        self.query_engine = QueryEngine(db, self.index)
+        self.query_engine = QueryEngine(db, self.index, fulltext)
         self.importer = Importer(db, self.repository)
         self.reindex()
 
@@ -122,15 +122,6 @@ class Library:
 
     def import_json(self, payload, options=None):
         return self.importer.import_json(payload, options)
-
-    @property
-    def fulltext_text_for(self):
-        return self.query_engine.fulltextTextFor
-
-    @fulltext_text_for.setter
-    def fulltext_text_for(self, fn):
-        self.query_engine.fulltextTextFor = fn
-
 
 __all__ = [
     "Library", "normalize_paper", "normalize_chat", "normalize_attachments",
