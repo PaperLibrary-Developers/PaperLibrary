@@ -328,6 +328,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self._dispatch()
 
+    def _drain_unread_body(self, limit: int = 64 * 1024):
+        """提前拒绝带请求体的请求前先排空小体积请求体，避免 Windows 套接字关闭触发 TCP RST。"""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return
+        if 0 < length <= limit:
+            try:
+                self.rfile.read(length)
+            except OSError:
+                pass
+
     def _dispatch(self):
         started = time.time()
         ctx = Ctx(self, self.command, self.path, self.router)
@@ -335,14 +347,17 @@ class Handler(BaseHTTPRequestHandler):
         server_host = server_addr[0] if len(server_addr) > 0 else "127.0.0.1"
         server_port = server_addr[1] if len(server_addr) > 1 else 0
         if not is_allowed_host(self.headers.get("Host") or "", server_host, server_port):
+            self._drain_unread_body()
             self.close_connection = True
             return ctx.fail(403, "拒绝非本机 Host 请求")
         if self.command in MUTATING_METHODS:
             if not is_allowed_fetch_site(self.headers.get("Sec-Fetch-Site") or ""):
+                self._drain_unread_body()
                 self.close_connection = True
                 return ctx.fail(403, "拒绝跨站写请求")
             origin = self.headers.get("Origin") or ""
             if origin and not is_allowed_origin(origin, server_host, server_port):
+                self._drain_unread_body()
                 self.close_connection = True
                 return ctx.fail(403, "拒绝跨源写请求")
         # 任何一次请求都算「有人在用」：把自动停机的空闲计时归零

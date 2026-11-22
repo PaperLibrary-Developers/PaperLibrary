@@ -185,6 +185,9 @@ def read_json_body(handler, limit: int | None = None) -> Any:
     raw_ctype = str((headers.get("Content-Type") if headers else "") or "").strip()
     media_type = raw_ctype.split(";", 1)[0].strip().lower()
     if media_type in FORBIDDEN_JSON_CONTENT_TYPES:
+        drain = getattr(handler, "_drain_unread_body", None)
+        if callable(drain):
+            drain()
         raise UnsupportedMediaTypeError("JSON 接口不支持该 Content-Type，请使用 application/json")
     limit = limit or 40 * 1024 * 1024
     raw = read_body(handler, limit)
