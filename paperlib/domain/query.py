@@ -21,7 +21,7 @@ from pathlib import Path
 
 from paperlib.domain.naming import display_file_name
 from paperlib.domain.repository import SORTABLE
-from paperlib.assets import asset_path
+from paperlib.assets import asset_path, walk_assets
 from paperlib.util import clamp_int, to_string_array, truncate
 from shared.pure.text import zh_collation_key
 
@@ -210,12 +210,23 @@ class QueryEngine:
         types = [{"type": key, "count": count} for key, count in by_type.items()]
         types.sort(key=lambda row: -row["count"])
         statuses = [{"status": key, "count": count} for key, count in by_status.items()]
+        existing_pdfs = self._existing_pdfs()
+        if existing_pdfs is not None:
+            pdf_missing = sum(
+                1 for p in papers
+                if p.get("pdfFile")
+                and os.path.normcase(str(p.get("pdfFile")).replace("\\", "/")) not in existing_pdfs
+            )
+        else:
+            pdf_missing = sum(
+                1 for p in papers
+                if p.get("pdfFile") and not self.pdf_exists(p.get("pdfFile"))
+            )
         return {
             "total": len(papers),
             "withPdf": with_pdf,
             "starred": starred,
-            "pdfMissing": len([p for p in papers
-                               if p.get("pdfFile") and not self.pdf_exists(p.get("pdfFile"))]),
+            "pdfMissing": pdf_missing,
             "avgRating": _js_number(rating_sum / rating_count) if rating_count else 0,
             "noteChars": words,
             "byYear": _year_items(by_year),
@@ -289,12 +300,22 @@ class QueryEngine:
             return ""
         return self.fulltext.read(paper_id) or ""
 
+    def _fulltext_body_ids(self):
+        fn = getattr(self.fulltext, "body_ids", None)
+        return fn() if callable(fn) else None
+
+    def _fulltext_read_batch(self, paper_ids):
+        fn = getattr(self.fulltext, "read_batch", None)
+        if callable(fn):
+            return fn(paper_ids)
+        return {pid: self._fulltext_of(pid) for pid in paper_ids}
+
     # ------------------------------------------------------------------ 查询
-    def _boolean_match(self, paper, ast, scope):
+    def _boolean_match(self, paper, ast, scope, *, body_text=None):
         @cache
         def text(field):
             if field == "fulltext":
-                return self._fulltext_of(paper.get("id"))
+                return self._fulltext_of(paper.get("id")) if body_text is None else body_text
             return self.field_text(paper, field) if field else self.searchable_text(paper)
 
         def match(term):
@@ -310,7 +331,84 @@ class QueryEngine:
 
         return bool_query.evaluate(ast, match)
 
-    def _matching_rows(self, opts, *, rank=True):
+    def _boolean_prefilter(self, paper, ast, scope):
+        """不碰正文的三值布尔求值：True（必中）/ False（必不中）/ None（需读正文）。"""
+        text_cache = {}
+
+        def field_or_meta(field):
+            if field not in text_cache:
+                text_cache[field] = self.field_text(paper, field) if field else self.searchable_text(paper)
+            return text_cache[field]
+
+        def eval3(node):
+            if not node:
+                return True
+            kind = node.get("type")
+            if kind == "term":
+                field = node.get("field") or ""
+                value = node.get("value")
+                if field == "fulltext" or (not field and scope == "fulltext"):
+                    return None
+                if field == "year":
+                    return bool(bool_query.year_hit(field_or_meta(field), value))
+                phrase = bool(node.get("phrase"))
+                matched = bool(bool_query.hit(field_or_meta(field), value, phrase))
+                if not field and scope == "all":
+                    return True if matched else None
+                return matched
+            if kind == "not":
+                child = eval3(node.get("child"))
+                return None if child is None else (not child)
+            if kind == "and":
+                left = eval3(node.get("left"))
+                if left is False:
+                    return False
+                right = eval3(node.get("right"))
+                if right is False:
+                    return False
+                return True if (left is True and right is True) else None
+            if kind == "or":
+                left = eval3(node.get("left"))
+                if left is True:
+                    return True
+                right = eval3(node.get("right"))
+                if right is True:
+                    return True
+                return False if (left is False and right is False) else None
+            return True
+
+        return eval3(ast)
+
+    def _filter_boolean_rows(self, rows, ast, scope, exact_body):
+        if not exact_body:
+            return [paper for paper in rows if self._boolean_match(paper, ast, scope)]
+        body_ids = self._fulltext_body_ids()
+        verdicts = []
+        need_ids = []
+        for paper in rows:
+            verdict = self._boolean_prefilter(paper, ast, scope)
+            if verdict is False:
+                continue
+            if verdict is True:
+                verdicts.append((paper, True))
+                continue
+            pid = paper.get("id")
+            if body_ids is not None and pid not in body_ids:
+                if self._boolean_match(paper, ast, scope, body_text=""):
+                    verdicts.append((paper, True))
+                continue
+            verdicts.append((paper, None))
+            need_ids.append(pid)
+        bodies = self._fulltext_read_batch(need_ids) if need_ids else {}
+        out = []
+        for paper, verdict in verdicts:
+            if verdict is True:
+                out.append(paper)
+            elif self._boolean_match(paper, ast, scope, body_text=bodies.get(paper.get("id"), "")):
+                out.append(paper)
+        return out
+
+    def _matching_rows(self, opts, *, rank=True, pre_filter=None):
         raw_q = str(opts.get("q") or "").strip()
         expression = raw_q or str(opts.get("booleanQuery") or "").strip()
         scope = str(opts.get("scope") or "metadata")
@@ -318,7 +416,7 @@ class QueryEngine:
         if parsed and not parsed["needsEvaluator"]:
             parsed = None
         ast = parsed["ast"] if parsed else None
-        exact_body = parsed and (scope in ("fulltext", "all") or mentions_fulltext(ast))
+        exact_body = bool(parsed and (scope in ("fulltext", "all") or mentions_fulltext(ast)))
         terms = parsed["terms"] if parsed else []
         index_query = (" ".join(terms) if parsed else raw_q) if scope != "fulltext" else ""
         papers = self.db.list_papers()
@@ -340,8 +438,10 @@ class QueryEngine:
             # 涉及正文时，题录索引只提供排序分，精确求值负责决定是否命中。
             if not exact_body:
                 rows = [paper for paper in papers if paper["id"] in scored or paper["id"] in extra]
+        if pre_filter is not None:
+            rows = self._filter_rows(rows, pre_filter)
         if parsed:
-            rows = [paper for paper in rows if self._boolean_match(paper, ast, scope)]
+            rows = self._filter_boolean_rows(rows, ast, scope, exact_body)
         return rows, scored, bool(parsed), bool(index_query)
 
     def _sort_rows(self, rows, opts, scored, has_index_query):
@@ -360,8 +460,8 @@ class QueryEngine:
     def query(self, params):
         """列表查询：筛选 + 检索 + 排序 + 分页。"""
         opts = params or {}
-        rows, scored, use_boolean, has_index_query = self._matching_rows(opts)
-        rows = self._sort_rows(self._filter_rows(rows, opts), opts, scored, has_index_query)
+        rows, scored, use_boolean, has_index_query = self._matching_rows(opts, pre_filter=opts)
+        rows = self._sort_rows(rows, opts, scored, has_index_query)
 
         total = len(rows)
         page = clamp_int(opts.get("page"), 1, 100000, 1)
@@ -484,9 +584,8 @@ class QueryEngine:
         顶层联想清单（authors/venues/tags/years 全库）由 api 层组装（与 Node api/papers.js 一致）。
         """
         opts = opts or {}
-        matches, _, _, _ = self._matching_rows(opts, rank=False)
-        rows = self._filter_rows(matches, {key: value for key, value in opts.items()
-                                           if key not in FACET_FILTER_KEYS})
+        base_filters = {key: value for key, value in opts.items() if key not in FACET_FILTER_KEYS}
+        rows, _, _, _ = self._matching_rows(opts, rank=False, pre_filter=base_filters)
         groups = {}
         for name, (_, keys) in FACET_FILTERS.items():
             selected = {key: opts[key] for key in keys if opts.get(key)}
@@ -560,6 +659,16 @@ class QueryEngine:
         if score is not None:
             item["score"] = _js_number(score)
         return item
+
+    def _existing_pdfs(self):
+        root = getattr(self.db, "papers_dir", None)
+        if not root:
+            return None
+        files = set()
+        for _, rels in walk_assets(root):
+            for rel in rels:
+                files.add(os.path.normcase(rel.replace("\\", "/")))
+        return files
 
     def pdf_exists(self, pdf_file):
         if not pdf_file:

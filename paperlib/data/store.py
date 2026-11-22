@@ -42,9 +42,17 @@ class Store:
         self.repo = Repository(self.data_dir)
         self._lock = threading.RLock()
         self.papers: list[dict] = []
+        self._by_id: dict[str, dict] = {}
+        self._pos: dict[str, int] = {}
+        self._pos_dirty = False
         self.meta = {"createdAt": now_iso(), "updatedAt": now_iso()}
         self._hashes: dict[str, str] = {}
         self._loaded = False
+
+    def _rebuild_index(self):
+        self._by_id = {p["id"]: p for p in self.papers if p.get("id")}
+        self._pos = {p["id"]: i for i, p in enumerate(self.papers) if p.get("id")}
+        self._pos_dirty = False
 
     # ------------------------------------------------------------------ 读/装配
     def load(self, *, migrate_legacy_dirs=True):
@@ -58,6 +66,7 @@ class Store:
             created = self.repo.meta_get("createdAt") or now_iso()
             self.meta = {"createdAt": created, "updatedAt": self.repo.meta_get("updatedAt") or now_iso()}
             self.papers = self.repo.list_papers()
+            self._rebuild_index()
             self._hashes = {p["id"]: _hash_paper(p) for p in self.papers}
             if migrate_legacy_dirs:
                 self.migrate_legacy_dirs()
@@ -82,17 +91,20 @@ class Store:
     def find_paper(self, paper_id):
         target = str(paper_id)
         with self._lock:
-            for paper in self.papers:
-                if paper.get("id") == target:
-                    return paper
-        return None
+            if len(self._by_id) != len(self.papers):
+                self._rebuild_index()
+            return self._by_id.get(target)
 
     def index_of(self, paper_id):
         target = str(paper_id)
-        for i, paper in enumerate(self.papers):
-            if paper.get("id") == target:
-                return i
-        return -1
+        with self._lock:
+            if self._pos_dirty or len(self._pos) != len(self.papers):
+                self._rebuild_index()
+            idx = self._pos.get(target, -1)
+            if 0 <= idx < len(self.papers) and self.papers[idx].get("id") == target:
+                return idx
+            self._rebuild_index()
+            return self._pos.get(target, -1)
 
     def data_file(self):
         return str(self.repo.db_path)
@@ -115,10 +127,16 @@ class Store:
             raise ValueError("insert_paper：卡片必须有 id")
         with self._lock:
             self._persist(paper)
+            pid = paper["id"]
             if options and options.get("append") is True:
                 self.papers.append(paper)
+                self._by_id[pid] = paper
+                if not self._pos_dirty:
+                    self._pos[pid] = len(self.papers) - 1
             else:
                 self.papers.insert(0, paper)
+                self._by_id[pid] = paper
+                self._pos_dirty = True
             return paper
 
     def replace_paper(self, paper_id, record, options=None):
@@ -126,8 +144,17 @@ class Store:
             idx = self.index_of(paper_id)
             if idx < 0:
                 return None
+            old_id = self.papers[idx].get("id")
             self._persist(record, self.papers[idx])
             self.papers[idx] = record
+            new_id = record.get("id")
+            if old_id and old_id != new_id:
+                self._by_id.pop(old_id, None)
+                self._pos.pop(old_id, None)
+            if new_id:
+                self._by_id[new_id] = record
+                if not self._pos_dirty:
+                    self._pos[new_id] = idx
             return record
 
     def patch_paper(self, paper_id, patch, options=None):
@@ -139,6 +166,7 @@ class Store:
             merged.update(patch or {})
             self._persist(merged, self.papers[idx])
             self.papers[idx] = merged
+            self._by_id[merged["id"]] = merged
             return merged
 
     def patch_papers(self, patches):
@@ -157,6 +185,7 @@ class Store:
             self.repo.write_papers(records.values(), updated_at=updated, previous_by_id=previous)
             for index, record in records.items():
                 self.papers[index] = record
+                self._by_id[record["id"]] = record
                 self._hashes[record["id"]] = _hash_paper(record)
             self.meta["updatedAt"] = updated
             return len(records)
@@ -170,6 +199,8 @@ class Store:
             updated = now_iso()
             self.repo.write_papers(removed=(paper["id"],), updated_at=updated)
             self.papers.pop(idx)
+            self._by_id.pop(paper["id"], None)
+            self._pos_dirty = True
             self._hashes.pop(paper["id"], None)
             self.meta["updatedAt"] = updated
             return paper
@@ -181,6 +212,7 @@ class Store:
             updated = now_iso()
             self.repo.write_papers(records, self._hashes.keys() - hashes.keys(), updated)
             self.papers = records
+            self._rebuild_index()
             self._hashes = hashes
             self.meta["updatedAt"] = updated
 

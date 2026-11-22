@@ -42,6 +42,7 @@ class FullText:
         # 内存倒排索引：token -> {paperId: 词频}；按需建（第一次检索时扫一遍 paper_text）。
         # 附件文本（att- 前缀）不进索引：那是给大模型读的 SI 正文，不参与文献检索。
         self._postings = {}
+        self._doc_tokens = {}
         self._lengths = {}
         self._index_cursor = None
         self._index_lock = threading.Lock()
@@ -98,11 +99,33 @@ class FullText:
             "tokens": len(self._postings),
         }
 
+    def body_ids(self):
+        """返回有正文的文献 ID 集合（只读 paper_text 索引列，不触发倒排分词）；底层不支持时返回 None。"""
+        repo = getattr(self.store, "repo", None)
+        fn = getattr(repo, "body_text_ids", None)
+        return fn() if callable(fn) else None
+
+    def read_batch(self, paper_ids):
+        """按批读取候选文献完整正文（无截断），供精确布尔求值复用，减少 SQLite 往返。"""
+        ids = [str(pid) for pid in paper_ids if pid]
+        if not ids:
+            return {}
+        repo = getattr(self.store, "repo", None)
+        batch_fn = getattr(repo, "read_body_batch", None)
+        if not callable(batch_fn):
+            return {pid: self.read(pid) or "" for pid in ids}
+        out = {}
+        for start in range(0, len(ids), INDEX_BATCH_SIZE):
+            chunk = ids[start:start + INDEX_BATCH_SIZE]
+            out.update(batch_fn(chunk, None))
+        return out
+
     # ---------------------------------------------------------------- 全文检索
     def _refresh_index(self):
         cursor, rebuild, keys = self.store.repo.body_index_changes(self._index_cursor)
         if rebuild:
             self._postings.clear()
+            self._doc_tokens.clear()
             self._lengths.clear()
         for start in range(0, len(keys), INDEX_BATCH_SIZE):
             batch = keys[start:start + INDEX_BATCH_SIZE]
@@ -112,18 +135,22 @@ class FullText:
         self._index_cursor = cursor
 
     def _index_doc(self, key, text):
-        if self._lengths.pop(key, None) is not None:
-            for token in [token for token, bucket in self._postings.items() if key in bucket]:
-                bucket = self._postings[token]
-                del bucket[key]
-                if not bucket:
-                    del self._postings[token]
+        old_tokens = self._doc_tokens.pop(key, None)
+        if old_tokens:
+            for token in old_tokens:
+                bucket = self._postings.get(token)
+                if bucket is not None:
+                    bucket.pop(key, None)
+                    if not bucket:
+                        del self._postings[token]
+        self._lengths.pop(key, None)
         tokens = tokenize(text)
         if not tokens:
             return
         counts = Counter(tokens)
         for token, freq in counts.items():
             self._postings.setdefault(token, {})[key] = freq
+        self._doc_tokens[key] = set(counts)
         self._lengths[key] = len(tokens)
 
     def search(self, terms, limit=200):
