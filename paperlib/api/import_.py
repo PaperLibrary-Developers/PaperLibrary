@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from paperlib.domain import pdf_import
-from paperlib.util import ensure_dir, now_iso, safe_path_join, sanitize_file_name
+from paperlib.util import ensure_dir, safe_path_join, sanitize_file_name
 
 # 批次 id：只允许 [a-z0-9]，防止路径穿越（同时也是临时目录名）
 BATCH_ID_RE = re.compile(r"^[a-z0-9]{4,40}$")

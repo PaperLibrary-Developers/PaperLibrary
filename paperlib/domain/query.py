@@ -17,7 +17,6 @@ import math
 import os
 from collections import Counter
 from functools import cache, cmp_to_key
-from pathlib import Path
 
 from paperlib.domain.naming import display_file_name
 from paperlib.domain.repository import SORTABLE

@@ -11,7 +11,7 @@ import os
 import re
 from pathlib import Path
 
-from paperlib.util import ensure_dir, mime_type, safe_path_join
+from paperlib.util import safe_path_join
 
 
 def _base36(n: int) -> str:

@@ -100,6 +100,8 @@ $file = Join-Path $temp 'native-write-probe'
         try {
             $testPython = Join-Path $stagedPortable "python.exe"
             Invoke-Checked $testPython @("-X", "utf8", "-B", "-c", $assertTemp, $testSource, $scratch)
+            Invoke-Checked $testPython @("-X", "utf8", "-B", "tools/lint_check.py")
+            Invoke-Checked "node" @("test/ui-smoke/check-imports.mjs")
             Invoke-Checked $testPython @("-X", "utf8", "-B", "-m", "unittest", "discover", "-s", "test")
             $nodeTests = @(Get-ChildItem -Path "test/js" -Filter "*.test.mjs" | ForEach-Object FullName)
             Invoke-Checked "node" (@("--test") + $nodeTests)

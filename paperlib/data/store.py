@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import threading
 from pathlib import Path
 
 from paperlib.assets import asset_path, parent_path, sha256_file
 from paperlib.data.repository import Repository
-from paperlib.util import dump_json, ensure_dir, now_iso, read_json, safe_path_join, write_json_atomic
+from paperlib.util import ensure_dir, now_iso, read_json, safe_path_join, write_json_atomic
 
 DATA_VERSION = 1
 

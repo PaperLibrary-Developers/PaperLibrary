@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import threading
 import time
 
 from paperlib.version import VersionError, load as load_version, ui_label
