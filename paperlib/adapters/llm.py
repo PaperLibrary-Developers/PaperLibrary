@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from paperlib.adapters.secret_store import dump_with_protected_secret, load_secret_field
 from paperlib.util import read_json, write_json_atomic
 
 PRESETS = [
@@ -195,10 +196,15 @@ class LLM:
         self.settings = dict(DEFAULT_SETTINGS)
         if isinstance(raw, dict):
             self.settings.update(raw)
+        if load_secret_field(self.settings, "apiKey") and self.file.is_file():
+            try:
+                self.save()
+            except OSError:
+                pass
         return self.settings
 
     def save(self):
-        write_json_atomic(self.file, self.settings)
+        write_json_atomic(self.file, dump_with_protected_secret(self.settings, "apiKey"))
 
     def public_settings(self):
         """给前端用的配置：密钥打码，只回传是否已配置。"""
