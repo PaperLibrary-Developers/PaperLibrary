@@ -36,7 +36,8 @@ class LauncherCoreTest(unittest.TestCase):
         write_utf8_bom(core_tmp, core.read_text(encoding="utf-8-sig"))
         write_utf8_bom(probe_tmp, probe.read_text(encoding="utf-8-sig"))
         proc = subprocess.run([str(CSC), "/nologo", "/target:exe", "/out:" + str(cls.probe),
-                               "/r:System.dll", "/r:System.Core.dll", str(core_tmp), str(probe_tmp)],
+                               "/r:System.dll", "/r:System.Core.dll", "/r:System.Web.Extensions.dll",
+                               str(core_tmp), str(probe_tmp)],
                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=120)
         if proc.returncode != 0:
@@ -122,6 +123,48 @@ class LauncherCoreTest(unittest.TestCase):
         self.assertEqual(data["requestId"], "req-1")
         self.assertEqual(data["ok"], False)
         self.assertEqual(data["code"], "helper-missing")
+
+    def test_json_parser_ignores_nested_keys_and_rejects_malformed_json(self):
+        # 嵌套对象或字符串值里的同名键不应欺骗顶层字段解析
+        spoofed = json.dumps({
+            "nested": {"type": "paperlibrary:install.request", "requestId": "req-spoof"},
+            "note": '"type":"paperlibrary:install.request","requestId":"req-spoof"',
+            "type": "other",
+            "requestId": "req-real",
+        })
+        code, data = self.probe_json("request", spoofed)
+        self.assertEqual(code, 3)
+        self.assertEqual(data["code"], "not-install-request")
+
+        # 截断/畸形 JSON 应直接拒绝，而不是被正则局部匹配通过
+        truncated = '{"type":"paperlibrary:install.request","requestId":"req-1"'
+        code, data = self.probe_json("request", truncated)
+        self.assertEqual(code, 3)
+        self.assertEqual(data["code"], "not-install-request")
+
+        # apply.json 含有嵌套同名键（排在顶层键前面）时，仍准确读取顶层 schema/version
+        self.apply_path.write_text(json.dumps({
+            "meta": {"schema": 99, "version": "9.9.9"},
+            "schema": 1,
+            "version": "1.7.1",
+            "fromVersion": "1.6.0",
+            "stagingPath": str(self.staging),
+            "backupPath": str(self.updates / "backups" / "app-1.6.0"),
+        }), encoding="utf-8")
+        code, data = self.precheck()
+        self.assertEqual(code, 0, data)
+        self.assertEqual(data["version"], "1.7.1")
+
+        # 畸形 apply.json 返回 apply-json
+        self.apply_path.write_text('{"schema": 1, "version": "1.7.1"', encoding="utf-8")
+        code, data = self.precheck()
+        self.assertEqual(code, 3)
+        self.assertEqual(data["code"], "apply-json")
+
+        # InstallResultJson 对引号、反斜杠与中文正确转义
+        code, data = self.probe_json("result", "req-2", "true", "ok", '路径 C:\\a\\b "完成"')
+        self.assertEqual(code, 0)
+        self.assertEqual(data["message"], '路径 C:\\a\\b "完成"')
 
     def test_precheck_valid_apply_and_helper(self):
         code, data = self.precheck()
@@ -304,7 +347,8 @@ class LauncherClosingTest(unittest.TestCase):
                 source = root / name
                 write_utf8_bom(source, (ROOT / "launcher" / name).read_text(encoding="utf-8-sig"))
                 sources.append(str(source))
-            references = ["System.dll", "System.Core.dll", "System.Drawing.dll", "System.Windows.Forms.dll"]
+            references = ["System.dll", "System.Core.dll", "System.Drawing.dll",
+                          "System.Windows.Forms.dll", "System.Web.Extensions.dll"]
             for name in ("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll"):
                 dll = root / name
                 shutil.copyfile(webview / name, dll)
