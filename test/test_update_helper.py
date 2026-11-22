@@ -273,8 +273,8 @@ class BuiltHelperTest(unittest.TestCase):
         (cls.pkg / "tools" / "updater").mkdir(parents=True)
         write_version(cls.pkg)
         shutil.copy2(ROOT / "tools" / "make_updater.ps1", cls.pkg / "tools" / "make_updater.ps1")
-        shutil.copy2(ROOT / "tools" / "updater" / "PaperLibraryUpdater.cs",
-                     cls.pkg / "tools" / "updater" / "PaperLibraryUpdater.cs")
+        for src in (ROOT / "tools" / "updater").glob("PaperLibraryUpdater*.cs"):
+            shutil.copy2(src, cls.pkg / "tools" / "updater" / src.name)
         proc = subprocess.run(
             [str(POWERSHELL), "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(cls.pkg / "tools" / "make_updater.ps1"), "-OutDir", str(cls.pkg)],
