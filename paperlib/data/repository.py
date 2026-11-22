@@ -8,7 +8,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
+from itertools import islice
 from pathlib import Path
 
 from paperlib.data import schema
@@ -33,6 +34,10 @@ class Repository:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         schema.init_schema(self.conn)
+        self._body_revision = 0
+        self._body_changes = deque(maxlen=1024)
+        self._body_count_cursor = None
+        self._body_count = 0
 
     # ------------------------------------------------------------------ 基础
     def close(self):
@@ -136,13 +141,17 @@ class Repository:
 
     def write_papers(self, papers=(), removed=(), updated_at=None, *, previous=None, previous_by_id=None):
         """Commit card records, related rows and library metadata together."""
-        with self._lock, self.conn:
-            for paper in papers:
-                self._save_paper(paper, previous_by_id.get(paper["id"]) if previous_by_id is not None else previous)
+        removed = tuple(removed)
+        with self._lock:
+            with self.conn:
+                for paper in papers:
+                    self._save_paper(paper, previous_by_id.get(paper["id"]) if previous_by_id is not None else previous)
+                for paper_id in removed:
+                    self._delete_paper(paper_id)
+                if updated_at is not None:
+                    self._set_meta("updatedAt", updated_at)
             for paper_id in removed:
-                self._delete_paper(paper_id)
-            if updated_at is not None:
-                self._set_meta("updatedAt", updated_at)
+                self._record_body_change(paper_id)
 
     def _save_paper(self, paper, previous=None):
         data = dict(paper)
@@ -246,17 +255,62 @@ class Repository:
 
     def set_text(self, key, text, updated_at=None):
         text = str(text or "")
-        with self._lock, self.conn:
-            self.conn.execute(
-                "INSERT INTO paper_text(paper_id,text,chars,updated_at) VALUES(?,?,?,?) "
-                "ON CONFLICT(paper_id) DO UPDATE SET text=excluded.text, chars=excluded.chars, "
-                "updated_at=excluded.updated_at",
-                (key, text, len(text), updated_at or now_iso()),
-            )
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO paper_text(paper_id,text,chars,updated_at) VALUES(?,?,?,?) "
+                    "ON CONFLICT(paper_id) DO UPDATE SET text=excluded.text, chars=excluded.chars, "
+                    "updated_at=excluded.updated_at",
+                    (key, text, len(text), updated_at or now_iso()),
+                )
+            self._record_body_change(key)
 
     def delete_text(self, key):
-        with self._lock, self.conn:
-            self.conn.execute("DELETE FROM paper_text WHERE paper_id = ?", (key,))
+        with self._lock:
+            with self.conn:
+                self.conn.execute("DELETE FROM paper_text WHERE paper_id = ?", (key,))
+            self._record_body_change(key)
+
+    def _record_body_change(self, key):
+        if not str(key).startswith("att-"):
+            self._body_revision += 1
+            self._body_changes.appendleft(str(key))
+
+    def _body_state(self):
+        external = self.conn.execute("PRAGMA data_version").fetchone()[0]
+        return self._body_revision, external
+
+    def body_index_changes(self, cursor):
+        """返回索引游标、是否重建及待更新的正文 ID（含已删除项）。"""
+        with self._lock:
+            current = self._body_state()
+            if cursor is not None and cursor[1] == current[1]:
+                pending = self._body_revision - cursor[0]
+                if pending <= len(self._body_changes):
+                    return current, False, tuple(dict.fromkeys(islice(self._body_changes, pending)))
+            rows = self.conn.execute(
+                "SELECT paper_id FROM paper_text WHERE substr(paper_id,1,4) != 'att-' AND chars > 0"
+            )
+            return current, True, tuple(row["paper_id"] for row in rows)
+
+    def read_body_batch(self, keys, char_limit):
+        placeholders = ",".join("?" for _ in keys)
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT paper_id, text FROM paper_text WHERE chars > 0 AND paper_id IN (" + placeholders + ")",
+                keys,
+            )
+            return {row["paper_id"]: row["text"][:char_limit] for row in rows}
+
+    def count_body_texts(self):
+        with self._lock:
+            current = self._body_state()
+            if self._body_count_cursor != current:
+                self._body_count = self.conn.execute(
+                    "SELECT COUNT(*) FROM paper_text WHERE substr(paper_id,1,4) != 'att-' AND chars > 0"
+                ).fetchone()[0]
+                self._body_count_cursor = current
+            return self._body_count
 
     def text_chars(self, key):
         with self._lock:

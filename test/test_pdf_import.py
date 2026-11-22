@@ -7,11 +7,15 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
+from collections import deque
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pymupdf
 
@@ -338,10 +342,12 @@ class FulltextSearchTest(unittest.TestCase):
         from paperlib.data.store import Store
         from paperlib.services import create_services
 
-        self.tmp = tempfile.mkdtemp(prefix="t3-search-")
-        config = Config(root=ROOT, data_dir=Path(self.tmp), port=4392)
+        tmp = tempfile.TemporaryDirectory(prefix="t3-search-")
+        self.addCleanup(tmp.cleanup)
+        config = Config(root=ROOT, data_dir=Path(tmp.name), port=4392)
         config.started_at = time.time()
         self.store = Store(config.data_dir)
+        self.addCleanup(self.store.repo.close)
         self.store.load()
         self.services = create_services(config, self.store)
         self.ids = {}
@@ -354,12 +360,6 @@ class FulltextSearchTest(unittest.TestCase):
             paper = self.services.library.create({"title": name})
             self.store.set_text(paper["id"], text)
             self.ids[name] = paper["id"]
-
-    def tearDown(self):
-        try:
-            self.store.repo.close()
-        except Exception:  # noqa: BLE001
-            pass
 
     def hits(self, terms, limit=200):
         return [hit["id"] for hit in self.services.fulltext.search(terms, limit)]
@@ -395,6 +395,68 @@ class FulltextSearchTest(unittest.TestCase):
         self.assertNotIn(paper["id"], self.hits("超分子"))
         self.services.fulltext.remove(paper["id"])
         self.assertNotIn(paper["id"], self.hits("别的主题"))
+
+    def test_startup_and_warm_search_have_no_body_selects(self):
+        from paperlib.services import create_services
+
+        conn = self.store.repo.conn
+        statements = []
+        conn.set_trace_callback(statements.append)
+        try:
+            create_services(self.services.runtime.config, self.store)
+            self.assertFalse(any("paper_text" in sql for sql in statements))
+            self.hits("超分子")
+            statements.clear()
+            self.assertEqual(self.hits("超分子"), [self.ids["cage"]])
+            self.assertEqual(statements, ["PRAGMA data_version"])
+        finally:
+            conn.set_trace_callback(None)
+
+    def test_incremental_index_reads_equal_length_updates_and_deletions(self):
+        key = self.ids["mof"]
+        body = "probe alpha"
+        self.store.set_text(key, body)
+        self.assertEqual(self.hits("alpha"), [key])
+        repo = self.store.repo
+        with patch.object(repo, "read_body_batch", wraps=repo.read_body_batch) as read:
+            self.store.set_text("att-fixture.txt", "probe alpha")
+            self.assertEqual(self.hits("alpha"), [key])
+            read.assert_not_called()
+            self.store.set_text(key, "probe omega")
+            self.assertEqual(self.hits("alpha"), [])
+            self.assertEqual(self.hits("omega"), [key])
+            self.assertEqual([call.args[0] for call in read.call_args_list], [(key,)])
+        self.services.library.remove(key)
+        self.assertEqual(self.hits("omega"), [])
+
+    def test_index_rebuilds_after_other_connection_or_expired_cursor(self):
+        key = self.ids["mof"]
+        repo = self.store.repo
+        repo._body_changes = deque(repo._body_changes, maxlen=2)
+        self.assertEqual(self.hits("frameworks"), [key])
+        with closing(sqlite3.connect(repo.db_path)) as conn, conn:
+            conn.execute("UPDATE paper_text SET text = replace(text, 'frameworks', 'structures') WHERE paper_id = ?",
+                         (key,))
+        self.assertEqual(self.hits("structures"), [key])
+        self.assertEqual(self.hits("frameworks"), [])
+        for name in ("mof", "cage", "gas"):
+            repo.set_text(self.ids[name], "revised fixture")
+        self.assertEqual(set(self.hits("revised")), {self.ids[name] for name in ("mof", "cage", "gas")})
+
+    def test_stats_reuse_body_count_until_a_body_changes(self):
+        repo = self.store.repo
+        fulltext = self.services.fulltext
+        self.assertEqual(fulltext.stats()["indexed"], 4)
+        statements = []
+        repo.conn.set_trace_callback(statements.append)
+        try:
+            self.store.set_text("att-count-fixture.txt", "supporting information")
+            self.assertEqual(fulltext.stats()["indexed"], 4)
+            self.assertFalse(any("SELECT" in sql.upper() for sql in statements))
+            repo.delete_text(self.ids["mof"])
+            self.assertEqual(fulltext.stats()["indexed"], 3)
+        finally:
+            repo.conn.set_trace_callback(None)
 
     def test_excerpts(self):
         fulltext = self.services.fulltext

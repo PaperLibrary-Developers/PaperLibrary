@@ -199,10 +199,6 @@ def pdf_confirm(ctx):
             remove_batch(services, batch_id)
     except OSError:
         pass
-    try:
-        services.fulltext.load_all(services.db.list_papers())
-    except Exception:  # noqa: BLE001
-        pass
     if imported:
         print("[import] 批次 %s：导入 %d 篇，失败 %d 篇" % (batch_id, len(imported), len(failed)))
     ctx.json(200, {"ok": True, "imported": imported, "failed": failed})

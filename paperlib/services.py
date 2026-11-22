@@ -79,10 +79,6 @@ def create_services(config, store):
     fulltext = FullText(store)
     library = Library(store, fulltext)
     folders = Folders(store)
-    try:
-        fulltext.load_all(store.list_papers())
-    except NotImplementedError:
-        pass
     llm = LLM(config.data_dir)
     websearch = WebSearch(config.data_dir)
     sources = Sources(config.data_dir)
