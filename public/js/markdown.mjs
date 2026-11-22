@@ -5,6 +5,10 @@
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 
+  const unescapeHtml = s => String(s == null ? '' : s)
+    .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+    .replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&')
+
   const REF_RE = /\[\s*(\d{1,3}(?:\s*[-,，]\s*\d{1,3})*)\s*\]/g
   const MD_LINK_RE = /\[([^\]\n]*)\]\((https?:\/\/[^)\s]+)\)/g
   const BARE_URL_RE = /(^|[\s(（])(https?:\/\/[^\s<>()（）]+|www\.[^\s<>()（）]+|10\.\d{4,9}\/[^\s<>()（）]+)/g
@@ -71,7 +75,7 @@
   }
 
   function safeUrl (url) {
-    const u = String(url || '').trim()
+    const u = String(url || '').trim().replace(/&amp;/g, '&')
     if (/^(https?:|mailto:|\/|#)/i.test(u)) return u
     return '#'
   }
@@ -122,10 +126,10 @@
   }
 
   /**
-   * 行内公式 → 占位符；不做 HTML 转义（由调用方决定）。
+   * 行内代码/公式 → 占位符，随后对剩余文本做 HTML 转义，再处理裸写的 LaTeX 文本命令。
    * **顺序很重要**：先把反引号包裹的行内代码抠出来，再抠公式——
    * 否则 `` `$x$` `` 这种「把公式当代码示例」的写法会被渲染成公式（踩过一次）。
-   * 最后才处理裸写的 LaTeX 文本命令（此时公式与代码都已经不在文本里了）。
+   * 转义必须发生在 latexTextToHtml 之前，避免原始 HTML 通过 innerHTML 注入脚本。
    */
   function escapeAndExtract (line, tmpl) {
     if (!tmpl) return escapeHtml(line)
@@ -134,7 +138,7 @@
       tmpl.push('<code>' + escapeHtml(code) + '</code>')
       return '\u0000M' + (tmpl.length - 1) + '\u0000'
     })
-    return latexTextToHtml(extractMath(text, tmpl).text)
+    return latexTextToHtml(escapeHtml(extractMath(text, tmpl).text))
   }
 
   /**
@@ -184,7 +188,7 @@
     text = text.replace(MD_LINK_RE, (m, label, url) => stash(link(url, label)))
     // [[文献名]]
     text = text.replace(WIKI_RE, (m, name) => {
-      const target = ctx.byTitle ? ctx.byTitle(name) : null
+      const target = ctx.byTitle ? ctx.byTitle(unescapeHtml(name)) : null
       if (target) return stash(`<a href="#/paper/${encodeURIComponent(target.id)}" class="ref" title="库内文献">${name}</a>`)
       return stash(`<span class="ref" title="库内暂时没有这篇文献">${name}</span>`)
     })
@@ -194,10 +198,14 @@
       const chips = list.map(n => `<span class="ref">[${n}]</span>`).join('<span class="ref-sep"> </span>')
       return stash(chips)
     })
-    // 裸链接与 DOI
-    text = text.replace(BARE_URL_RE, (m, prefix, url) => {
+    // 裸链接与 DOI（输入已转义：剥离尾部转义后的尖括号/引号，并不再二次转义文本）
+    text = text.replace(BARE_URL_RE, (m, prefix, rawUrl) => {
+      const trailMatch = /(?:&lt;|&gt;|&quot;|&#39;)+$/.exec(rawUrl)
+      const trail = trailMatch ? trailMatch[0] : ''
+      const url = trail ? rawUrl.slice(0, -trail.length) : rawUrl
+      if (!url) return m
       const href = /^10\./.test(url) ? 'https://doi.org/' + url : (/^www\./.test(url) ? 'https://' + url : url)
-      return prefix + stash(link(href, escapeHtml(url)))
+      return prefix + stash(link(href, url)) + trail
     })
     // 粗体 / 斜体 / 删除线 / 高亮
     text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
@@ -380,7 +388,7 @@
   }
 
   export const refChip = (num, title) =>
-    `<span class="ref" title="${escapeHtml(title || '')}">[${num}]</span>`
+    `<span class="ref" title="${escapeHtml(title || '')}">[${escapeHtml(num)}]</span>`
 
   /** 判断文本里是否有需要提醒作者补全的引用编号（正文里有、参考文献里没有） */
   export function missingRefs (text, refs) {
