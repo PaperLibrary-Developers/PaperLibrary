@@ -11,6 +11,7 @@ import os
 import tempfile
 import threading
 import unittest
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -313,6 +314,29 @@ class FacetsTest(QueryTestBase):
         # 并列项的次序用 zh_collation_key（汉字先于拉丁）
         self.assertEqual(result["authors"]["items"][0]["value"], "张三")
 
+    def test_combined_facets_match_list_with_only_their_own_filters_removed(self):
+        params = {"tags": "CB,catalysis", "years": "2015,2018", "yearFrom": "2013",
+                  "authors": "Fujita,Werner M. Nau,Jonathan R. Nitschke", "author": "a",
+                  "venues": "JACS,Chemical Society Reviews",
+                  "venue": "a", "type": "journal,conference", "minRating": "3"}
+        result = self.library.facets(params)
+        self.assertEqual(result["total"], 2)
+        self.assertIn({"value": "2020", "count": 1}, result["years"]["items"])
+        cases = [
+            ("years", ("years", "yearFrom"), lambda p: [p["year"]]),
+            ("authors", ("authors", "author"), lambda p: p["authors"]),
+            ("venues", ("venues", "venue"), lambda p: [p["venue"]]),
+            ("types", ("type",), lambda p: [p["type"]]),
+            ("tags", ("tags",), lambda p: p["tags"]),
+        ]
+        for name, excluded, values in cases:
+            with self.subTest(name=name):
+                opts = {key: value for key, value in params.items() if key not in excluded}
+                expected = Counter(str(value) for paper in self.keys(opts) for value in values(paper) if value)
+                actual = result[name]
+                self.assertEqual({item["value"]: item["count"] for item in actual["items"]}, expected)
+                self.assertEqual(actual["distinct"], len(expected))
+
 
 class ListItemStatsTest(QueryTestBase):
     def test_list_item_shape(self):
@@ -530,6 +554,15 @@ class ApiListFacetsTest(QueryTestBase):
         types = {row["value"]: row["count"] for row in result["query"]["types"]["items"]}
         self.assertEqual(types, {"conference": 1, "journal": 1})
         self.assertTrue(any(row["name"] == "supramolecular" for row in result["tags"]))
+
+    def test_facets_do_not_sort_or_project_cards_or_inspect_pdf_files(self):
+        engine = self.library.query_engine
+        with (patch.object(engine, "_sort_rows", side_effect=AssertionError("card sort")),
+              patch.object(engine, "to_list_item", side_effect=AssertionError("card projection")),
+              patch.object(engine, "pdf_exists", side_effect=AssertionError("disk check"))):
+            result = self.run_facets({"sort": "title", "tags": "CB"})
+        self.assertEqual(result["query"]["total"], 2)
+        self.assertEqual(result["years"][0], {"year": 2024, "count": 1})
 
     def test_fulltext_counts_beyond_old_caps_and_reads_excerpts_only_for_page(self):
         extras = [paper(id=f"body{i:03}", venue="Body Journal", tags=["Body Tag"], year=2025,

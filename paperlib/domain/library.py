@@ -70,6 +70,9 @@ class Library:
     def venues(self, limit=200):
         return self.query_engine.venues(limit)
 
+    def years(self):
+        return self.query_engine.years()
+
     def stats(self):
         return self.query_engine.stats()
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections import Counter
 from functools import cache, cmp_to_key
 from pathlib import Path
 
@@ -28,6 +29,16 @@ try:  # T1 交付；暂缺时布尔/字段查询降级（测试用 skip 标记�
     from shared.pure import boolean_query as bool_query
 except Exception:  # noqa: BLE001
     bool_query = None
+
+
+FACET_FILTERS = {
+    "years": ("year", ("yearFrom", "yearTo", "years")),
+    "authors": ("authors", ("author", "authors")),
+    "venues": ("venue", ("venue", "venues")),
+    "types": ("type", ("type",)),
+    "tags": ("tags", ("tags",)),
+}
+FACET_FILTER_KEYS = frozenset(key for _, keys in FACET_FILTERS.values() for key in keys)
 
 
 # ---------------------------------------------------------------- 布尔查询胶水
@@ -87,10 +98,6 @@ def search_union(index, terms):
             sorted(scores.items(), key=lambda kv: -kv[1])]
 
 
-def _cmp(a, b):
-    return -1 if a < b else (1 if a > b else 0)
-
-
 # 中文/拉丁混排的近似排序键由 shared/pure/text.py 提供（Node 那边是 localeCompare(..., 'zh-Hans-CN')）
 
 
@@ -125,6 +132,11 @@ def _limit_of(value, fallback):
     except (TypeError, ValueError):
         return fallback
     return number if number else fallback
+
+
+def _year_items(counts):
+    years = sorted(counts, key=_number, reverse=True)
+    return [{"year": year, "count": counts[year]} for year in years]
 
 
 class QueryEngine:
@@ -168,6 +180,9 @@ class QueryEngine:
         items.sort(key=lambda row: (-row["count"], _name_key(row["name"])))
         return items[: _limit_of(limit, 300)]
 
+    def years(self):
+        return _year_items(Counter(p["year"] for p in self.db.list_papers() if p.get("year")))
+
     # ------------------------------------------------------------------ 统计
     def stats(self):
         papers = self.db.list_papers()
@@ -192,8 +207,6 @@ class QueryEngine:
                 rating_sum += paper["rating"]
                 rating_count += 1
             words += len(str(paper.get("notes") or "")) + len(str(paper.get("summary") or ""))
-        years = [{"year": year, "count": count} for year, count in by_year.items()]
-        years.sort(key=cmp_to_key(lambda a, b: _cmp(_number(b["year"]), _number(a["year"]))))
         types = [{"type": key, "count": count} for key, count in by_type.items()]
         types.sort(key=lambda row: -row["count"])
         statuses = [{"status": key, "count": count} for key, count in by_status.items()]
@@ -205,7 +218,7 @@ class QueryEngine:
                                if p.get("pdfFile") and not self.pdf_exists(p.get("pdfFile"))]),
             "avgRating": _js_number(rating_sum / rating_count) if rating_count else 0,
             "noteChars": words,
-            "byYear": years,
+            "byYear": _year_items(by_year),
             "byType": types,
             "byStatus": statuses,
             "tags": len(self.tags()),
@@ -297,7 +310,7 @@ class QueryEngine:
 
         return bool_query.evaluate(ast, match)
 
-    def _matching_rows(self, opts):
+    def _matching_rows(self, opts, *, rank=True):
         raw_q = str(opts.get("q") or "").strip()
         expression = raw_q or str(opts.get("booleanQuery") or "").strip()
         scope = str(opts.get("scope") or "metadata")
@@ -320,7 +333,7 @@ class QueryEngine:
             else:
                 extra.update(hit["id"] for hit in hits)
 
-        if index_query:
+        if index_query and (rank or not exact_body):
             hits = search_union(self.index, terms) if has_or_node(ast) else self.index.search(index_query)
             scored = {hit["id"]: hit["score"] for hit in hits or []}
             # 正文和题录的词可分布在不同字段，NOT/OR 也可能没有可用的正项。
@@ -470,66 +483,48 @@ class QueryEngine:
         返回 {total, years, authors, venues, types, tags}，每组是 {items:[{value,count}], distinct}；
         顶层联想清单（authors/venues/tags/years 全库）由 api 层组装（与 Node api/papers.js 一致）。
         """
-        base = dict(opts or {})
-        matches, scored, _, has_index_query = self._matching_rows(base)
+        opts = opts or {}
+        matches, _, _, _ = self._matching_rows(opts, rank=False)
+        rows = self._filter_rows(matches, {key: value for key, value in opts.items()
+                                           if key not in FACET_FILTER_KEYS})
+        groups = {}
+        for name, (_, keys) in FACET_FILTERS.items():
+            selected = {key: opts[key] for key in keys if opts.get(key)}
+            if selected:
+                accepted = self._filter_rows(rows, selected)
+                if len(accepted) != len(rows):
+                    groups[name] = {id(paper) for paper in accepted}
 
-        def strip_year(target):
-            target["yearFrom"] = ""
-            target["yearTo"] = ""
-            target["years"] = ""
-
-        def strip_author(target):
-            target["author"] = ""
-            target["authors"] = ""
-
-        def strip_venue(target):
-            target["venue"] = ""
-            target["venues"] = ""
-
-        def strip_type(target):
-            target["type"] = "all"
-
-        def strip_tag(target):
-            target["tags"] = []
-
-        strip_class = {"year": strip_year, "author": strip_author,
-                       "venue": strip_venue, "type": strip_type, "tag": strip_tag}
-
-        def list_for(cls):
-            """取「去掉某类条件」之后的结果集（按列表项形状，计数用）。"""
-            o = dict(base)
-            stripper = strip_class.get(cls)
-            if stripper:
-                stripper(o)
-            rows = self._sort_rows(self._filter_rows(matches, o), o, scored, has_index_query)
-            return [self.to_list_item(row) for row in rows]
-
-        def count_by(items, pick, compare=None):
-            counter = {}
-            for item in items:
-                for raw in pick(item) or []:
+        counts = {name: Counter() for name in FACET_FILTERS}
+        total = 0
+        # 一篇文献未通过恰好一类过滤时，只计入该类分面。
+        for paper in rows:
+            row_id = id(paper)
+            missing = [name for name, accepted in groups.items() if row_id not in accepted]
+            if len(missing) > 1:
+                continue
+            if not missing:
+                total += 1
+            for name in missing or counts:
+                field, _ = FACET_FILTERS[name]
+                values = paper.get(field) if field in ("authors", "tags") else [paper.get(field)]
+                for raw in values or []:
                     value = ("" if raw is None else str(raw)).strip()
-                    if not value:
-                        continue
-                    counter[value] = counter.get(value, 0) + 1
-            rows = [{"value": value, "count": count} for value, count in counter.items()]
-            if compare:
-                rows.sort(key=cmp_to_key(compare))
-            else:
-                rows.sort(key=lambda row: (-row["count"], _name_key(row["value"])))
-            return {"items": rows[: _limit_of(base.get("facetLimit"), 6)],
-                    "distinct": len(rows)}
+                    if value:
+                        counts[name][value] += 1
 
-        all_items = list_for("none")
-        return {
-            "total": len(all_items),
-            "years": count_by(list_for("year"), lambda it: [it["year"]] if it.get("year") else [],
-                              lambda a, b: _cmp(_number(b["value"]), _number(a["value"]))),
-            "authors": count_by(list_for("author"), lambda it: it.get("authors") or []),
-            "venues": count_by(list_for("venue"), lambda it: [it["venue"]] if it.get("venue") else []),
-            "types": count_by(list_for("type"), lambda it: [it["type"]] if it.get("type") else []),
-            "tags": count_by(list_for("tag"), lambda it: it.get("tags") or []),
-        }
+        limit = _limit_of(opts.get("facetLimit"), 6)
+        result = {"total": total}
+        for name, counter in counts.items():
+            if name == "years":
+                ordered = sorted(counter, key=_number, reverse=True)
+            else:
+                ordered = sorted(counter, key=lambda value: (-counter[value], _name_key(value), value))
+            result[name] = {
+                "items": [{"value": value, "count": counter[value]} for value in ordered[:limit]],
+                "distinct": len(ordered),
+            }
+        return result
 
     # ------------------------------------------------------------------ 列表项
     def to_list_item(self, paper, score=None):

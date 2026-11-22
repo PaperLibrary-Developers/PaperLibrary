@@ -287,7 +287,7 @@ def facets(ctx):
         "authors": library.authors(params.get("authorLimit")),
         "venues": library.venues(params.get("venueLimit")),
         "tags": library.tags(),
-        "years": library.stats().get("byYear") or [],
+        "years": library.years(),
         "fulltext": _fulltext_stats(services),
         "query": result,
     })
