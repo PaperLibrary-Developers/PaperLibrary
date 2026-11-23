@@ -850,6 +850,12 @@ const { h, toast, debounce } = util
     document.addEventListener('folders:changed', () => {
       if (activeFolderTree) activeFolderTree.reload()
     })
+    document.addEventListener('library:imported', () => {
+      refreshMeta()
+      foldersUi.notifyChanged()
+      const { path } = parseHash()
+      if (path === '/' || path === '/starred') scheduleRender({ force: true })
+    })
     if (!location.hash) {
       location.hash = '#/'
       scheduleRender()

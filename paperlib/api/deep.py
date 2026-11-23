@@ -51,8 +51,10 @@ def run_analysis(ctx):
         full_text = ""
 
     analysis = deep_analysis.run(services, paper, figures, full_text)
+    saved = True
     try:
         store.repo.save_analysis(paper_id, KIND, analysis)
     except Exception as exc:  # noqa: BLE001 - 落库失败仍返回结果（前端能看）
+        saved = False
         print("[deep] 分析结果落库失败：%s" % exc)
-    ctx.json(200, {"ok": True, "analysis": analysis, "saved": True})
+    ctx.json(200, {"ok": True, "analysis": analysis, "saved": saved})

@@ -400,6 +400,7 @@
           '&name=' + encodeURIComponent(file.name || 'document.pdf')
         const xhr = new XMLHttpRequest()
         xhr.open('POST', url)
+        xhr.timeout = 5 * 60 * 1000
         xhr.setRequestHeader('Content-Type', file.type || 'application/pdf')
         if (onProgress && xhr.upload) {
           xhr.upload.onprogress = ev => {
@@ -413,6 +414,7 @@
           else reject(new ApiError((data && data.error) || '预检失败（HTTP ' + xhr.status + '）', xhr.status))
         }
         xhr.onerror = () => reject(new ApiError('上传过程中连接中断', 0))
+        xhr.ontimeout = () => reject(new ApiError('上传或解析 PDF 超时，请重试', 0))
         xhr.send(file)
       })
     },

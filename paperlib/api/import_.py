@@ -171,7 +171,10 @@ def pdf_confirm(ctx):
                 except Exception:
                     services.library.remove(created.get("id"))
                     raise
-            extract = services.extract_paper_fulltext(services.library.get(created.get("id"))) or {}
+            try:
+                extract = services.extract_paper_fulltext(services.library.get(created.get("id"))) or {}
+            except Exception as exc:  # noqa: BLE001 - 原文已入库，正文抽取可以单独重试
+                extract = {"ok": False, "error": str(exc)}
             imported.append({
                 "id": created.get("id"),
                 "title": created.get("title"),

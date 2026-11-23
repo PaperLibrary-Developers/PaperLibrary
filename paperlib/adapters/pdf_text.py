@@ -124,27 +124,14 @@ def page_lines(doc, page_number):
     return [line["text"] for line in page_rich_lines(doc, page_number)]
 
 
-def _repair_page(text, vocab_pages):
-    """可选：接上 T1 的 shared.pure.text_repair（PyMuPDF 下连字/断词问题少，缺失就原样返回）。"""
+def _repair_pages(chunks):
+    """整篇的词表只建一次，各页共用。"""
     try:
         from shared.pure import text_repair as tr
-    except Exception:  # noqa: BLE001
-        return text
-    repair = (getattr(tr, "repair_text", None)
-              or getattr(tr, "repair", None)
-              or getattr(tr, "repairText", None))
-    if not callable(repair):
-        return text
-    build = getattr(tr, "build_word_set", None) or getattr(tr, "buildWordSet", None)
-    if callable(build):
-        try:
-            return str(repair(text, build(vocab_pages)))
-        except Exception:  # noqa: BLE001 - 签名不一致时退回单参调用
-            pass
-    try:
-        return str(repair(text))
-    except Exception:  # noqa: BLE001 - 纯函数签名不一致时不要炸掉抽取
-        return text
+        vocab = tr.build_word_set(" ".join(chunks))
+        return [tr.repair_text(chunk, vocab) for chunk in chunks]
+    except Exception:  # noqa: BLE001 - 修复器失败仍保留原始抽取结果
+        return chunks
 
 
 def extract_text(abs_path, options=None):
@@ -162,8 +149,7 @@ def extract_text(abs_path, options=None):
             if text:
                 chunks.append(text)
             per_page.append({"page": number, "lines": len(lines), "chars": len(text)})
-        vocab = " ".join(chunks)
-        pages = [_repair_page(chunk, vocab) for chunk in chunks]
+        pages = _repair_pages(chunks)
         return {
             "pages": int(doc.page_count),
             "text": "\n\n".join(p for p in pages if p),

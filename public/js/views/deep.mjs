@@ -12,6 +12,8 @@ import { paperPicker } from './paper-pick.mjs'
 import * as md from '../markdown.mjs'
 
 const { h, toast, formatDate, relTime, truncate } = util
+const pendingAnalyses = new Map()
+const unsavedAnalyses = new Map()
 
 /** 本地降级结果的识别：契约要求无 Key 时 fields 里标注这句话 */
 const LOCAL_RE = /未配置大模型|仅本地分析|本地分析/
@@ -129,6 +131,7 @@ function deepHandler (ctx) {
   let paper = null
   let analysis = null
   let running = false
+  let saved = true
 
   async function loadPaper () {
     try {
@@ -177,7 +180,9 @@ function deepHandler (ctx) {
     const fieldEntries = Object.entries(fields)
     const local = analysisLooksLocal(analysis)
     const metaBits = []
-    if (analysis.updatedAt) {
+    if (!saved) {
+      metaBits.push('写入失败，结果暂存于当前页面会话')
+    } else if (analysis.updatedAt) {
       metaBits.push('缓存于 ' + formatDate(analysis.updatedAt) + (relTime(analysis.updatedAt) ? '（' + relTime(analysis.updatedAt) + '）' : ''))
     }
     if (analysis.model) metaBits.push('模型：' + analysis.model)
@@ -217,17 +222,29 @@ function deepHandler (ctx) {
 
   /* ---------------- 运行（§8） ---------------- */
 
-  async function runAnalysis (force) {
+  async function runAnalysis (force, existing) {
     if (running) return
+    let pending = existing || pendingAnalyses.get(paperId)
+    if (!pending) {
+      pending = api.runDeepAnalysis(paperId, { force: !!force }).then(res => {
+        if (res.saved) unsavedAnalyses.delete(paperId)
+        else unsavedAnalyses.set(paperId, res.analysis)
+        return res
+      }).finally(() => pendingAnalyses.delete(paperId))
+      pendingAnalyses.set(paperId, pending)
+    }
     running = true
     renderAnalysis()
     try {
-      const res = await api.runDeepAnalysis(paperId, { force: !!force })
+      const res = await pending
       if (isStale()) return
       analysis = (res && res.analysis) || null
+      saved = res.saved !== false
       running = false
       renderAnalysis()
-      if (analysisLooksLocal(analysis)) {
+      if (!saved) {
+        toast('分析完成，结果暂存于当前页面会话', 'warn')
+      } else if (analysisLooksLocal(analysis)) {
         toast('已生成本地分析（大模型未配置或调用失败）')
       } else {
         toast(force ? '已重新分析并保存' : '分析完成并保存')
@@ -254,8 +271,22 @@ function deepHandler (ctx) {
   /* ---------------- 启动 ---------------- */
 
   async function boot () {
+    const pending = pendingAnalyses.get(paperId)
+    if (pending) {
+      await Promise.all([loadPaper(), runAnalysis(false, pending)])
+      return
+    }
     await loadPaper()
     if (isStale()) return
+    if (!paper) return
+    const started = pendingAnalyses.get(paperId)
+    if (started) return runAnalysis(false, started)
+    if (unsavedAnalyses.has(paperId)) {
+      analysis = unsavedAnalyses.get(paperId)
+      saved = false
+      renderAnalysis()
+      return
+    }
     try {
       const res = await api.getDeepAnalysis(paperId)
       if (isStale()) return

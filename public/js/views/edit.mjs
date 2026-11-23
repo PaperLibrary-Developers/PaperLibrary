@@ -140,7 +140,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
   }
 
   async function editHandler (ctx) {
-    const { outlet, routeParams, isStale } = ctx
+    const { outlet, routeParams, signal, isStale } = ctx
     const id = routeParams.id || null
     const isNew = !id
 
@@ -190,6 +190,10 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
 
     function setBusy (value) {
       busy = !!value
+      if (isStale()) {
+        if (!busy) cleanupBatch()
+        return
+      }
       if (busy) browseBtn.setAttribute('disabled', '')
       else browseBtn.removeAttribute('disabled')
       importPanel.classList.toggle('is-busy', busy)
@@ -209,6 +213,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
     doiInput.addEventListener('keydown', ev => {
       if (ev.key !== 'Enter') return
       ev.preventDefault()
+      if (busy) return
       const value = doiInput.value.trim()
       if (!value) { toast('先粘贴一个 DOI，或直接把 PDF 拖进来', 'warn'); return }
       if (!looksLikeDoi(value)) {
@@ -250,6 +255,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
       progressBox.hidden = false
       let done = 0
       for (const file of accepted) {
+        if (isStale()) break
         progressBox.replaceChildren(
           h('div.import-progress-bar',
             h('div.import-progress-fill', { style: { width: Math.round(done / accepted.length * 100) + '%' } })),
@@ -286,6 +292,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
       }
       progressBox.hidden = true
       setBusy(false)
+      if (isStale()) return
       const failed = cards.filter(c => c.error).length
       if (failed) toast(failed + ' 个文件解析失败，已在卡片上标出', 'warn')
       else toast('解析完成，请核对卡片后导入')
@@ -495,14 +502,13 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
     }
 
     async function singleImport (entry) {
+      if (busy) return
       setBusy(true)
       try {
         const ok = await importOne(entry)
         if (ok) {
           toast('已导入 1 篇')
-          refreshMeta()
-          foldersUi.notifyChanged()
-          renderCards()
+          document.dispatchEvent(new Event('library:imported'))
         }
       } catch (err) {
         toast('导入失败：' + err.message, 'error')
@@ -512,6 +518,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
     }
 
     async function importAll () {
+      if (busy) return
       const list = cards.filter(c => !c.error).slice()
       if (!list.length) return
       setBusy(true)
@@ -525,9 +532,7 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
         }
       }
       setBusy(false)
-      renderCards()
-      refreshMeta()
-      foldersUi.notifyChanged()
+      if (ok) document.dispatchEvent(new Event('library:imported'))
       if (failed.length) {
         toast('导入 ' + ok + ' 篇，' + failed.length + ' 篇失败：' + failed[0], 'warn')
       } else {
@@ -720,12 +725,11 @@ import { go, refreshMeta } from '../shell/app-api.mjs'
     setTimeout(() => doiInput.focus(), 60)
     document.onkeydown = null
 
-    // 离开页面时把还没导入的临时文件清掉（已导入的早就转移走了）
-    window.addEventListener('hashchange', function onLeave () {
-      if (/^#\/new/.test(window.location.hash || '')) return
-      window.removeEventListener('hashchange', onLeave)
-      if (cards.some(c => c.kind === 'pdf')) api.cancelPdfImport(batch).catch(() => {})
-    })
+    // 等正在确认的批次用完临时文件，再清理没有提交的草稿。
+    function cleanupBatch () {
+      if (!busy && cards.some(c => c.kind === 'pdf')) api.cancelPdfImport(batch).catch(() => {})
+    }
+    signal.addEventListener('abort', cleanupBatch, { once: true })
   }
 
   /* ---------------- 编辑已有文献：单一表单 ---------------- */

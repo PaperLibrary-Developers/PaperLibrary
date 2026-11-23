@@ -7,22 +7,12 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from pathlib import Path
 
-from paperlib.util import ensure_dir, mime_type, safe_path_join
-
-
-def _base36(n: int) -> str:
-    if n == 0:
-        return "0"
-    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
-    out = []
-    while n:
-        n, rem = divmod(n, 36)
-        out.append(digits[rem])
-    return "".join(reversed(out))
+from paperlib.util import safe_path_join
 
 
 class StaticHandler:
@@ -33,6 +23,14 @@ class StaticHandler:
         self.vendor_dir = Path(vendor_dir or (self.root / "vendor"))
         self.pdfjs_dir = self.vendor_dir / "pdfjs"
         self.katex_dir = self.vendor_dir / "katex"
+        # 相对 import 会继承入口前缀，前缀必须覆盖整棵模块依赖图。
+        digest = hashlib.sha256()
+        for directory in (self.public_dir, self.shared_dir):
+            for asset in sorted(directory.rglob("*")):
+                if asset.suffix in (".css", ".mjs", ".js") and asset.is_file():
+                    digest.update(asset.relative_to(directory).as_posix().encode("utf-8") + b"\0")
+                    digest.update(hashlib.sha256(asset.read_bytes()).digest())
+        self.asset_version = digest.hexdigest()[:16]
 
     # ---------- vendor ----------
     def serve_pdfjs(self, ctx):
@@ -52,30 +50,28 @@ class StaticHandler:
     # ---------- shared ----------
     def serve_shared(self, ctx):
         pathname = ctx.pathname
-        versioned = re.match(r"^/__v/[^/]+/(.*)$", pathname)
+        versioned = re.match(r"^/__v/([^/]+)/(.*)$", pathname)
         if versioned:
-            pathname = "/" + versioned.group(1)
+            pathname = "/" + versioned[2]
         rel = re.sub(r"^/shared/?", "", pathname)
         abs_path = safe_path_join(self.shared_dir, rel)
         if not abs_path or not os.path.isfile(abs_path):
             return ctx.fail(404, "共享模块不存在：" + rel)
-        cache = "public, max-age=31536000, immutable" if versioned else "no-cache"
+        cache = "public, max-age=31536000, immutable" if versioned and versioned[1] == self.asset_version else "no-cache"
         return ctx.send_file(abs_path, cache=cache)
 
     # ---------- public ----------
     def with_version(self, abs_path: Path):
-        try:
-            mtime = int(round(os.stat(abs_path).st_mtime * 1000))
-        except OSError:
+        if not abs_path.is_file():
             return None
         rel = Path(abs_path).relative_to(self.public_dir).as_posix()
-        return "/__v/" + _base36(mtime) + "/" + rel
+        return "/__v/" + self.asset_version + "/" + rel
 
     def serve_static(self, ctx):
         pathname = ctx.pathname
-        versioned = re.match(r"^/__v/[^/]+/(.*)$", pathname)
+        versioned = re.match(r"^/__v/([^/]+)/(.*)$", pathname)
         if versioned:
-            pathname = "/" + versioned.group(1)
+            pathname = "/" + versioned[2]
         elif ctx.has_query("v"):
             pathname = re.sub(r"^/__v/[^/]+/", "/", pathname)
         if pathname.startswith("/shared/"):
@@ -107,5 +103,5 @@ class StaticHandler:
             return ctx.send_bytes(200, body, "text/html; charset=utf-8",
                                   headers={"Cache-Control": "no-store, must-revalidate"})
 
-        cache = "public, max-age=31536000, immutable" if (versioned or ctx.has_query("v")) else "no-cache"
+        cache = "public, max-age=31536000, immutable" if versioned and versioned[1] == self.asset_version else "no-cache"
         return ctx.send_file(abs_path, cache=cache)
