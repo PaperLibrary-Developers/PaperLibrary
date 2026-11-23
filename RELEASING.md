@@ -90,8 +90,21 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 任一 FAIL 即判定发布失败；WARN 需人工确认（例如历史资产没有 version.json）。
 
-## 5. 当前状态（2026-11-22）
+## 5. 当前状态（2026-11-24）
 
+- **v2.0 已发布**（2026-11-24，版本 `2.0.0`；tag `v2.0`（annotated `be9a37f7`）→ **`28c2b2d9`**，代号 Nexus→HELIX、主页文件夹卡片与子文件夹标签页、图表按图注自动提取与定位、开屏公告、DPAPI 密钥加密与 HTTP 防护、README 与使用文档重写）：
+  - zip `PaperLibrary.v2.0.HELIX.zip` 46,560,320 字节，sha256 `53fdc5d77c6049d2eb7cbb0ceaabf0a82b5e46e0e9160db83a48190f8b8f84e6`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6、minWindows 10.0.17763）、`SHA256SUMS`、`release-v2.0.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、匿名下载、字节数与 SHA-256、zip 无 `data/`、含 `PaperLibrary.exe`）。
+  - 发布前验证：Python 全量 **782 项 / 2 跳过 / 0 失败**（仓库运行）、**782 项 / 3 跳过 / 0 失败**（仓库外重建便携运行时 Python 3.11.9，第 3 个 skip 是便携环境没有 `cryptography` 的交叉校验）；
+    Node **50 项**；API 契约 **64 通过 / 0 失败 / 12 跳过（共 76）**；`tools/check_windows.ps1` 完整模式通过（打包 1023 文件 / 99.0 MB → zip 44.2 MB，解包后用包内解释器复跑契约 64 / 0 / 12）。
+  - 打 tag 后复跑 `test_update_publish` **8 项全通过、0 跳过**。
+  - 本版内容：`36dc0af8`（代号全量改 HELIX）、`24aa6a57`（版本号 2.0.0）、`3b6deb5a`（应用内使用文档更新）、
+    `e52f5576`（README 重写 + 14 张无头浏览器截图 + 开屏公告）、`28c2b2d9`（README 去掉硬编码版本号）；
+    另有 v1.9.1 tag 之后合入的 30 个提交（清单见 Release 正文）。
+  - 兼容性：发布资产改名 `PaperLibrary.<tag>.HELIX.zip`。客户端按**签名清单里的 URL** 下载，v1.9.1 及更早版本仍能正常升级；
+    无端点移除（契约仍 76 条）；`data/` 结构不变，可直接沿用。
+  - 命名约束：历史资产与本文件的历史块保持旧代号 Nexus，不回溯改名——否则与线上真实资产名和 sha256 对不上。
 - **v1.9.1 已发布**（tag `v1.9.1`（annotated `b8e948e4`）→ **`5bd167d6`**，全文检索漏匹配与分面计数不一致修复、移除逐篇全文查询、分面聚合提速、README 重写）：
   - zip `PaperLibrary.v1.9.1.Nexus.zip` 44,106,998 字节，sha256 `c524e2cd1af82632e076fad1a19a34c78f6a14f11b63e80db0cdebd0cf94d7b6`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6）、`SHA256SUMS`、`release-v1.9.1.json`；
