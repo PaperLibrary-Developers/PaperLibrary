@@ -254,7 +254,7 @@ async function detailHandler (ctx) {
     const tag = (ev.target.tagName || '').toLowerCase()
     if (ev.defaultPrevented || tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return
     if (ev.key === 'e') go('#/edit/' + encodeURIComponent(paper.id))
-    if (ev.key === 'Escape') go('#/')
+    if (ev.key === 'Escape') { if (history.length > 1) history.back(); else go('#/') }
   }, { signal })
 }
 

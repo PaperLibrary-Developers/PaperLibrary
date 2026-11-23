@@ -226,32 +226,65 @@ const { h, toast, debounce } = util
     }
   }
 
+  function updateFolderHomeCount () {
+    const el = sidebarCountEls.folders
+    if (!el) return
+    const list = (foldersUi.getCache().folders || []).filter(f => !f.parent)
+    el.textContent = list.length ? String(list.length) : ''
+    el.hidden = !list.length
+  }
+
+  /** 判断当前路由是否处于「文献列表态」（需要顶栏排序与卡片/紧凑视图开关） */
+  function isPaperListView (path, params) {
+    if (path === '/all' || path === '/starred') return true
+    if (path !== '/') return false
+    const sp = params || parseHash().params
+    if (!sp) return false
+    if (sp.has('folder')) return true
+    if (sp.get('q')) return true
+    const type = sp.get('type')
+    if (type && type !== 'all') return true
+    if (sp.get('starred') === 'true') return true
+    return false
+  }
+
   /**
    * 切换页面时更新外壳：
-   *   - 侧栏导航项的 active 高亮（只改 class，不动 DOM 结构）
-   *   - **顶栏按当前路由重画**——因为「排序」「卡片/紧凑」这些控件只在书库首页才该出现。
-   *     之前顶栏只在启动时按首页渲染过一次、之后再没更新，导致搜索页上也显示着首页的控件，
-   *     点一下就执行了首页的逻辑（把地址改回 #/），搜索词和结果被清空。
+   *   - 侧栏导航项的 active 高亮 + 分类文件夹树当前选中同步
+   *   - **顶栏按当前路由重画**——「排序」「卡片/紧凑」只在文献列表态显示，文件夹主页保持清爽。
    */
-  function syncChrome (activePath) {
+  function syncChrome (activePath, activeParams) {
+    const params = activeParams || parseHash().params
+    const hasFolderParam = activePath === '/' && !!(params && params.has('folder'))
     const navItems = document.querySelectorAll('[data-nav]')
     for (const item of navItems) {
       const target = item.getAttribute('data-nav')
-      const active = activePath === target || (target !== '/' && activePath.startsWith(target + '/'))
+      const active = target === '/'
+        ? (activePath === '/' && !hasFolderParam)
+        : (activePath === target || activePath.startsWith(target + '/'))
       item.classList.toggle('active', active)
       // aria-current 也一起同步：侧栏只切 class 不重建，光靠渲染时写的那次会一直是旧的
       if (active) item.setAttribute('aria-current', 'page')
       else item.removeAttribute('aria-current')
     }
+    // 同步侧栏「分类文件夹」树的高亮与父级展开
+    if (activeFolderTree) {
+      if (hasFolderParam) {
+        const raw = params.get('folder') || '/'
+        activeFolderTree.setActive(raw === '/' ? '' : raw)
+      } else {
+        activeFolderTree.setActive(null)
+      }
+    }
     // 顶栏重建：注意只替换 header 本身，出口容器（#outlet）在 main 下面，不受影响
     const oldTopbar = document.getElementById('topbar')
-    const mode = activePath === '/' ? 'list' : 'plain'
+    const mode = isPaperListView(activePath, params) ? 'list' : 'plain'
     if (oldTopbar && oldTopbar.__lvTopbarMode === mode && typeof oldTopbar.__lvTopbarSync === 'function') {
-      // 还是同一类页面（书库 ↔ 书库、其它 ↔ 其它）：结构不变就别整块重画。
+      // 还是同一类页面（书库列表 ↔ 书库列表、其它 ↔ 其它）：结构不变就别整块重画。
       // 整块重画会连带把用户正在输入的搜索框焦点、以及 #标签 联想下拉一起丢掉。
       oldTopbar.__lvTopbarSync()
     } else if (oldTopbar) {
-      const next = renderTopbar(activePath)
+      const next = renderTopbar(activePath, params)
       if (typeof oldTopbar.replaceWith === 'function') oldTopbar.replaceWith(next)
       else if (oldTopbar.parentNode) oldTopbar.parentNode.replaceChild(next, oldTopbar)
     }
@@ -360,8 +393,12 @@ const { h, toast, debounce } = util
     const folderTree = foldersUi.folderTree({ mode: 'side', active: getState().query.folder })
     activeFolderTree = folderTree
     // 先用缓存画（可能为空），再异步拉一次真实目录树
-    foldersUi.load().then(() => { if (activeFolderTree === folderTree) folderTree.reload() }).catch(() => {})
-    const totalEl = navItem('全部文献', '#/', '▤', state.stats ? state.stats.total : null, activePath === '/', 'total')
+    foldersUi.load().then(() => {
+      if (activeFolderTree === folderTree) folderTree.reload()
+      updateFolderHomeCount()
+    }).catch(() => {})
+    const folderHomeEl = navItem('主页', '#/', '🗂', null, activePath === '/', 'folders')
+    const totalEl = navItem('全部文献', '#/all', '▤', state.stats ? state.stats.total : null, activePath === '/all', 'total')
     const starredEl = navItem('我的收藏', '#/starred', '★',
       state.stats && state.stats.starred ? state.stats.starred : null, activePath === '/starred', 'starred')
     const footStats = h('span', state.stats ? `共 ${state.stats.total} 条 · ${state.stats.tags} 个标签` : '读取中…')
@@ -396,7 +433,7 @@ const { h, toast, debounce } = util
           h('span.brand-ver', UI_VERSION)
         )
       ),
-      h('nav.nav', { 'aria-label': '主导航' }, totalEl, starredEl,
+      h('nav.nav', { 'aria-label': '主导航' }, folderHomeEl, totalEl, starredEl,
         navItem('搜索', '#/search', '⌕', null, activePath === '/search', null, () => {
           // 回到上次的搜索条件与结果（用户抱怨过：切去看一篇文献再回来，搜索就被清空了）
           const last = state.lastSearchParams
@@ -470,8 +507,8 @@ const { h, toast, debounce } = util
     )
   }
 
-  function renderTopbar (activePath) {
-    const onList = activePath === '/'
+  function renderTopbar (activePath, activeParams) {
+    const onList = isPaperListView(activePath, activeParams)
     // 标签联想下拉：输入 # 之后出现
     const suggest = h('div.tag-suggest', { id: 'tag-suggest', hidden: true })
     let suggestItems = []
@@ -603,7 +640,9 @@ const { h, toast, debounce } = util
       onchange: ev => {
         state.query.sort = ev.target.value
         state.query.page = 1
-        setHash('', queryToParams())
+        const curPath = parseHash().path
+        const target = curPath === '/all' ? 'all' : (curPath === '/starred' ? 'starred' : '')
+        setHash(target, queryToParams())
       }
     }, ...buildSortOptions())
 
@@ -717,7 +756,8 @@ const { h, toast, debounce } = util
   function registerRoutes () {
     const add = (pattern, handler) => { if (handler) route(pattern, handler) }
     add('/', listHandler)
-    // 「我的收藏」复用书库列表，只是强制只看收藏（单独的地址，侧栏高亮才分得清）
+    // 「全部文献」与「我的收藏」复用书库列表，单独地址让侧栏高亮清晰可辨
+    add('/all', listHandler)
     add('/starred', listHandler)
     add('/paper/:id', detailHandler)
     add('/new', editHandler)
@@ -851,9 +891,10 @@ const { h, toast, debounce } = util
     // 只监听 hashchange（用户手改地址、前进后退）；应用内导航统一走 go() → scheduleRender
     window.addEventListener('hashchange', () => scheduleRender())
     bindShortcuts()
-    // 文件夹增删改 → 刷新侧栏那棵树（保留展开状态与当前选中）
+    // 文件夹增删改 → 刷新侧栏那棵树（保留展开状态与当前选中）及文件夹主页计数
     document.addEventListener('folders:changed', () => {
-      if (activeFolderTree) activeFolderTree.reload()
+      if (activeFolderTree) activeFolderTree.reload().then(() => updateFolderHomeCount()).catch(() => {})
+      else foldersUi.load().then(() => updateFolderHomeCount()).catch(() => {})
     })
     if (!location.hash) {
       location.hash = '#/'

@@ -385,13 +385,14 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .side-folders .fld-row.active .fld-ico { opacity: 1; }
 .side-folders .fld-name { font-size: 14px; }
 .side-folders .fld-count { margin-left: auto; font-size: 12px; }
-/* ▸ 只在侧栏里绝对定位（藏在缩进区），不占 flow 宽度 —— 这是图标能与导航对齐的关键。
-   选择器/管理器里仍用行内 14px 的 ▸，那里不需要和导航对齐。 */
+/* 侧栏里的折叠三角按钮：放在缩进区左侧，给足 18×20px 点击热区与悬停反馈 */
 .side-folders .fld-caret {
-  position: absolute; top: 50%; left: calc(var(--fld-indent, 10px) - 10px);
-  width: 10px; height: 18px; margin: 0; transform: translateY(-50%);
-  font-size: 10px; color: var(--muted);
+  position: absolute; top: 50%; left: calc(var(--fld-indent, 18px) - 18px);
+  width: 18px; height: 20px; margin: 0; border-radius: 5px;
+  transform: translateY(-50%);
+  font-size: 11px; color: var(--muted);
 }
+.side-folders .fld-caret:hover { background: var(--border); color: var(--text); }
 .side-folders .fld-caret.open { transform: translateY(-50%) rotate(90deg); }
 
 .fld-row {
@@ -478,23 +479,193 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 
 /* 列表页目录面包屑 */
 .fld-crumbs {
-  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
-  padding: 8px 12px; margin-bottom: 12px;
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
 }
-.fld-crumbs-ico { font-size: 13px; margin-right: 2px; }
+.fld-back-btn { padding: 4px 9px; font-size: 12.5px; }
+.fld-crumbs-div { color: var(--border-strong); font-size: 12px; margin: 0 2px; }
+.fld-crumbs-ico { font-size: 13px; margin-right: 1px; }
 .fld-crumb {
-  border: 0; background: none; color: var(--accent-text); font-size: 13px; padding: 2px 4px; border-radius: 5px;
+  border: 0; background: none; color: var(--accent-text); font-size: 13px; padding: 2px 5px; border-radius: 5px;
 }
 .fld-crumb:hover { background: var(--accent-soft); }
 .fld-crumb.current { color: var(--text); font-weight: 600; cursor: default; }
 .fld-crumb-sep { color: var(--faint); font-size: 12px; }
+.fld-crumbs-tip { font-size: 12px; color: var(--faint); }
 .fld-deep { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); }
 .fld-deep input { accent-color: var(--accent); }
+
+/* ---------- 文件夹主页（#/ 默认卡片网格） ---------- */
+.fld-home-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 18px;
+}
+.fld-home-title { font-size: 20px; font-weight: 680; letter-spacing: -.01em; color: var(--text); }
+.fld-home-sub { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.fld-home-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.fld-home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+.fld-home-card {
+  display: flex; flex-direction: column; align-items: stretch; text-align: left;
+  padding: 18px 18px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-1);
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
+}
+.fld-home-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+  border-color: var(--accent);
+}
+.fld-home-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.fld-home-card--uncat {
+  background: var(--surface-2);
+  border: 1.5px dashed var(--border-strong);
+  box-shadow: none;
+}
+.fld-home-card--uncat:hover {
+  background: var(--surface);
+  border-style: solid;
+  border-color: var(--accent);
+}
+.fld-home-card--new {
+  background: transparent;
+  border: 1.5px dashed var(--border-strong);
+  box-shadow: none;
+}
+.fld-home-card--new:hover {
+  background: var(--surface);
+  border-style: solid;
+  border-color: var(--accent);
+}
+.fld-home-card-top {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  margin-bottom: 14px;
+}
+.fld-home-ico {
+  width: 42px; height: 42px; border-radius: 11px;
+  display: grid; place-items: center; flex: none;
+  background: var(--accent-soft); color: var(--accent);
+}
+.fld-home-ico.is-muted { background: var(--surface-3); color: var(--muted); }
+.fld-home-ico-svg { display: grid; place-items: center; }
+.fld-home-count {
+  padding: 2px 10px; border-radius: 99px;
+  background: var(--surface-3); color: var(--text);
+  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.fld-home-count.is-muted { color: var(--muted); }
+.fld-home-name {
+  font-size: 15.5px; font-weight: 650; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fld-home-meta {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 6px; font-size: 12.5px; color: var(--muted);
+}
+.fld-home-enter {
+  flex: none; opacity: .58; transition: opacity .15s ease, transform .15s ease;
+  color: var(--accent-text); font-weight: 500;
+}
+.fld-home-card:hover .fld-home-enter { opacity: 1; transform: translateX(2px); }
+.fld-home-kids {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.fld-home-kid {
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 8px; border-radius: 6px;
+  background: var(--surface-2); color: var(--muted); font-size: 11.5px;
+}
+.fld-home-kid.is-more { background: var(--surface-3); color: var(--faint); }
+
+/* ---------- 文件夹内：浏览器式子文件夹标签页 ---------- */
+.fld-tab-shell.has-tabs .fld-tab-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 14px 16px 16px;
+  box-shadow: var(--shadow-1);
+}
+.fld-btabs {
+  display: flex; align-items: flex-end; gap: 4px;
+  padding: 8px 10px 0;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.fld-btab {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 13px 9px;
+  border-radius: 9px 9px 0 0;
+  border: 1px solid transparent; border-bottom: none;
+  background: transparent; color: var(--muted);
+  font-size: 13px; white-space: nowrap; flex: none;
+  transition: background .14s ease, color .14s ease;
+}
+.fld-btab:hover {
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  color: var(--text);
+}
+.fld-btab.active {
+  background: var(--surface);
+  color: var(--accent-text);
+  font-weight: 600;
+  border-color: var(--border);
+  margin-bottom: -1px;
+  padding-bottom: 10px;
+  z-index: 2;
+}
+.fld-btab .fld-ico { display: inline-grid; place-items: center; color: var(--accent); opacity: .88; }
+.fld-btab.active .fld-ico { opacity: 1; }
+.fld-btab-count {
+  padding: 1px 6px; border-radius: 99px;
+  background: var(--surface-2); color: var(--muted);
+  font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums;
+}
+.fld-btab.active .fld-btab-count {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* 三级及以上深层子目录胶囊条 */
+.fld-subbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding-bottom: 12px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.fld-subbar-label { font-size: 12px; color: var(--faint); margin-right: 2px; }
+.fld-subpill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 99px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+  font-size: 12px; transition: background .14s, border-color .14s, color .14s;
+}
+.fld-subpill:hover { border-color: var(--border-strong); color: var(--text); }
+.fld-subpill.active {
+  background: var(--accent-soft); border-color: var(--accent);
+  color: var(--accent-text); font-weight: 600;
+}
+.fld-subpill .fld-ico { display: inline-grid; place-items: center; }
 
 @media (max-width: 720px) {
   .fld-body { grid-template-columns: minmax(0, 1fr); }
   .fld-left { border-right: 0; border-bottom: 1px solid var(--border); max-height: 44vh; }
+  .fld-home-grid { grid-template-columns: minmax(0, 1fr); }
+  .fld-tab-shell.has-tabs .fld-tab-panel { padding: 12px; }
 }
 
 /* 底部区块：文档入口 + 统计提示，整块用 margin-top:auto 贴到侧栏底部 */
