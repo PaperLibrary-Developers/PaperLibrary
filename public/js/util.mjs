@@ -262,23 +262,28 @@ import * as htmlText from '/shared/html-text.mjs'
     const signal = opts.signal
     if (signal && signal.aborted) return Promise.resolve(false)
     return new Promise(resolve => {
+      const previousFocus = document.activeElement
       const close = answer => {
         back.remove()
-        document.removeEventListener('keydown', onKey, true)
+        window.removeEventListener('keydown', onKey, true)
         if (signal) signal.removeEventListener('abort', onAbort)
+        if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
         resolve(answer)
       }
       const onAbort = () => close(false)
       const onKey = ev => {
         if (ev.key !== 'Escape' && ev.key !== 'Enter') return
+        const dialogs = document.querySelectorAll('.confirm-backdrop')
+        if (dialogs[dialogs.length - 1] !== back) return
+        if (ev.key === 'Enter' && back.contains(ev.target) && ev.target.closest('button')) return
         ev.stopImmediatePropagation()
         ev.preventDefault()
         if (ev.key === 'Escape') close(false)
         if (ev.key === 'Enter') close(true)
       }
       const body = h('div', opts.body || '')
-      const back = h('div.modal-back', { onclick: ev => { if (ev.target === back) close(false) } },
-        h('div.modal', { role: 'dialog', 'aria-modal': 'true' },
+      const back = h('div.modal-back.confirm-backdrop', { onclick: ev => { if (ev.target === back) close(false) } },
+        h('div.modal', { role: 'dialog', 'aria-modal': 'true', 'aria-label': opts.title || '请确认' },
           h('h3', opts.title || '请确认'),
           body,
           h('div.actions',
@@ -288,9 +293,9 @@ import * as htmlText from '/shared/html-text.mjs'
         )
       )
       document.body.appendChild(back)
-      document.addEventListener('keydown', onKey, true)
+      window.addEventListener('keydown', onKey, true)
       if (signal) signal.addEventListener('abort', onAbort, { once: true })
-      const first = back.querySelector('.btn.primary, .btn.danger')
+      const first = back.querySelector(opts.danger ? '.btn' : '.btn.primary')
       if (first) first.focus()
     })
   }
