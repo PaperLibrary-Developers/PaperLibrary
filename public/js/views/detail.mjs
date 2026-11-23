@@ -961,9 +961,10 @@ import * as foldersUi from '../folders.mjs'
       const annotations = await loadPdfAnnotations(tab, viewSignal)
       if (!annotations || viewSignal.aborted) return null
       host.replaceChildren()
+      const figureLocation = !tab.file && !tab.view ? data.figureLocation : null
       const viewer = await mountPdfViewer(host, {
         url: tab.url, title: tab.title, downloadUrl: tab.url, signal: viewSignal,
-        initialView: tab.view || (!tab.file ? data.figureLocation : null),
+        initialView: tab.view || figureLocation,
         annotations: annotations.items,
         onAnnotationsChange: items => { if (!viewSignal.aborted) savePdfAnnotations(annotations.state, items) },
         onRegionSelected: (dataUrl, info) => {
@@ -973,6 +974,11 @@ import * as foldersUi from '../folders.mjs'
       if (viewSignal.aborted) return null
       activePdfViewer = viewer
       syncHeight()
+      if (figureLocation) {
+        const topbar = document.getElementById('topbar')
+        host.style.scrollMarginTop = (topbar?.getBoundingClientRect().height || 0) + 'px'
+        host.scrollIntoView({ block: 'start', behavior: 'instant' })
+      }
       return viewer
     }
 
