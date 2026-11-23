@@ -15,6 +15,9 @@ PaperLibrary HELIX（HELIX 文献库）
   PaperLibrary.exe.config —— 那是 .NET 运行配置，不是启动器，双击它不会启动程序；
   它必须保持这个文件名并保持隐藏，改名或删除会影响内置窗口的显示缩放设置。
 
+  主页与分类：左侧栏第一项「主页」是分类文件夹卡片入口，点卡片「进入」逐层下钻，
+            顶部有「← 返回 / 主页」面包屑；目录里的下一级文件夹以卡片排在列表上方，
+            「含子文件夹」开关决定是否把子目录文献一起列出；同级文件夹可拖拽排序。
   整理文献：左侧栏「分类文件夹」里，点标题可折叠/展开，＋ 新建目录、⚙ 管理（改名/删除）；
             改单篇的分类：列表里每篇最左边（星标右边）的文件夹按钮，或卡片/详情页里的分类胶囊；
             改多篇：列表顶部「批量」→ 勾选 → 底部条「移动到目录」；
@@ -25,6 +28,8 @@ PaperLibrary HELIX（HELIX 文献库）
             配了大模型后还能自由提问，它会检索库内文献回答并给出引用来源。
   不会用的时候：点左侧栏最下方的「📖 使用文档」，里面有完整的新手手册
                 （环境准备 → 逐步操作 → 参数解释 → 排错 → 示例）。
+  版本更新：设置与备份 → 关于与更新 → 检查更新；下载完成后点「立即安装」。
+            安装只替换程序文件，data\ 原样保留，失败会回滚到旧版本。
 
   如果窗口没有出现：
     · 看 data\logs\launcher.log 里的原因
@@ -50,7 +55,7 @@ PaperLibrary HELIX（HELIX 文献库）
   data\article\attachments\ 补充材料
   data\images\             图表图片
   data\prefs.json          界面偏好
-  data\settings.json       大模型配置（含 API Key，明文，只在本机）
+  data\settings.json       大模型配置（API Key 用 Windows DPAPI 加密，绑定当前账户与机器）
   data\websearch.json      网络检索配置（Exa）
   data\sources.json        外部题录源配置（OpenAlex）
   data\backups\            自动备份
