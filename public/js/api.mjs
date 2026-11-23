@@ -297,7 +297,7 @@
     getFulltext: id => request('GET', '/api/papers/' + encodeURIComponent(id) + '/fulltext'),
 
     listPapers: params => request('GET', '/api/papers' + qs(params)),
-    getPaper: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id), { signal }),
+    getPaper: (id, signal, figure) => request('GET', '/api/papers/' + encodeURIComponent(id) + qs({ figure }), { signal }),
     createPaper: paper => request('POST', '/api/papers', { body: paper }),
     updatePaper: (id, patch) => request('PUT', '/api/papers/' + encodeURIComponent(id), { body: patch }),
     deletePaper: id => request('DELETE', '/api/papers/' + encodeURIComponent(id)),

@@ -28,6 +28,7 @@ from paperlib.api.paper_scope import require_paper
 from paperlib.assets import parent_path, unique_path
 from paperlib.domain.folders import FolderError
 from paperlib.domain.query import parse_query
+from paperlib.legacy.figures import locate_legacy_caption
 from paperlib.util import now_iso, safe_path_join, to_string_array
 
 # ------------------------------------------------------------------ 小工具
@@ -300,7 +301,7 @@ def get_one(ctx):
         return None
     services = ctx.services
     fulltext = services.fulltext
-    return ctx.json(200, {
+    result = {
         "ok": True,
         "paper": paper,
         "pdfExists": services.library.pdf_exists(paper.get("pdfFile")),
@@ -308,7 +309,20 @@ def get_one(ctx):
             "has": bool(getattr(fulltext, "has", lambda _id: False)(paper.get("id"))),
             "available": _fulltext_available(fulltext) is not False,
         },
-    })
+    }
+    figure_id = ctx.query("figure", "")
+    if figure_id:
+        result["figureLocation"] = None
+        if result["pdfExists"] and figure_id.isascii() and figure_id.isdecimal() and len(figure_id) <= 18:
+            figure = services.db.repo.get_figure(paper["id"], int(figure_id))
+            if figure:
+                try:
+                    location = json.loads(figure["pdf_location"] or "{}")
+                    path = services.db.path_for_paper_file(paper["pdfFile"])
+                    result["figureLocation"] = location or locate_legacy_caption(path, figure["caption"])
+                except (OSError, RuntimeError, ValueError):
+                    pass
+    return ctx.json(200, result)
 
 
 def update(ctx):

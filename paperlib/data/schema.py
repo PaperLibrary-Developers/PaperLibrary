@@ -13,7 +13,7 @@ folders 表仅保留旧版结构。实际分类目录由原文目录提供，pap
 """
 from __future__ import annotations
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 DDL = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS figures (
   ai_description TEXT NOT NULL DEFAULT '',
   figure_type    TEXT NOT NULL DEFAULT '',
   ai_conclusion  TEXT NOT NULL DEFAULT '',
+  pdf_location   TEXT NOT NULL DEFAULT '',
   created_at     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS figures_paper ON figures(paper_id);
@@ -141,5 +142,8 @@ def init_schema(conn) -> None:
     row = conn.execute("PRAGMA user_version").fetchone()
     current = int(row[0]) if row else 0
     if current < SCHEMA_VERSION:
+        columns = {column[1] for column in conn.execute("PRAGMA table_info(figures)")}
+        if "pdf_location" not in columns:
+            conn.execute("ALTER TABLE figures ADD COLUMN pdf_location TEXT NOT NULL DEFAULT ''")
         conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
     conn.commit()

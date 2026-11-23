@@ -78,6 +78,25 @@ def _page_context(page):
         return ""
 
 
+def _location(page, caption_bbox):
+    box = fitz.Rect(caption_bbox) * page.rotation_matrix
+    fraction = (box.y0 - page.rect.y0) / page.rect.height
+    return {"page": page.number + 1, "y": round(max(0, min(1, fraction)), 5)}
+
+
+def locate_legacy_caption(pdf_path, caption):
+    """兼容尚未储存位置的旧图表，按原文图注匹配整段。"""
+    if not caption:
+        return None
+    target = _clean_text(caption, caption_matcher.CAPTION_MAX_CHARS)
+    with fitz.open(str(pdf_path)) as doc:
+        for page in doc:
+            for candidate in caption_matcher.extract_page_captions_with_boxes(page):
+                if candidate["text"] == target:
+                    return _location(page, candidate["bbox"])
+    return None
+
+
 def _pixmap_is_blank(pix) -> bool:
     """粗略判断渲染区域是不是一张白纸（避免把空白版面存成图）。"""
     try:
@@ -130,6 +149,7 @@ def extract_pdf_figures(pdf_path, paper_id, data_dir, options=None):
             if not captions:
                 continue
             context = _page_context(page)
+            boxes = {cap["text"]: cap["bbox"] for cap in captions}
             geo = caption_matcher.match_page_images_with_captions(page, captions)
             matched_captions = set()
 
@@ -172,6 +192,7 @@ def extract_pdf_figures(pdf_path, paper_id, data_dir, options=None):
                     "figIndex": fig_index,
                     "imagePath": relative_image_path(paper_id, name),
                     "caption": _clean_text(caption, 600),
+                    "pdfLocation": _location(page, boxes[caption]),
                     "contextText": context,
                     "figureType": "raster",
                     "aiDescription": "",
@@ -214,6 +235,7 @@ def extract_pdf_figures(pdf_path, paper_id, data_dir, options=None):
                     "figIndex": fig_index,
                     "imagePath": relative_image_path(paper_id, name),
                     "caption": _clean_text(cap["text"], 600),
+                    "pdfLocation": _location(page, cap["bbox"]),
                     "contextText": context,
                     "figureType": "vector_render",
                     "aiDescription": "",

@@ -1251,6 +1251,9 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       if (prior && prior.preset === null && Number.isFinite(prior.scale)) applyZoom(prior.scale)
       else applyFit(prior?.preset === 'page-fit' ? 'page-fit' : 'page-width')
       if (prior && prior.page > 1) jumpToPage(prior.page)
+      if (prior?.page <= total && Number.isFinite(prior.y)) {
+        scrollPagePointIntoView(prior.page, prior.y, 0.6, 'instant')
+      }
       hideStatus()
       // 批注：页已经排好版，把传进来的批注画上去（之后每页渲染完 pagerendered 会再补一次）
       paintAllAnnotations()
@@ -2133,20 +2136,20 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
      * 页面 div 在 pagesinit 之后就有确定尺寸，所以绝大多数情况不用等这一页渲染完。
      * @returns {boolean} 对位成功 true；页还没排出来 false（调用方退回按页跳）
      */
-    function scrollAnnotationIntoView (item) {
-      if (!item || !ui.scroll) return false
-      const info = pageInfoOf(item.page)
+    function scrollPagePointIntoView (page, y, viewportFraction, behavior) {
+      if (!ui.scroll) return false
+      const info = pageInfoOf(page)
       if (!info) return false
       const box = clientRectOf(ui.scroll)
       if (!box || !box.height) return false
-      const offsetInPage = annotationAnchorY(item) * info.rect.height
+      const offsetInPage = clamp01(y) * info.rect.height
       // 视口坐标 → 滚动内容坐标：这一页在视口里的位置 + 已滚过的距离 + 页内偏移
       const contentTop = (info.rect.top - box.top) + (ui.scroll.scrollTop || 0) + offsetInPage
-      const target = contentTop - box.height * 0.3
+      const target = contentTop - box.height * viewportFraction
       const maxTop = Math.max(0, (ui.scroll.scrollHeight || 0) - (ui.scroll.clientHeight || 0))
       const top = Math.max(0, maxTop > 0 ? Math.min(maxTop, target) : target)
       try {
-        if (typeof ui.scroll.scrollTo === 'function') ui.scroll.scrollTo({ top: top, behavior: 'smooth' })
+        if (typeof ui.scroll.scrollTo === 'function') ui.scroll.scrollTo({ top, behavior })
         else ui.scroll.scrollTop = top
       } catch (err) {
         try { ui.scroll.scrollTop = top } catch (err2) {}
@@ -2159,7 +2162,7 @@ export function getPdfjsBase () { return getVendorBase('pdfjs') }
       const item = state.annotations.find(a => a.id === id)
       if (!item) return
       // 精确对位优先；页 div 还没建出来（极早期 / 文档还没排版）才退回「按页跳」
-      if (!scrollAnnotationIntoView(item)) goToPage(item.page)
+      if (!scrollPagePointIntoView(item.page, annotationAnchorY(item), 0.3, 'smooth')) goToPage(item.page)
       paintPageAnnotations(item.page)
       flashAnnotation(item.id, item.page)      // flash 内部会再按当前滚动位置重画一次
       if (state.annotPanelOpen) renderAnnotPanel()

@@ -21,8 +21,9 @@ import * as foldersUi from '../folders.mjs'
   }
 
   async function detailHandler (ctx) {
-    const { outlet, routeParams, isStale, signal } = ctx
+    const { outlet, params, routeParams, isStale, signal } = ctx
     const id = routeParams.id
+    const figureId = params.get('figure')
     const toast = (...args) => { if (!isStale()) util.toast(...args) }
     const timers = new Set()
     let scrollFrame = null
@@ -86,7 +87,7 @@ import * as foldersUi from '../folders.mjs'
 
     let data
     try {
-      data = await api.getPaper(id, signal)
+      data = await api.getPaper(id, signal, figureId)
     } catch (err) {
       if (isStale()) return
       outlet.replaceChildren(h('div.content', h('div.empty',
@@ -99,6 +100,7 @@ import * as foldersUi from '../folders.mjs'
     if (isStale()) return
     const paper = data.paper
     const pdfOk = data.pdfExists
+    if (figureId && !data.figureLocation) toast('原文中没有找到这张图表的位置', 'warn')
 
     /* ---------- PDF 批注（原文与每份 SI 分别写入） ---------- */
     async function loadPdfAnnotations (tab, viewSignal) {
@@ -960,7 +962,8 @@ import * as foldersUi from '../folders.mjs'
       if (!annotations || viewSignal.aborted) return null
       host.replaceChildren()
       const viewer = await mountPdfViewer(host, {
-        url: tab.url, title: tab.title, downloadUrl: tab.url, signal: viewSignal, initialView: tab.view,
+        url: tab.url, title: tab.title, downloadUrl: tab.url, signal: viewSignal,
+        initialView: tab.view || (!tab.file ? data.figureLocation : null),
         annotations: annotations.items,
         onAnnotationsChange: items => { if (!viewSignal.aborted) savePdfAnnotations(annotations.state, items) },
         onRegionSelected: (dataUrl, info) => {
@@ -1967,7 +1970,11 @@ import * as foldersUi from '../folders.mjs'
       if (signal.aborted) return null
       if (reason) console.warn('[pdf] 使用浏览器自带查看器：' + reason)
       host.classList.add('pdf-fallback')
-      host.replaceChildren(h('iframe.pdf-frame', { src: url + '#view=FitH', title: 'PDF 预览' }))
+      const page = options.initialView?.page
+      host.replaceChildren(h('iframe.pdf-frame', {
+        src: url + (page > 0 ? '#page=' + page + '&view=FitH' : '#view=FitH'),
+        title: 'PDF 预览'
+      }))
       signal.addEventListener('abort', () => host.replaceChildren(), { once: true })
       return null
     }

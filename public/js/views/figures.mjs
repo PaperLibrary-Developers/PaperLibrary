@@ -341,7 +341,10 @@ function figuresHandler (ctx) {
           item.paperId
             ? h('button.btn', {
               type: 'button',
-              onclick: () => { closeLightbox(overlay, onKey); go('paper/' + encodeURIComponent(item.paperId)) }
+              onclick: () => {
+                closeLightbox(overlay, onKey)
+                go('paper/' + encodeURIComponent(item.paperId), { figure: item.id })
+              }
             }, '打开文献详情')
             : null,
           item.paperId

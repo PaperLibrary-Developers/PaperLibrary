@@ -335,6 +335,13 @@ class Repository:
         with self._lock:
             return int(self.conn.execute("SELECT COUNT(*) FROM figures").fetchone()[0])
 
+    def get_figure(self, paper_id, figure_id):
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM figures WHERE paper_id = ? AND id = ?", (paper_id, figure_id)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def insert_figures(self, paper_id, figures, replace=True):
         with self._lock, self.conn:
             if replace:
@@ -342,11 +349,12 @@ class Repository:
             for fig in figures:
                 self.conn.execute(
                     "INSERT INTO figures(paper_id,fig_index,image_path,caption,context_text,"
-                    "ai_description,figure_type,ai_conclusion,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    "ai_description,figure_type,ai_conclusion,pdf_location,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (paper_id, int(fig.get("figIndex") or 0), fig.get("imagePath") or "",
                      fig.get("caption") or "", fig.get("contextText") or "",
                      fig.get("aiDescription") or "", fig.get("figureType") or "",
-                     fig.get("aiConclusion") or "", fig.get("createdAt") or now_iso()),
+                     fig.get("aiConclusion") or "", json.dumps(fig.get("pdfLocation") or {}),
+                     fig.get("createdAt") or now_iso()),
                 )
 
     def delete_figure(self, figure_id):

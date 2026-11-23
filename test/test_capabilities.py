@@ -485,6 +485,15 @@ class EndpointTest(ServerCase):
                          ["aiConclusion", "aiDescription", "caption", "contextText", "figIndex",
                           "figureType", "hasImage", "id", "imagePath", "paperId"])
         self.assertTrue(figure["hasImage"])
+        second = extracted["figures"][1]
+        status, detail = self.get_json("/api/papers/%s?figure=%d" % (self.paper_a["id"], second["id"]))
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["figureLocation"]["page"], 2)
+        self.assertTrue(0.3 < detail["figureLocation"]["y"] < 0.6)
+        with self.store.repo.conn:
+            self.store.repo.conn.execute("UPDATE figures SET pdf_location = '' WHERE id = ?", (second["id"],))
+        _, legacy_detail = self.get_json("/api/papers/%s?figure=%d" % (self.paper_a["id"], second["id"]))
+        self.assertEqual(legacy_detail["figureLocation"], detail["figureLocation"])
 
         status, gallery = self.get_json("/api/figures")
         self.assertEqual(status, 200)
