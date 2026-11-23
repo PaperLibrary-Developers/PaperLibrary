@@ -205,22 +205,10 @@ def extract_figures(ctx):
         return ctx.fail(400, "PDF 文件不存在：" + pdf_file)
 
     try:
-        result = legacy_figures.extract_pdf_figures(abs_pdf, paper_id, data_dir)
+        saved = services.extract_paper_figures(paper, force=force)
     except Exception as exc:  # noqa: BLE001 - 契约 §4：提取失败 500 且带原因
         return ctx.fail(500, "图表提取失败：" + (str(exc) or type(exc).__name__))
 
-    rows = result.get("figures") or []
-    if not rows and not existing:
-        # 旧库迁移过来的图片已经在 data/images/<paperId>/ 里：直接复用，不重复渲染
-        rows = legacy_figures.rows_from_existing_images(data_dir, paper_id)
-    if rows:
-        store.repo.insert_figures(paper_id, rows, replace=True)
-        saved = store.repo.list_figures(paper_id) or []
-    elif force:
-        store.repo.insert_figures(paper_id, [], replace=True)
-        saved = []
-    else:
-        saved = existing
     items = [figure_item(row, data_dir) for row in saved]
     ctx.json(200, {"ok": True, "extracted": len(items), "figures": items})
 

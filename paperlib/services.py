@@ -9,6 +9,7 @@ import shutil
 import time
 from functools import partial
 from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 
 from paperlib import __version__
@@ -20,6 +21,7 @@ from paperlib.adapters.sources import Sources
 from paperlib.adapters.websearch import WebSearch
 from paperlib.domain.folders import Folders
 from paperlib.domain.library import Library
+from paperlib.legacy import figures
 from paperlib.update.service import UpdateService
 from paperlib.util import ensure_dir, now_iso, safe_path_join
 
@@ -85,6 +87,7 @@ def create_services(config, store):
     prefs = Prefs(store)
     external.configure(sources)
     metadata.configure(sources)
+    figure_extract_lock = Lock()
 
     def extract_paper_fulltext(paper):
         if not paper or not paper.get("pdfFile"):
@@ -105,6 +108,33 @@ def create_services(config, store):
             raise
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": "提取失败：" + str(exc)}
+
+    def extract_paper_figures(paper, *, force=False):
+        paper_id = paper["id"]
+        with figure_extract_lock:
+            existing = store.repo.list_figures(paper_id)
+            if existing and not force:
+                return existing
+            path = store.path_for_paper_file(paper.get("pdfFile"))
+            if not path or not Path(path).is_file():
+                raise ValueError("原文 PDF 不存在")
+            result = figures.extract_pdf_figures(path, paper_id, store.data_dir)
+            with store.paper_writes():
+                latest = library.get(paper_id)
+                if latest and all(latest.get(key) == paper.get(key) for key in ("pdfFile", "pdfSha256")):
+                    store.repo.insert_figures(paper_id, result["figures"], replace=True)
+            return store.repo.list_figures(paper_id)
+
+    def extract_imported_pdf(paper):
+        try:
+            extract = extract_paper_fulltext(paper)
+        except Exception as exc:  # noqa: BLE001 - 抽取失败时，保留已经入库的原文
+            extract = {"ok": False, "error": str(exc)}
+        try:
+            extract_paper_figures(paper, force=True)
+        except Exception as exc:  # noqa: BLE001 - 图表仍可在画廊手动重提
+            print("[figures] 自动提取失败：%s" % exc)
+        return extract
 
     def trigger_auto_summary_zh(paper_id):
         # 自动中文总结改为同步调用领域函数（避免 HTTP 自请求），由 T4 实现
@@ -149,6 +179,8 @@ def create_services(config, store):
         pick_passages=pick_passages,
         runtime=runtime,
         extract_paper_fulltext=extract_paper_fulltext,
+        extract_paper_figures=extract_paper_figures,
+        extract_imported_pdf=extract_imported_pdf,
         extract_attachment_text=partial(extract_attachment_text, extract_pdf=fulltext.extract_from_file),
         trigger_auto_summary_zh=trigger_auto_summary_zh,
         update=UpdateService(config.root, config.data_dir),

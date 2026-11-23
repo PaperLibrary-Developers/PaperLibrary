@@ -232,7 +232,7 @@ function figuresHandler (ctx) {
         h('p', {
           text: hasFilter()
             ? '换个关键词或类型试试；也可以清空筛选看全部。'
-            : '图表来自 PDF 自动提取：先给文献关联 PDF，再在单篇文献里点「从原文重提图表」。'
+            : '导入原文 PDF 时会自动提取有图注的图表，也可以为单篇文献从原文重提。'
         }),
         h('div', { style: { display: 'flex', gap: '8px' } },
           h('button.btn.primary', { type: 'button', onclick: () => go('') }, '去文献库'),

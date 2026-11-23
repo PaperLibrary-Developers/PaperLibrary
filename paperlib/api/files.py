@@ -86,13 +86,7 @@ def upload(ctx):
             return ctx.fail(400, "文件名不合法")
         store.attach_file(paper.get("id") if paper else "", buf, {"fileName": file_name})
 
-    # 上传完顺手把正文提取出来：AI 总结马上就能用上正文，不用用户再点一次「提取全文」
-    extract = None
-    if paper:
-        try:
-            extract = services.extract_paper_fulltext(services.library.get(paper.get("id")))
-        except Exception as exc:  # noqa: BLE001
-            extract = {"ok": False, "error": str(exc)}
+    extract = services.extract_imported_pdf(services.library.get(paper.get("id"))) if paper else None
     ctx.json(201, {"ok": True, "pdfFile": file_name, "size": len(buf), "extract": extract})
 
 

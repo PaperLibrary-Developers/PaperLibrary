@@ -211,7 +211,7 @@ class Importer:
                     continue
                 imported.append({"id": card["id"], "file": relative})
                 digests.add(digest)
-                services.extract_paper_fulltext(card)
+                services.extract_imported_pdf(card)
             return {"scan": self.scan_pdf_contents(files), "imported": imported, "relinked": relinked, "failed": failed}
 
     def _reconcile_pdf_locations(self, files):

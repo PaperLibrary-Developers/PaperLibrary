@@ -108,7 +108,6 @@ def extract_pdf_figures(pdf_path, paper_id, data_dir, options=None):
     max_renders = int(options.get("maxVectorRenders") or MAX_VECTOR_RENDERS)
     doc = fitz.open(str(pdf_path))
     out_dir = images_dir(data_dir, paper_id)
-    ensure_dir(out_dir)
 
     figures = []
     skipped = []
@@ -126,24 +125,18 @@ def extract_pdf_figures(pdf_path, paper_id, data_dir, options=None):
             if fig_index >= max_figures:
                 break
             page = doc[page_no]
+            captions = [cap for cap in caption_matcher.extract_page_captions_with_boxes(page)
+                        if cap["is_head"]]
+            if not captions:
+                continue
             context = _page_context(page)
-            captions = caption_matcher.extract_page_captions_with_boxes(page)
-            geo = caption_matcher.match_page_images_with_captions(page) or {}
-            matched_caption_ids = set()
-            if geo:
-                for idx, cap in enumerate(captions):
-                    if cap["text"] in geo.values():
-                        matched_caption_ids.add(idx)
+            geo = caption_matcher.match_page_images_with_captions(page, captions)
+            matched_captions = set()
 
             # ---------- 1. 位图 ----------
-            try:
-                image_list = page.get_images(full=True) or []
-            except Exception:  # noqa: BLE001
-                image_list = []
-            for info in image_list:
+            for xref, caption in geo.items():
                 if fig_index >= max_figures:
                     break
-                xref = int(info[0])
                 if xref in seen_xref:
                     continue
                 seen_xref.add(xref)
@@ -170,14 +163,11 @@ def extract_pdf_figures(pdf_path, paper_id, data_dir, options=None):
                 raster_count += 1
                 name = "fig_%03d.%s" % (fig_index, ext)
                 target = out_dir / name
+                ensure_dir(out_dir)
                 with open(target, "wb") as fh:
                     fh.write(blob)
 
-                caption = geo.get(xref, "")
-                if not caption and captions:
-                    pos = image_list.index(info) if info in image_list else 0
-                    if pos < len(captions):
-                        caption = captions[pos]["text"]
+                matched_captions.add(caption)
                 figures.append({
                     "figIndex": fig_index,
                     "imagePath": relative_image_path(paper_id, name),
@@ -191,12 +181,16 @@ def extract_pdf_figures(pdf_path, paper_id, data_dir, options=None):
             # ---------- 2. 矢量图兜底 ----------
             if render_budget <= 0 or not captions or fig_index >= max_figures:
                 continue
-            pending = [cap for idx, cap in enumerate(captions) if idx not in matched_caption_ids]
+            pending = [cap for cap in captions if cap["text"] not in matched_captions]
+            drawings = [item["rect"] for item in page.get_drawings() if item.get("rect")]
             for cap in pending:
                 if render_budget <= 0 or fig_index >= max_figures:
                     break
-                clip = _caption_clip(page, cap["bbox"])
+                table = re.match(r"^(?:Table\b|表)", cap["text"], re.IGNORECASE)
+                clip = _caption_clip(page, cap["bbox"], below=bool(table))
                 if clip is None:
+                    continue
+                if not any(clip.intersects(rect) for rect in drawings):
                     continue
                 try:
                     pix = page.get_pixmap(dpi=RENDER_DPI, clip=clip)
@@ -238,13 +232,17 @@ def extract_pdf_figures(pdf_path, paper_id, data_dir, options=None):
     }
 
 
-def _caption_clip(page, cap_bbox):
-    """图注上方的版面区域（矢量图/表格都在那里）；太小就不用。"""
+def _caption_clip(page, cap_bbox, *, below=False):
+    """图注上方或表注下方的版面区域。"""
     rect = page.rect
     x0 = max(rect.x0 + 18, float(cap_bbox[0]) - 24)
     x1 = min(rect.x1 - 18, float(cap_bbox[2]) + 24)
-    y1 = float(cap_bbox[1]) - 2
-    y0 = max(rect.y0 + 18, y1 - VECTOR_TOP_PAD)
+    if below:
+        y0 = float(cap_bbox[3]) + 2
+        y1 = min(rect.y1 - 18, y0 + VECTOR_TOP_PAD)
+    else:
+        y1 = float(cap_bbox[1]) - 2
+        y0 = max(rect.y0 + 18, y1 - VECTOR_TOP_PAD)
     if x1 - x0 < 120 or y1 - y0 < 80:
         return None
     return fitz.Rect(x0, y0, x1, y1)

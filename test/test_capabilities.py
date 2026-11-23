@@ -58,6 +58,7 @@ def build_fixture_pdf():
     page = document.new_page()
     page.insert_image(pymupdf.Rect(72, 72, 522, 402), stream=_noise_png())
     page.insert_text((72, 430), "Fig. 1. SEM image of the Cu catalyst surface.", fontsize=10)
+    page.insert_image(pymupdf.Rect(460, 760, 570, 810), stream=_noise_png(seed=8))
 
     second = document.new_page()
     second.draw_rect(pymupdf.Rect(90, 100, 500, 330), color=(0, 0, 0), width=1)
@@ -65,6 +66,8 @@ def build_fixture_pdf():
         y = 120 + index * 20
         second.draw_line(pymupdf.Point(100, y), pymupdf.Point(480, y))
     second.insert_text((90, 360), "Fig. 2. Schematic of the reaction pathway.", fontsize=10)
+    cover = document.new_page()
+    cover.insert_image(cover.rect, stream=_noise_png(seed=9), keep_proportion=False)
 
     blob = document.tobytes()
     document.close()
@@ -443,6 +446,7 @@ class FigureExtractionTest(unittest.TestCase):
         result = legacy_figures.extract_pdf_figures(pdf_path, "paper-x", directory)
         self.assertTrue(result["ok"])
         rows = result["figures"]
+        self.assertEqual(len(rows), 2)
         self.assertGreaterEqual(len(rows), 2)
         types = {row["figureType"] for row in rows}
         self.assertIn("raster", types)

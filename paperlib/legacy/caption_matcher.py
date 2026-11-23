@@ -18,7 +18,7 @@ import re
 
 # 匹配学术图注起首模式：Figure 1, Fig. 2a, Scheme 1, Chart 3, 图 1 等
 FIGURE_CAPTION_PATTERN = re.compile(
-    r"^(?:(?:Figure|Fig|Scheme|Chart)\.?\s*(\d+[a-zA-Z\-]*)|(?:图|示意图|附图)\s*(\d+[a-zA-Z\-]*))[:.\s]",
+    r"^(?:(?:Figure|Fig|Scheme|Chart|Table)\.?\s*(S?\d+[a-zA-Z\-]*)|(?:图|示意图|附图|表)\s*(S?\d+[a-zA-Z\-]*))[:.：。\s]",
     re.IGNORECASE,
 )
 
@@ -104,6 +104,8 @@ def match_boxes_with_captions(boxes, captions):
     pairs = []
     for key, bbox in boxes:
         for idx, cap in enumerate(captions):
+            if min(bbox[2], cap["bbox"][2]) <= max(bbox[0], cap["bbox"][0]):
+                continue
             score = compute_bbox_distance(bbox, cap["bbox"])
             if score > 0:
                 pairs.append((score, key, idx))
@@ -119,13 +121,14 @@ def match_boxes_with_captions(boxes, captions):
     return assigned
 
 
-def match_page_images_with_captions(page):
+def match_page_images_with_captions(page, captions=None):
     """为一页内的所有有效图片匹配最近的图注，返回 {xref: caption_text}。"""
     try:
         infos = page.get_image_info(xrefs=True) or []
     except Exception:  # noqa: BLE001
         return {}
-    captions = extract_page_captions_with_boxes(page)
+    if captions is None:
+        captions = extract_page_captions_with_boxes(page)
     if not infos or not captions:
         return {}
 
@@ -136,6 +139,8 @@ def match_page_images_with_captions(page):
         if not xref or not bbox:
             continue
         if (bbox[2] - bbox[0]) < MIN_BOX or (bbox[3] - bbox[1]) < MIN_BOX:
+            continue
+        if (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) >= 0.85 * page.rect.get_area():
             continue
         boxes.append((int(xref), tuple(float(v) for v in bbox)))
     return match_boxes_with_captions(boxes, captions)
