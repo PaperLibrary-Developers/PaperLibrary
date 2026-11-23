@@ -81,7 +81,7 @@ import * as foldersUi from '../folders.mjs'
   }
 
   function listHandler (ctx) {
-    const { outlet, params, isStale } = ctx
+    const { outlet, params, signal, isStale } = ctx
     applyQueryFromUrl(params)
     const state = getState()
     // 「我的收藏」是一个独立地址（#/starred），进来自动只看收藏
@@ -97,11 +97,12 @@ import * as foldersUi from '../folders.mjs'
     const bar = h('div', { id: 'list-bar', style: { marginBottom: '14px', display: 'grid', gap: '10px' } })
     // 目录面包屑：只在「按文件夹筛选」时出现，用来看清自己在哪一级、并一键回到上层
     const folderBar = h('div', { id: 'list-folder', hidden: true })
+    const childrenBox = h('section.fld-children', { hidden: true, 'aria-label': '子文件夹' })
     const results = h('div', { id: 'list-results' })
     const pager = h('div', { id: 'list-pager' })
     // 批量条挂在这一页的容器里（不是 document.body）：这样切到别的页面时
     // 它会跟着列表一起消失，不会留在屏幕上（以前从批量模式点侧栏去别的页，条子还飘在那儿）
-    const content = h('div.content', folderBar, bar, results, pager)
+    const content = h('div.content', folderBar, childrenBox, bar, results, pager)
     outlet.replaceChildren(content)
 
     let items = []
@@ -110,6 +111,32 @@ import * as foldersUi from '../folders.mjs'
     const batchState = batch
     const selected = batchState.selected
     const isSelectMode = () => batchState.selectMode
+
+    const currentFolder = state.query.folder
+    async function loadChildren () {
+      const data = await foldersUi.load()
+      if (isStale()) return
+      const children = foldersUi.childFolders(currentFolder, data)
+      childrenBox.hidden = !children.length
+      childrenBox.replaceChildren(h('div.fld-children-title', '子文件夹'),
+        h('div.fld-children-grid', children.map(folder =>
+          h('button.fld-child', {
+            type: 'button', title: folder.path, 'data-path': folder.path,
+            onclick: () => foldersUi.navTo(folder.path)
+          }, components.folderGlyph('fld-child-icon'), h('span.fld-name', folder.name),
+          h('span.fld-count', folder.countDeep + ' 篇'))
+        )))
+    }
+    if (currentFolder) {
+      const refreshChildren = () => loadChildren().catch(err => {
+        if (!isStale()) {
+          childrenBox.hidden = false
+          childrenBox.replaceChildren(h('div.hint', '读取子文件夹失败：' + err.message))
+        }
+      })
+      document.addEventListener('folders:changed', refreshChildren, { signal })
+      refreshChildren()
+    }
 
     /* ---------- 顶部筛选条 ---------- */
 

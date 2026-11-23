@@ -233,10 +233,13 @@ const { h, toast, debounce } = util
    *     点一下就执行了首页的逻辑（把地址改回 #/），搜索词和结果被清空。
    */
   function syncChrome (activePath) {
+    if (activePath === '/' || activePath === '/starred') activeFolderTree?.setActive(state.query.folder)
     const navItems = document.querySelectorAll('[data-nav]')
     for (const item of navItems) {
       const target = item.getAttribute('data-nav')
-      const active = activePath === target || (target !== '/' && activePath.startsWith(target + '/'))
+      const active = target === '/'
+        ? activePath === '/' && state.query.folder == null
+        : activePath === target || activePath.startsWith(target + '/')
       item.classList.toggle('active', active)
       // aria-current 也一起同步：侧栏只切 class 不重建，光靠渲染时写的那次会一直是旧的
       if (active) item.setAttribute('aria-current', 'page')
@@ -356,7 +359,13 @@ const { h, toast, debounce } = util
   }
 
   function renderSidebar (activePath) {
-    const folderTree = foldersUi.folderTree({ mode: 'side', active: getState().query.folder })
+    const folderTree = foldersUi.folderTree({
+      mode: 'side', active: state.query.folder,
+      onPick: path => {
+        foldersUi.navTo(path)
+        closeDrawer({ deferFocus: true })
+      }
+    })
     activeFolderTree = folderTree
     // 先用缓存画（可能为空），再异步拉一次真实目录树
     folderTree.reload()
@@ -405,8 +414,7 @@ const { h, toast, debounce } = util
         // 合并后新增：PaperLibrary 的三项能力（图表画廊 / 横向对比 / 深度分析）
         navItem('图表画廊', '#/figures', '🖼', null, activePath === '/figures'),
         navItem('横向对比', '#/compare', '⇄', null, activePath === '/compare'),
-        navItem('深度分析', '#/deep', '🔬', null, activePath === '/deep'),
-        navItem('设置与备份', '#/settings', '⚙', null, activePath === '/settings')
+        navItem('深度分析', '#/deep', '🔬', null, activePath === '/deep')
       ),
       // 分类文件夹：和导航同处左侧栏，但它是「树」，单独一块更好读。
       // 新建 / 管理两个入口放在这一块的表头，符合「整合到分类与导航区域」的要求。
@@ -439,6 +447,7 @@ const { h, toast, debounce } = util
       // 底部区块：文档入口 + 统计/提示。用 margin-top:auto 整体贴底，
       // 这样入口正好落在「共 N 条 · N 个标签」上方那一块，而不是挤在功能导航里
       h('div.side-bottom',
+        navItem('设置与备份', '#/settings', '⚙', null, activePath === '/settings'),
         // 智能问答助手：唯一的入口就是这一行（紧贴「使用文档」上方），点开在左下角弹对话框。
         // 对话不放在侧栏里：侧栏只有 222px，放不下 Markdown 回答的正文宽度。
         // 窄屏点它是「开抽屉再开面板」，所以顺手把抽屉收起来，别让遮罩挡住对话框。

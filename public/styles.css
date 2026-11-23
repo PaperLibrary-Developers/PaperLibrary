@@ -384,14 +384,7 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .side-folders .fld-row.active .fld-ico { opacity: 1; }
 .side-folders .fld-name { font-size: 14px; }
 .side-folders .fld-count { margin-left: auto; font-size: 12px; }
-/* ▸ 只在侧栏里绝对定位（藏在缩进区），不占 flow 宽度 —— 这是图标能与导航对齐的关键。
-   选择器/管理器里仍用行内 14px 的 ▸，那里不需要和导航对齐。 */
-.side-folders .fld-caret {
-  position: absolute; top: 50%; left: calc(var(--fld-indent, 10px) - 10px);
-  width: 10px; height: 18px; margin: 0; transform: translateY(-50%);
-  font-size: 10px; color: var(--muted);
-}
-.side-folders .fld-caret.open { transform: translateY(-50%) rotate(90deg); }
+.side-folders .fld-row--root .fld-caret { display: none; }
 
 .fld-row {
   display: flex; align-items: center; gap: 5px; min-width: 0;
@@ -405,10 +398,11 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .fld-row.drop-before { box-shadow: inset 0 2px var(--accent); }
 .fld-row.drop-after { box-shadow: inset 0 -2px var(--accent); }
 .fld-caret {
-  flex: none; width: 14px; height: 14px; display: grid; place-items: center;
-  border: 0; background: none; color: var(--faint); font-size: 10px; line-height: 1;
+  flex: none; width: 28px; height: 28px; display: grid; place-items: center;
+  border: 0; border-radius: 5px; background: none; color: var(--muted); font-size: 15px; line-height: 1;
   transition: transform .15s; padding: 0;
 }
+.fld-caret:hover { background: var(--surface-3); color: var(--text); }
 .fld-caret.open { transform: rotate(90deg); }
 .fld-caret--empty { visibility: hidden; }
 .fld-ico { flex: none; font-size: 12px; line-height: 1; opacity: .9; }
@@ -493,6 +487,16 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .fld-crumb-sep { color: var(--faint); font-size: 12px; }
 .fld-deep { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); }
 .fld-deep input { accent-color: var(--accent); }
+.fld-children { margin-bottom: 14px; }
+.fld-children-title { margin-bottom: 6px; color: var(--muted); font-size: 13px; }
+.fld-children-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 8px; }
+.fld-child {
+  display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); text-align: left;
+  background: var(--surface-2); color: var(--text);
+}
+.fld-child:hover { background: var(--accent-soft); color: var(--accent-text); }
+.fld-child-icon { display: grid; place-items: center; color: var(--accent-text); }
 
 @media (max-width: 720px) {
   .fld-body { grid-template-columns: minmax(0, 1fr); }

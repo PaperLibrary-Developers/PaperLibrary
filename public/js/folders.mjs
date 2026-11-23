@@ -37,6 +37,10 @@ import { getState } from './state/store.mjs'
   }
 
   /** 扁平列表 → 树（每组兄弟节点优先按保存的顺序排列）。 */
+  function byOrder (a, b) {
+    return ((a.sort ?? Infinity) - (b.sort ?? Infinity)) || a.name.localeCompare(b.name, 'zh-Hans-CN')
+  }
+
   function buildTree (data) {
     const src = (data || cache).folders || []
     const byPath = new Map()
@@ -52,11 +56,15 @@ import { getState } from './state/store.mjs'
       else roots.push(node)
     }
     const sortRec = list => {
-      list.sort((a, b) => (a.sort - b.sort) || a.name.localeCompare(b.name, 'zh-Hans-CN'))
+      list.sort(byOrder)
       list.forEach(item => sortRec(item.children))
     }
     sortRec(roots)
     return roots
+  }
+
+  function childFolders (path, data) {
+    return data.folders.filter(row => row.parent === path).sort(byOrder)
   }
 
   function labelOf (path) {
@@ -122,6 +130,7 @@ import { getState } from './state/store.mjs'
     // 行是 treeitem，容器就得是 tree，否则读屏拿到的是「一堆孤立条目」，听不出层级
     const el = h('div.fld-tree', { role: 'tree', 'aria-label': '分类文件夹' })
     let active = opts.active == null ? null : opts.active
+    if (active) expandParents(active)
     let data = cache
     let dragged = ''
     let dropRow = null
@@ -179,16 +188,15 @@ import { getState } from './state/store.mjs'
         )
         : null
 
-      // 侧栏用 10px 起、每层 16px（图标正好落在上方导航项图标那条竖线上）；
-      // 选择器/管理器在弹窗里，紧凑一点：6px 起、每层 14px
       const side = opts.mode === 'side'
       const sortable = opts.mode !== 'picker' && siblings.length > 1
-      const indent = (side ? 10 : 6) + depth * (side ? 16 : 14)
+      const indent = (side ? 2 : 6) + depth * 14
       const rowEl = h('div.fld-row' + (active === node.path ? '.active' : '') + (opts.mode === 'manager' ? '.fld-row--manager' : ''), {
         'data-path': node.path,
         role: 'treeitem',
         'aria-level': String(depth + 1),
         'aria-expanded': hasKids ? (isOpen ? 'true' : 'false') : null,
+        'aria-selected': String(active === node.path),
         tabindex: '0',
         draggable: sortable ? 'true' : null,
         title: node.path,
@@ -242,9 +250,6 @@ import { getState } from './state/store.mjs'
           dragged = ''
         })
       }
-      // 侧栏里 ▸ 绝对定位藏进缩进区：它不再占 flow 宽度，图标才能和导航图标对齐
-      if (side) rowEl.style.setProperty('--fld-indent', indent + 'px')
-
       return h('div.fld-node',
         rowEl,
         hasKids && isOpen
@@ -259,6 +264,7 @@ import { getState } from './state/store.mjs'
         'data-path': '',
         role: 'treeitem',
         'aria-level': '1',
+        'aria-selected': String(active === ''),
         tabindex: '0',
         title: '未分类（直接放在库里、不属于任何文件夹的文献）',
         onclick: () => pick(''),
@@ -310,7 +316,12 @@ import { getState } from './state/store.mjs'
     return {
       el,
       reload,
-      setActive (path) { active = path; paint() },
+      setActive (path) {
+        if (active === path) return
+        active = path
+        if (active) expandParents(active)
+        paint()
+      },
       getActive () { return active },
       treeData () { return buildTree(data) }
     }
@@ -585,7 +596,7 @@ import { getState } from './state/store.mjs'
 
   export {
     askName,
-    load, buildTree, labelOf, parentOf, navTo, notifyChanged,
+    load, buildTree, childFolders, labelOf, parentOf, navTo, notifyChanged,
     folderTree, openFolderPicker, openFolderManager, folderField,
     createFolder, renameFolder, removeFolder, ROOT_LABEL
   }
