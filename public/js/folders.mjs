@@ -63,10 +63,6 @@ import { getState } from './state/store.mjs'
     return roots
   }
 
-  function childFolders (path, data) {
-    return data.folders.filter(row => row.parent === path).sort(byOrder)
-  }
-
   function labelOf (path) {
     const text = String(path || '')
     return text ? text.split('/').pop() : ROOT_LABEL
@@ -77,9 +73,16 @@ import { getState } from './state/store.mjs'
     return text.includes('/') ? text.slice(0, text.lastIndexOf('/')) : ''
   }
 
-  /** 跳到列表页并按该文件夹筛选（path='' 表示未分类） */
-  function navTo (path) {
-    go('', { folder: path === '' ? '/' : path })
+  /** 跳到列表页并按该文件夹筛选（path='' 表示未分类；options.deep=true 表示含子目录） */
+  function navTo (path, options) {
+    const opts = options || {}
+    const params = { folder: path === '' ? '/' : path }
+    if (opts.deep && path !== '') params.deep = '1'
+    go('', params)
+  }
+
+  function getCache () {
+    return cache
   }
 
   function expandParents (path) {
@@ -191,6 +194,10 @@ import { getState } from './state/store.mjs'
       const side = opts.mode === 'side'
       const sortable = opts.mode !== 'picker' && siblings.length > 1
       const indent = (side ? 2 : 6) + depth * 14
+      const countText = (opts.mode === 'manager' || side) ? node.countDeep : node.count
+      const rowTitle = hasKids
+        ? `${node.path}（直属 ${node.count} 篇，含子文件夹共 ${node.countDeep} 篇）`
+        : `${node.path}（${node.count} 篇）`
       const rowEl = h('div.fld-row' + (active === node.path ? '.active' : '') + (opts.mode === 'manager' ? '.fld-row--manager' : ''), {
         'data-path': node.path,
         role: 'treeitem',
@@ -199,7 +206,7 @@ import { getState } from './state/store.mjs'
         'aria-selected': String(active === node.path),
         tabindex: '0',
         draggable: sortable ? 'true' : null,
-        title: node.path,
+        title: rowTitle,
         style: { paddingLeft: indent + 'px' },
         onclick: () => pick(node.path),
         onkeydown: ev => {
@@ -212,7 +219,7 @@ import { getState } from './state/store.mjs'
         chevron,
         folderIco(isOpen && hasKids ? 'open' : 'closed'),
         h('span.fld-name', node.name),
-        h('span.fld-count', String(opts.mode === 'manager' ? node.countDeep : node.count)),
+        h('span.fld-count', String(countText)),
         actions
       )
       if (sortable) {
@@ -596,12 +603,13 @@ import { getState } from './state/store.mjs'
 
   export {
     askName,
-    load, buildTree, childFolders, labelOf, parentOf, navTo, notifyChanged,
+    load, getCache, buildTree, labelOf, parentOf, navTo, notifyChanged, folderIco,
     folderTree, openFolderPicker, openFolderManager, folderField,
     createFolder, renameFolder, removeFolder, ROOT_LABEL
   }
   export default {
     askName,
-    load, buildTree, labelOf, parentOf, navTo, notifyChanged,
-    folderTree, openFolderPicker, openFolderManager, folderField, ROOT_LABEL
+    load, getCache, buildTree, labelOf, parentOf, navTo, notifyChanged, folderIco,
+    folderTree, openFolderPicker, openFolderManager, folderField,
+    createFolder, renameFolder, removeFolder, ROOT_LABEL
   }

@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from paperlib.adapters.secret_store import dump_with_protected_secret, load_secret_field
 from paperlib.util import read_json, write_json_atomic
 
 DEFAULTS = {"openalexApiKey": "", "contactEmail": ""}
@@ -25,10 +26,15 @@ class Sources:
         self.settings = dict(DEFAULTS)
         if isinstance(raw, dict):
             self.settings.update(raw)
+        if load_secret_field(self.settings, "openalexApiKey") and self.file.is_file():
+            try:
+                self.save()
+            except OSError:
+                pass
         return self.settings
 
     def save(self):
-        write_json_atomic(self.file, self.settings)
+        write_json_atomic(self.file, dump_with_protected_secret(self.settings, "openalexApiKey"))
 
     def update(self, patch):
         patch = patch or {}

@@ -41,7 +41,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from paperlib.update import ed25519, keys, manifest, release, signing  # noqa: E402
-from paperlib.version import (VersionError, build_record, dumps as dump_version,  # noqa: E402
+from paperlib.version import (VersionError,  # noqa: E402
                               load as load_version, ui_label, validate as validate_version)
 
 TAG_RE = re.compile(r"^v\d+\.\d+(?:\.\d+)?$")

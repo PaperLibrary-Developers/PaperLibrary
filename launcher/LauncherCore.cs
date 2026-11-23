@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Web.Script.Serialization;
 
 // 启动器的纯逻辑核心（无 WinForms / WebView2 依赖），便于用 csc 编译后做自动化验收。
 // P2-10R：apply/helper 预检、启动判定、WebView2 消息协议解析。
@@ -44,54 +46,77 @@ public static class LauncherCore
 
     // ---------- JSON helpers ----------
 
+    private static JavaScriptSerializer CreateSerializer()
+    {
+        JavaScriptSerializer serializer = new JavaScriptSerializer();
+        serializer.MaxJsonLength = 4 * 1024 * 1024;
+        return serializer;
+    }
+
+    public static Dictionary<string, object> ParseJsonObject(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        try
+        {
+            string trimmed = json.Trim();
+            if (trimmed.Length < 2 || trimmed[0] != '{' || trimmed[trimmed.Length - 1] != '}')
+                return null;
+            return CreateSerializer().Deserialize<Dictionary<string, object>>(trimmed);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    public static string JsonString(IDictionary<string, object> obj, string field)
+    {
+        if (obj == null || string.IsNullOrEmpty(field)) return "";
+        object value;
+        if (!obj.TryGetValue(field, out value) || value == null) return "";
+        string text = value as string;
+        return text ?? "";
+    }
+
     public static string JsonString(string json, string field)
     {
-        Match match = Regex.Match(json, "\"" + Regex.Escape(field) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
-        return match.Success ? Unescape(match.Groups[1].Value) : "";
+        return JsonString(ParseJsonObject(json), field);
+    }
+
+    public static long JsonLong(IDictionary<string, object> obj, string field, long fallback)
+    {
+        if (obj == null || string.IsNullOrEmpty(field)) return fallback;
+        object value;
+        if (!obj.TryGetValue(field, out value) || value == null) return fallback;
+        if (value is int) return (int)value;
+        if (value is long) return (long)value;
+        if (value is short) return (short)value;
+        if (value is byte) return (byte)value;
+        if (value is decimal)
+        {
+            decimal d = (decimal)value;
+            if (decimal.Truncate(d) == d && d >= long.MinValue && d <= long.MaxValue)
+                return (long)d;
+        }
+        return fallback;
     }
 
     public static long JsonLong(string json, string field, long fallback)
     {
-        Match match = Regex.Match(json, "\"" + Regex.Escape(field) + "\"\\s*:\\s*(-?[0-9]+)");
-        long value;
-        if (match.Success && long.TryParse(match.Groups[1].Value, NumberStyles.Integer,
-                                           CultureInfo.InvariantCulture, out value))
-            return value;
-        return fallback;
+        return JsonLong(ParseJsonObject(json), field, fallback);
+    }
+
+    public static bool JsonBool(IDictionary<string, object> obj, string field, bool fallback)
+    {
+        if (obj == null || string.IsNullOrEmpty(field)) return fallback;
+        object value;
+        if (!obj.TryGetValue(field, out value) || !(value is bool)) return fallback;
+        return (bool)value;
     }
 
     public static bool JsonBool(string json, string field, bool fallback)
     {
-        Match match = Regex.Match(json, "\"" + Regex.Escape(field) + "\"\\s*:\\s*(true|false)");
-        if (!match.Success) return fallback;
-        return match.Groups[1].Value == "true";
-    }
-
-    public static string Unescape(string value)
-    {
-        StringBuilder sb = new StringBuilder(value.Length);
-        for (int i = 0; i < value.Length; i++)
-        {
-            char ch = value[i];
-            if (ch != '\\' || i + 1 >= value.Length) { sb.Append(ch); continue; }
-            char next = value[++i];
-            if (next == 'n') sb.Append('\n');
-            else if (next == 'r') sb.Append('\r');
-            else if (next == 't') sb.Append('\t');
-            else if (next == '"' || next == '\\' || next == '/') sb.Append(next);
-            else if (next == 'u' && i + 4 < value.Length)
-            {
-                int code;
-                if (int.TryParse(value.Substring(i + 1, 4), NumberStyles.HexNumber,
-                                 CultureInfo.InvariantCulture, out code))
-                {
-                    sb.Append((char)code);
-                    i += 4;
-                }
-            }
-            else sb.Append(next);
-        }
-        return sb.ToString();
+        return JsonBool(ParseJsonObject(json), field, fallback);
     }
 
     public static string Escape(string value)
@@ -128,12 +153,14 @@ public static class LauncherCore
     {
         error = "";
         if (string.IsNullOrEmpty(json)) { error = "empty-message"; return null; }
-        string type = JsonString(json, "type");
+        Dictionary<string, object> obj = ParseJsonObject(json);
+        if (obj == null) { error = "not-install-request"; return null; }
+        string type = JsonString(obj, "type");
         if (type != InstallRequestType) { error = "not-install-request"; return null; }
-        string requestId = JsonString(json, "requestId");
+        string requestId = JsonString(obj, "requestId");
         if (!Regex.IsMatch(requestId, "^[A-Za-z0-9._:-]{1,128}$"))
         { error = "invalid-request-id"; return null; }
-        string version = JsonString(json, "version");
+        string version = JsonString(obj, "version");
         if (version.Length > 0 && !Regex.IsMatch(version, "^[0-9]+\\.[0-9]+\\.[0-9]+$"))
         { error = "invalid-version"; return null; }
         InstallRequest request = new InstallRequest();
@@ -144,9 +171,13 @@ public static class LauncherCore
 
     public static string InstallResultJson(string requestId, bool ok, string code, string message)
     {
-        return "{\"type\":\"" + InstallResultType + "\",\"requestId\":\""
-            + Escape(requestId) + "\",\"ok\":" + (ok ? "true" : "false")
-            + ",\"code\":\"" + Escape(code) + "\",\"message\":\"" + Escape(message) + "\"}";
+        Dictionary<string, object> payload = new Dictionary<string, object>();
+        payload["type"] = InstallResultType;
+        payload["requestId"] = requestId ?? "";
+        payload["ok"] = ok;
+        payload["code"] = code ?? "";
+        payload["message"] = message ?? "";
+        return CreateSerializer().Serialize(payload);
     }
 
     // ---------- 路径 / 哈希 ----------
@@ -219,13 +250,14 @@ public static class LauncherCore
             message = "读取 helper current.json 失败：" + ex.Message;
             return "";
         }
-        if (JsonLong(text, "schema", 0) != 1 || JsonString(text, "product") != "PaperLibrary")
+        Dictionary<string, object> currentObj = ParseJsonObject(text);
+        if (JsonLong(currentObj, "schema", 0) != 1 || JsonString(currentObj, "product") != "PaperLibrary")
         {
             code = "helper-json";
             message = "helper current.json schema/product 不符";
             return "";
         }
-        string rel = JsonString(text, "exe").Replace('/', '\\');
+        string rel = JsonString(currentObj, "exe").Replace('/', '\\');
         if (rel.Length == 0 || Path.IsPathRooted(rel) || rel.Contains(".."))
         {
             code = "helper-path";
@@ -239,7 +271,7 @@ public static class LauncherCore
             message = "更新助手文件不存在：" + exe;
             return "";
         }
-        string expected = JsonString(text, "sha256").ToLowerInvariant();
+        string expected = JsonString(currentObj, "sha256").ToLowerInvariant();
         string actual = Sha256File(exe);
         if (expected.Length != 64 || actual != expected)
         {
@@ -297,12 +329,15 @@ public static class LauncherCore
             string apply;
             try { apply = File.ReadAllText(applyPath, Encoding.UTF8); }
             catch (Exception ex) { return Fail(result, "apply-json", "读取 apply.json 失败：" + ex.Message); }
-            if (JsonLong(apply, "schema", 0) != 1)
+            Dictionary<string, object> applyObj = ParseJsonObject(apply);
+            if (applyObj == null)
+                return Fail(result, "apply-json", "apply.json 不是合法 JSON");
+            if (JsonLong(applyObj, "schema", 0) != 1)
                 return Fail(result, "apply-schema", "apply.json schema 必须是 1");
-            string version = JsonString(apply, "version");
-            string staging = JsonString(apply, "stagingPath");
-            string backup = JsonString(apply, "backupPath");
-            string fromVersion = JsonString(apply, "fromVersion");
+            string version = JsonString(applyObj, "version");
+            string staging = JsonString(applyObj, "stagingPath");
+            string backup = JsonString(applyObj, "backupPath");
+            string fromVersion = JsonString(applyObj, "fromVersion");
             if (!Regex.IsMatch(version, "^[0-9]+\\.[0-9]+\\.[0-9]+$"))
                 return Fail(result, "apply-invalid", "apply.json version 不合法");
             if (staging.Length == 0)
@@ -456,9 +491,10 @@ public static class LauncherCore
         string text;
         try { text = File.ReadAllText(lockPath, Encoding.UTF8); }
         catch (Exception) { return false; }
-        int pid = (int)JsonLong(text, "pid", 0);
+        Dictionary<string, object> lockObj = ParseJsonObject(text);
+        int pid = (int)JsonLong(lockObj, "pid", 0);
         if (pid <= 0 || !ProcessExists(pid)) return false;
-        string created = JsonString(text, "createdAt");
+        string created = JsonString(lockObj, "createdAt");
         DateTime createdUtc;
         if (!DateTime.TryParseExact(created, "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture,
                                     DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
@@ -470,9 +506,9 @@ public static class LauncherCore
     public static string UpdateProbeState(string baseDir, int processId)
     {
         string updates = Path.Combine(baseDir, "data", "updates");
-        string journal = SafeRead(Path.Combine(updates, "journal.json"));
-        string phase = JsonString(journal, "phase");
-        long launchedPid = JsonLong(journal, "launchedPid", 0);
+        Dictionary<string, object> journalObj = ParseJsonObject(SafeRead(Path.Combine(updates, "journal.json")));
+        string phase = JsonString(journalObj, "phase");
+        long launchedPid = JsonLong(journalObj, "launchedPid", 0);
         if (phase == "success" && launchedPid == processId) return "committed";
         if (!IsInstallLockActive(Path.Combine(updates, "install.lock"))) return "";
         if (phase == "launch" && launchedPid == processId) return "validating";
@@ -501,25 +537,26 @@ public static class LauncherCore
 
         if (File.Exists(journalPath))
         {
-            string journal = SafeRead(journalPath);
-            string phase = JsonString(journal, "phase");
+            Dictionary<string, object> journalObj = ParseJsonObject(SafeRead(journalPath));
+            string phase = JsonString(journalObj, "phase");
             if (phase != "success")
             {
                 if (phase == "failed")
                 {
-                    string state = SafeRead(statePath);
-                    if (JsonBool(state, "recovered", false)
-                        || (JsonString(state, "phase") == "failed"
-                            && JsonString(state, "version") == JsonString(journal, "version")
-                            && JsonString(state, "code") == JsonString(journal, "code")
-                            && JsonString(state, "code") != "recovery-failed"
-                            && JsonString(state, "code") != "rollback-failed"))
+                    Dictionary<string, object> stateObj = ParseJsonObject(SafeRead(statePath));
+                    string stateCode = JsonString(stateObj, "code");
+                    if (JsonBool(stateObj, "recovered", false)
+                        || (JsonString(stateObj, "phase") == "failed"
+                            && JsonString(stateObj, "version") == JsonString(journalObj, "version")
+                            && stateCode == JsonString(journalObj, "code")
+                            && stateCode != "recovery-failed"
+                            && stateCode != "rollback-failed"))
                     {
                         decision.Action = "notice-failed";
-                        decision.Code = JsonString(state, "code");
+                        decision.Code = stateCode;
                         decision.Message = "上次更新未完成，已恢复旧版本。"
-                            + NoticeSuffix(state);
-                        decision.Path = JsonString(state, "log");
+                            + NoticeSuffix(stateObj);
+                        decision.Path = JsonString(stateObj, "log");
                         return decision;
                     }
                 }
@@ -554,14 +591,14 @@ public static class LauncherCore
 
         if (File.Exists(statePath))
         {
-            string state = SafeRead(statePath);
-            string phase = JsonString(state, "phase");
-            if (phase != "success" && (phase == "failed" || JsonBool(state, "recovered", false)))
+            Dictionary<string, object> stateObj = ParseJsonObject(SafeRead(statePath));
+            string phase = JsonString(stateObj, "phase");
+            if (phase != "success" && (phase == "failed" || JsonBool(stateObj, "recovered", false)))
             {
                 decision.Action = "notice-failed";
-                decision.Code = JsonString(state, "code");
-                decision.Message = "上次更新失败，已回滚/恢复旧版本。" + NoticeSuffix(state);
-                decision.Path = JsonString(state, "log");
+                decision.Code = JsonString(stateObj, "code");
+                decision.Message = "上次更新失败，已回滚/恢复旧版本。" + NoticeSuffix(stateObj);
+                decision.Path = JsonString(stateObj, "log");
                 return decision;
             }
         }
@@ -583,10 +620,10 @@ public static class LauncherCore
         catch (Exception) { return ""; }
     }
 
-    private static string NoticeSuffix(string state)
+    private static string NoticeSuffix(IDictionary<string, object> stateObj)
     {
-        string code = JsonString(state, "code");
-        string log = JsonString(state, "log");
+        string code = JsonString(stateObj, "code");
+        string log = JsonString(stateObj, "log");
         StringBuilder sb = new StringBuilder();
         if (code.Length > 0) sb.Append("\r\n原因：").Append(code);
         if (log.Length > 0) sb.Append("\r\n日志：").Append(log);

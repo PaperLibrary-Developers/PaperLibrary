@@ -68,88 +68,7 @@ import * as foldersUi from '../folders.mjs'
     }, 200)
   }, { passive: true, capture: true })
 
-  /** 把 URL 参数读进一个普通对象 */
-  function readParams (params) {
-    return {
-      q: trim(params.get('q')),
-      author: trim(params.get('author')),
-      venue: trim(params.get('venue')),
-      yearFrom: trim(params.get('yearFrom')),
-      yearTo: trim(params.get('yearTo')),
-      type: params.get('type') || 'all',
-      starred: params.get('starred') === 'true',
-      keyword: trim(params.get('keyword')),
-      tags: (params.get('tags') || '').split(',').map(s => trim(s)).filter(Boolean),
-      hasPdf: params.get('hasPdf') === 'true',
-      scope: params.get('scope') || 'metadata',
-      sort: params.get('sort') || '',
-      page: Number(params.get('page')) || 1,
-      // 看的是本地库还是网络检索。放进 URL 是为了「切走再回来」还能停在同一页
-      tab: params.get('tab') === 'web' ? 'web' : 'local',
-      // 右侧 facet 的多选值（同类 OR、跨类 AND）
-      facets: {
-        years: splitList(params.get('fy')),
-        authors: splitList(params.get('fa')),
-        venues: splitList(params.get('fv')),
-        types: splitList(params.get('ftype')),
-        tags: splitList(params.get('ftag'))
-      },
-      // 网络检索页的 facet（前端在已取回的结果里聚合）
-      webFacets: {
-        years: splitList(params.get('wy')),
-        venues: splitList(params.get('wv')),
-        authors: splitList(params.get('wa')),
-        onlyOA: params.get('woa') === 'true'
-      },
-      // 网络结果的排序：只重排已取回的那批，不进 URL（切走再回来重新检索时按相关度重来）
-      webSort: 'relevance'
-    }
-  }
-
-  function splitList (v) {
-    return String(v == null ? '' : v).split(',').map(s => s.trim()).filter(Boolean)
-  }
-
-  /** 把查询对象写回 URL 参数 */
-  function toParams (state) {
-    const f = state.facets || {}
-    const w = state.webFacets || {}
-    return {
-      q: state.q || '',
-      author: state.author || '',
-      venue: state.venue || '',
-      yearFrom: state.yearFrom || '',
-      yearTo: state.yearTo || '',
-      type: state.type !== 'all' ? state.type : '',
-      starred: state.starred ? 'true' : '',
-      keyword: state.keyword || '',
-      tags: state.tags.length ? state.tags.join(',') : '',
-      hasPdf: state.hasPdf ? 'true' : '',
-      scope: state.scope && state.scope !== 'metadata' ? state.scope : '',
-      sort: state.sort || '',
-      page: state.page > 1 ? state.page : '',
-      tab: state.tab === 'web' ? 'web' : '',
-      fy: (f.years || []).join(','),
-      fa: (f.authors || []).join(','),
-      fv: (f.venues || []).join(','),
-      ftype: (f.types || []).join(','),
-      ftag: (f.tags || []).join(','),
-      wy: (w.years || []).join(','),
-      wv: (w.venues || []).join(','),
-      wa: (w.authors || []).join(','),
-      woa: w.onlyOA ? 'true' : ''
-    }
-  }
-
-  /** 有没有任何有效的搜索条件（没有就不发请求、显示引导页） */
-  function hasAnyCondition (state) {
-    const f = state.facets || {}
-    const facetOn = ['years', 'authors', 'venues', 'types', 'tags'].some(k => (f[k] || []).length)
-    return !!(state.q || state.author || state.venue || state.keyword ||
-      state.yearFrom || state.yearTo || (state.tags || []).length ||
-      state.hasPdf || facetOn ||
-      (state.type && state.type !== 'all'))
-  }
+  const { readSearchParams: readParams, toSearchParams: toParams, hasSearchCondition: hasAnyCondition, buildSearchQuery } = searchSyntax
 
   async function searchHandler (ctx) {
     const { outlet, params, isStale } = ctx
@@ -640,29 +559,7 @@ import * as foldersUi from '../folders.mjs'
     let loading = false
     /** 组装 /api/papers（与 /api/facets）要用的查询参数 */
     function buildQueryParams () {
-      const query = {
-        q: state.q,
-        author: state.author,
-        venue: state.venue,
-        keyword: state.keyword,
-        yearFrom: state.yearFrom,
-        yearTo: state.yearTo,
-        type: state.type,
-        starred: state.starred ? 'true' : '',
-        tags: state.tags,
-        hasPdf: state.hasPdf,
-        scope: state.scope || 'metadata',
-        sort: state.sort,
-        page: state.page,
-        pageSize: getState().prefs.pageSize,
-        // 右侧 facet 的多选条件（同类 OR）
-        years: state.facets.years,
-        authors: state.facets.authors,
-        venues: state.facets.venues
-      }
-      if (state.facets.types.length) query.type = state.facets.types.join(',')
-      if (state.facets.tags.length) query.tags = [...new Set([...state.tags, ...state.facets.tags])]
-      return query
+      return buildSearchQuery(state, getState().prefs.pageSize)
     }
 
     /** 每次检索递增；响应回来时若已经不是最新一次，直接丢弃（打字快时防旧结果盖新结果） */

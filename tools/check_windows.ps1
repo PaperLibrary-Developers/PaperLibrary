@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$OutputDir = "dist/windows-check",
     [string]$TempRoot,
     [switch]$PackageOnly
@@ -60,15 +60,15 @@ import pathlib, sys, tempfile
 root, expected = (pathlib.Path(value).resolve() for value in sys.argv[1:])
 actual = pathlib.Path(tempfile.gettempdir()).resolve()
 if actual != expected or actual.is_relative_to(root):
-    raise SystemExit(f"Expected a writable temporary folder outside {root}, got {actual}. Set -TempRoot.")
+    raise SystemExit(f'Expected a writable temporary folder outside {root}, got {actual}. Set -TempRoot.')
 '@
     Invoke-Checked "python" @("-B", "-c", $assertTemp, $repo, $scratch)
     $nativeProbe = @'
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 $temp = [IO.Path]::GetTempPath().TrimEnd([IO.Path]::DirectorySeparatorChar)
-if ($temp -ne $env:TMP) { throw "Windows PowerShell did not use the build temp. Set -TempRoot." }
-$file = Join-Path $temp "native-write-probe"
-[IO.File]::WriteAllText($file, "ok")
+if ($temp -ne $env:TMP) { throw 'Windows PowerShell did not use the build temp. Set -TempRoot.' }
+$file = Join-Path $temp 'native-write-probe'
+[IO.File]::WriteAllText($file, 'ok')
 [IO.File]::Delete($file)
 '@
     Invoke-Checked "powershell.exe" @("-NoProfile", "-Command", $nativeProbe)
@@ -100,6 +100,8 @@ $file = Join-Path $temp "native-write-probe"
         try {
             $testPython = Join-Path $stagedPortable "python.exe"
             Invoke-Checked $testPython @("-X", "utf8", "-B", "-c", $assertTemp, $testSource, $scratch)
+            Invoke-Checked $testPython @("-X", "utf8", "-B", "tools/lint_check.py")
+            Invoke-Checked "node" @("test/ui-smoke/check-imports.mjs")
             Invoke-Checked $testPython @("-X", "utf8", "-B", "-m", "unittest", "discover", "-s", "test")
             $nodeTests = @(Get-ChildItem -Path "test/js" -Filter "*.test.mjs" | ForEach-Object FullName)
             Invoke-Checked "node" (@("--test") + $nodeTests)

@@ -11,7 +11,7 @@ const hooks = registerHooks({
     return nextResolve(url, context)
   }
 })
-const { render, route, setShellHooks } = await import('../../public/js/shell/app-api.mjs')
+const { applyQueryFromUrl, effectiveQuery, getState, queryToParams, render, route, setShellHooks } = await import('../../public/js/shell/app-api.mjs')
 hooks.deregister()
 
 test('leaving a route aborts its scope and ignores errors from its old render', async () => {
@@ -54,4 +54,30 @@ test('cancelling a route fetch preserves its AbortError', async () => {
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('folder URL query defaults deep to false and roundtrips deep=1 and root folder', () => {
+  applyQueryFromUrl(new URLSearchParams(''))
+  assert.equal(getState().query.folder, null)
+  assert.equal(getState().query.deep, false)
+  assert.equal(effectiveQuery().includeSubfolders, '')
+
+  applyQueryFromUrl(new URLSearchParams('folder=%E7%94%B5%E5%82%AC%E5%8C%96'))
+  assert.equal(getState().query.folder, '电催化')
+  assert.equal(getState().query.deep, false)
+  assert.equal(effectiveQuery().includeSubfolders, 'false')
+  assert.equal(queryToParams().folder, '电催化')
+  assert.equal(queryToParams().deep, '')
+
+  applyQueryFromUrl(new URLSearchParams('folder=%E7%94%B5%E5%82%AC%E5%8C%96&deep=1'))
+  assert.equal(getState().query.folder, '电催化')
+  assert.equal(getState().query.deep, true)
+  assert.equal(effectiveQuery().includeSubfolders, 'true')
+  assert.equal(queryToParams().deep, '1')
+
+  applyQueryFromUrl(new URLSearchParams('folder=/'))
+  assert.equal(getState().query.folder, '')
+  assert.equal(getState().query.deep, false)
+  assert.equal(effectiveQuery().folder, '/')
+  assert.equal(queryToParams().folder, '/')
 })

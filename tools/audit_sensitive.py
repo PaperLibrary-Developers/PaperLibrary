@@ -19,7 +19,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import zipfile
 from pathlib import Path
 

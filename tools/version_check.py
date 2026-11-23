@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from paperlib.version import VersionError, load, version_path  # noqa: E402
+from paperlib.version import VersionError, load  # noqa: E402
 
 # 曾经硬编码过版本、现在改为运行时读取的文件（相对包根）
 SOURCE_FILES = (

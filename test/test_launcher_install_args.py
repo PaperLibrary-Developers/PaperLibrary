@@ -39,7 +39,8 @@ class LauncherInstallArgsTest(unittest.TestCase):
         core.write_text((ROOT / "launcher" / "LauncherCore.cs").read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
         probe.write_text((ROOT / "launcher" / "LauncherCoreProbe.cs").read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
         proc = subprocess.run([str(CSC), "/nologo", "/target:exe", "/out:" + str(cls.probe),
-                               "/r:System.dll", "/r:System.Core.dll", str(core), str(probe)],
+                               "/r:System.dll", "/r:System.Core.dll", "/r:System.Web.Extensions.dll",
+                               str(core), str(probe)],
                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         if proc.returncode != 0:
             raise AssertionError("probe 构建失败：" + (proc.stdout or "") + (proc.stderr or ""))

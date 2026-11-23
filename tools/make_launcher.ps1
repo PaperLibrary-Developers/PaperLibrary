@@ -65,7 +65,7 @@ try {
     "/nologo", "/target:winexe", "/optimize+",
     "/win32icon:$icon", "/win32manifest:$manifest", "/out:$startExe",
     "/r:System.dll", "/r:System.Core.dll", "/r:System.Drawing.dll", "/r:System.Windows.Forms.dll",
-    "/r:$wvCore", "/r:$wvWinForms", $corePath, $csPath
+    "/r:System.Web.Extensions.dll", "/r:$wvCore", "/r:$wvWinForms", $corePath, $csPath
   )
   & $csc $cscArgs
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $startExe)) {

@@ -8,14 +8,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from paperlib.util import (
     clean_title,
     now_iso,
     normalize_doi,
     to_string_array,
-    truncate,
     uid,
 )
 from shared.pure.citation import bibtex_key

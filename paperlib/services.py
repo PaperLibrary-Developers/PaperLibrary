@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import shutil
 import time
 from functools import partial
 from pathlib import Path
@@ -23,7 +22,6 @@ from paperlib.domain.folders import Folders
 from paperlib.domain.library import Library
 from paperlib.legacy import figures
 from paperlib.update.service import UpdateService
-from paperlib.util import ensure_dir, now_iso, safe_path_join
 
 try:  # 纯函数移植由 T1 交付；先允许缺失，端点实现时会显式依赖
     from shared.pure import boolean_query as bool_query

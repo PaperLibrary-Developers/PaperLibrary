@@ -6,6 +6,13 @@ public static class LauncherCoreProbe
 {
     public static int Main(string[] args)
     {
+        try
+        {
+            Console.OutputEncoding = new UTF8Encoding(false);
+        }
+        catch (Exception)
+        {
+        }
         if (args.Length == 0) { Console.WriteLine("{\"ok\":false,\"code\":\"no-command\"}"); return 2; }
         string command = args[0];
         if (command == "source" && args.Length >= 2)
