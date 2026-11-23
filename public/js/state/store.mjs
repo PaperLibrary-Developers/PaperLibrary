@@ -28,7 +28,8 @@ function readStoredPrefs () {
 const state = {
   prefs: Object.assign({ theme: 'paper', view: 'cards', sort: 'updatedAt', pageSize: 30 }, readStoredPrefs()),
   // folder: null = 不按文件夹过滤；'' = 只看未分类（根）；'A/B' = 某个文件夹
-  query: { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: '', page: 1, folder: null },
+  // deep: false = 仅当前目录直属（默认）；true = 含子文件夹全部
+  query: { q: '', qRaw: '', tags: [], extraTags: [], type: 'all', starred: false, sort: '', page: 1, folder: null, deep: false },
   tags: [],
   stats: null,
   titleMap: new Map(),

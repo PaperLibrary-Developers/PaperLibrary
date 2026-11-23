@@ -62,9 +62,26 @@ import { getState } from './state/store.mjs'
     return text.includes('/') ? text.slice(0, text.lastIndexOf('/')) : ''
   }
 
-  /** 跳到列表页并按该文件夹筛选（path='' 表示未分类） */
-  function navTo (path) {
-    go('', { folder: path === '' ? '/' : path })
+  /** 跳到列表页并按该文件夹筛选（path='' 表示未分类；options.deep=true 表示含子目录） */
+  function navTo (path, options) {
+    const opts = options || {}
+    const params = { folder: path === '' ? '/' : path }
+    if (opts.deep && path !== '') params.deep = '1'
+    go('', params)
+  }
+
+  function getCache () {
+    return cache
+  }
+
+  /** 展开某个路径的所有祖先文件夹，方便从主区进入深层目录时侧栏树同步展开 */
+  function expandAncestors (path) {
+    const text = String(path || '')
+    if (!text || !text.includes('/')) return
+    const parts = text.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      expanded.add(parts.slice(0, i).join('/'))
+    }
   }
 
   function notifyChanged () {
@@ -141,17 +158,21 @@ import { getState } from './state/store.mjs'
         )
         : null
 
-      // 侧栏用 10px 起、每层 16px（图标正好落在上方导航项图标那条竖线上）；
+      // 侧栏用 18px 起、每层 16px（左边留足折叠三角按钮的点击区）；
       // 选择器/管理器在弹窗里，紧凑一点：6px 起、每层 14px
       const side = opts.mode === 'side'
-      const indent = (side ? 10 : 6) + depth * (side ? 16 : 14)
+      const indent = (side ? 18 : 6) + depth * (side ? 16 : 14)
+      const countText = (opts.mode === 'manager' || side) ? node.countDeep : node.count
+      const rowTitle = hasKids
+        ? `${node.path}（直属 ${node.count} 篇，含子文件夹共 ${node.countDeep} 篇）`
+        : `${node.path}（${node.count} 篇）`
       const rowEl = h('div.fld-row' + (active === node.path ? '.active' : '') + (opts.mode === 'manager' ? '.fld-row--manager' : ''), {
         'data-path': node.path,
         role: 'treeitem',
         'aria-level': String(depth + 1),
         'aria-expanded': hasKids ? (isOpen ? 'true' : 'false') : null,
         tabindex: '0',
-        title: node.path,
+        title: rowTitle,
         style: { paddingLeft: indent + 'px' },
         onclick: () => pick(node.path),
         onkeydown: ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(node.path) } }
@@ -159,7 +180,7 @@ import { getState } from './state/store.mjs'
         chevron,
         folderIco(isOpen && hasKids ? 'open' : 'closed'),
         h('span.fld-name', node.name),
-        h('span.fld-count', String(opts.mode === 'manager' ? node.countDeep : node.count)),
+        h('span.fld-count', String(countText)),
         actions
       )
       // 侧栏里 ▸ 绝对定位藏进缩进区：它不再占 flow 宽度，图标才能和导航图标对齐
@@ -179,6 +200,7 @@ import { getState } from './state/store.mjs'
         'aria-level': '1',
         tabindex: '0',
         title: '未分类（直接放在库里、不属于任何文件夹的文献）',
+        style: opts.mode === 'side' ? { paddingLeft: '18px' } : null,
         onclick: () => pick(''),
         onkeydown: ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick('') } }
       },
@@ -221,7 +243,11 @@ import { getState } from './state/store.mjs'
     return {
       el,
       reload,
-      setActive (path) { active = path; paint() },
+      setActive (path) {
+        active = path
+        if (path) expandAncestors(path)
+        paint()
+      },
       getActive () { return active },
       treeData () { return buildTree(data) }
     }
@@ -496,12 +522,13 @@ import { getState } from './state/store.mjs'
 
   export {
     askName,
-    load, buildTree, labelOf, parentOf, navTo, notifyChanged,
+    load, getCache, buildTree, labelOf, parentOf, navTo, notifyChanged, expandAncestors, folderIco,
     folderTree, openFolderPicker, openFolderManager, folderField,
     createFolder, renameFolder, removeFolder, ROOT_LABEL
   }
   export default {
     askName,
-    load, buildTree, labelOf, parentOf, navTo, notifyChanged,
-    folderTree, openFolderPicker, openFolderManager, folderField, ROOT_LABEL
+    load, getCache, buildTree, labelOf, parentOf, navTo, notifyChanged, expandAncestors, folderIco,
+    folderTree, openFolderPicker, openFolderManager, folderField,
+    createFolder, renameFolder, removeFolder, ROOT_LABEL
   }

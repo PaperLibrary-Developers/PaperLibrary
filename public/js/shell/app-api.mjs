@@ -124,8 +124,10 @@ export function setShellHooks (hooks) {
     if (params.has('folder')) {
       const raw = params.get('folder') || '/'
       state.query.folder = raw === '/' ? '' : raw
+      state.query.deep = params.get('deep') === '1' || params.get('deep') === 'true'
     } else {
       state.query.folder = null
+      state.query.deep = false
     }
   }
 
@@ -175,11 +177,11 @@ export function setShellHooks (hooks) {
 
   /**
    * 「面板」是按用户感知分的，不是按地址分的：
-   * #/ 与 #/starred 都是同一个书库列表（点一下「☆ 收藏」就从前者跳到后者），
+   * #/、#/all 与 #/starred 都是同一个书库面板，
    * 在它们之间走一趟不该算「离开书库」。别的路由各自算一个面板。
    */
   function panelOf (path) {
-    return path === '/starred' ? '/' : path
+    return (path === '/starred' || path === '/all') ? '/' : path
   }
 
   async function render (options) {
@@ -216,7 +218,7 @@ export function setShellHooks (hooks) {
           h('button.btn', { onclick: () => render() }, '重试')
         ))))
       }
-      if (!scope.signal.aborted && typeof syncChromeHook === 'function') syncChromeHook(path)
+      if (!scope.signal.aborted && typeof syncChromeHook === 'function') syncChromeHook(path, params)
       return
     }
     setHash('')
@@ -237,6 +239,7 @@ export function setShellHooks (hooks) {
       type: q.type !== 'all' ? q.type : '',
       // 收藏筛选由「路径」表达（#/starred），不重复放进查询串
       folder: q.folder == null ? '' : (q.folder === '' ? '/' : q.folder),
+      deep: q.folder != null && q.deep ? '1' : '',
       sort: q.sort || '',
       page: q.page > 1 ? q.page : ''
     }
@@ -257,7 +260,9 @@ export function setShellHooks (hooks) {
     state.query.page = 1
     const input = document.getElementById('search-input')
     state.prefs.focusSearch = !!(input && document.activeElement === input)
-    setHash('', queryToParams())
+    const curPath = parseHash().path
+    const target = curPath === '/all' ? 'all' : (curPath === '/starred' ? 'starred' : '')
+    setHash(target, queryToParams())
   }
 
   /** 只改标签筛选、不动关键词（详情页点标签时用） */
@@ -301,6 +306,7 @@ export function setShellHooks (hooks) {
       tags,
       // folder 只在「指定了目录」时才发；'' 会被 qs() 丢掉，所以根目录用 '/' 兜一下
       folder: q.folder == null ? '' : (q.folder === '' ? '/' : q.folder),
+      includeSubfolders: q.folder != null ? (q.deep ? 'true' : 'false') : '',
       type: q.type !== 'all' ? q.type : '',
       starred: q.starred ? 'true' : '',
       sort: q.sort || (q.q ? '' : 'updatedAt'),
