@@ -25,6 +25,13 @@ jobs:
         with:
           node-version: '24.21.0'
           package-manager-cache: false
+      - name: Static checks (ruff, AST lint, ESM import graph)
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check ruff==0.11.13
+          ruff check paperlib shared tools
+          python -X utf8 -B tools/lint_check.py
+          node test/ui-smoke/check-imports.mjs
       - name: Build and verify the Windows package
         shell: pwsh
         run: ./tools/check_windows.ps1 -OutputDir (Join-Path $env:RUNNER_TEMP "paperlibrary-check")

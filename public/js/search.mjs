@@ -76,3 +76,121 @@
     return out
   }
 
+  function trimParam (v) { return String(v == null ? '' : v).trim() }
+
+  function splitListParam (v) {
+    return String(v == null ? '' : v).split(',').map(s => s.trim()).filter(Boolean)
+  }
+
+  /** 把搜索页 URLSearchParams 读进标准化的查询状态对象 */
+  export function readSearchParams (params) {
+    const get = params && typeof params.get === 'function'
+      ? key => params.get(key)
+      : key => (params && key in params ? params[key] : null)
+    return {
+      q: trimParam(get('q')),
+      author: trimParam(get('author')),
+      venue: trimParam(get('venue')),
+      yearFrom: trimParam(get('yearFrom')),
+      yearTo: trimParam(get('yearTo')),
+      type: get('type') || 'all',
+      starred: get('starred') === 'true',
+      keyword: trimParam(get('keyword')),
+      tags: splitListParam(get('tags')),
+      hasPdf: get('hasPdf') === 'true',
+      scope: get('scope') || 'metadata',
+      sort: get('sort') || '',
+      page: Number(get('page')) || 1,
+      tab: get('tab') === 'web' ? 'web' : 'local',
+      facets: {
+        years: splitListParam(get('fy')),
+        authors: splitListParam(get('fa')),
+        venues: splitListParam(get('fv')),
+        types: splitListParam(get('ftype')),
+        tags: splitListParam(get('ftag'))
+      },
+      webFacets: {
+        years: splitListParam(get('wy')),
+        venues: splitListParam(get('wv')),
+        authors: splitListParam(get('wa')),
+        onlyOA: get('woa') === 'true'
+      },
+      webSort: 'relevance'
+    }
+  }
+
+  /** 把查询状态对象写回 URL 参数字典（空值/默认值置为空串，便于 URL 精简） */
+  export function toSearchParams (state) {
+    const s = state || {}
+    const f = s.facets || {}
+    const w = s.webFacets || {}
+    const tags = Array.isArray(s.tags) ? s.tags : []
+    return {
+      q: s.q || '',
+      author: s.author || '',
+      venue: s.venue || '',
+      yearFrom: s.yearFrom || '',
+      yearTo: s.yearTo || '',
+      type: s.type && s.type !== 'all' ? s.type : '',
+      starred: s.starred ? 'true' : '',
+      keyword: s.keyword || '',
+      tags: tags.length ? tags.join(',') : '',
+      hasPdf: s.hasPdf ? 'true' : '',
+      scope: s.scope && s.scope !== 'metadata' ? s.scope : '',
+      sort: s.sort || '',
+      page: s.page > 1 ? s.page : '',
+      tab: s.tab === 'web' ? 'web' : '',
+      fy: (f.years || []).join(','),
+      fa: (f.authors || []).join(','),
+      fv: (f.venues || []).join(','),
+      ftype: (f.types || []).join(','),
+      ftag: (f.tags || []).join(','),
+      wy: (w.years || []).join(','),
+      wv: (w.venues || []).join(','),
+      wa: (w.authors || []).join(','),
+      woa: w.onlyOA ? 'true' : ''
+    }
+  }
+
+  /** 判断是否存在任意有效的本地检索条件 */
+  export function hasSearchCondition (state) {
+    const s = state || {}
+    const f = s.facets || {}
+    const facetOn = ['years', 'authors', 'venues', 'types', 'tags'].some(k => (f[k] || []).length)
+    return !!(s.q || s.author || s.venue || s.keyword ||
+      s.yearFrom || s.yearTo || (s.tags || []).length ||
+      s.hasPdf || facetOn ||
+      (s.type && s.type !== 'all'))
+  }
+
+  /** 组装 /api/papers 与 /api/facets 所需的查询参数对象 */
+  export function buildSearchQuery (state, pageSize) {
+    const s = state || {}
+    const f = s.facets || {}
+    const baseTags = Array.isArray(s.tags) ? s.tags : []
+    const facetTypes = Array.isArray(f.types) ? f.types : []
+    const facetTags = Array.isArray(f.tags) ? f.tags : []
+    const query = {
+      q: s.q,
+      author: s.author,
+      venue: s.venue,
+      keyword: s.keyword,
+      yearFrom: s.yearFrom,
+      yearTo: s.yearTo,
+      type: s.type,
+      starred: s.starred ? 'true' : '',
+      tags: baseTags,
+      hasPdf: s.hasPdf,
+      scope: s.scope || 'metadata',
+      sort: s.sort,
+      page: s.page,
+      pageSize: pageSize,
+      years: f.years || [],
+      authors: f.authors || [],
+      venues: f.venues || []
+    }
+    if (facetTypes.length) query.type = facetTypes.join(',')
+    if (facetTags.length) query.tags = [...new Set([...baseTags, ...facetTags])]
+    return query
+  }
+

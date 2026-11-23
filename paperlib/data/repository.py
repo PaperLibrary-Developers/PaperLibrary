@@ -38,6 +38,8 @@ class Repository:
         self._body_changes = deque(maxlen=1024)
         self._body_count_cursor = None
         self._body_count = 0
+        self._body_ids_cursor = None
+        self._body_ids_cache = frozenset()
 
     # ------------------------------------------------------------------ 基础
     def close(self):
@@ -319,14 +321,29 @@ class Repository:
             )
             return current, True, tuple(row["paper_id"] for row in rows)
 
-    def read_body_batch(self, keys, char_limit):
+    def read_body_batch(self, keys, char_limit=None):
+        if not keys:
+            return {}
         placeholders = ",".join("?" for _ in keys)
         with self._lock:
             rows = self.conn.execute(
                 "SELECT paper_id, text FROM paper_text WHERE chars > 0 AND paper_id IN (" + placeholders + ")",
                 keys,
             )
+            if char_limit is None:
+                return {row["paper_id"]: row["text"] for row in rows}
             return {row["paper_id"]: row["text"][:char_limit] for row in rows}
+
+    def body_text_ids(self):
+        with self._lock:
+            current = self._body_state()
+            if self._body_ids_cursor != current:
+                rows = self.conn.execute(
+                    "SELECT paper_id FROM paper_text WHERE substr(paper_id,1,4) != 'att-' AND chars > 0"
+                )
+                self._body_ids_cache = frozenset(row["paper_id"] for row in rows)
+                self._body_ids_cursor = current
+            return self._body_ids_cache
 
     def count_body_texts(self):
         with self._lock:

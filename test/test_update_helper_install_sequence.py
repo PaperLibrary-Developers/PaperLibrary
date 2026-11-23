@@ -205,8 +205,8 @@ class InstallSequenceTest(unittest.TestCase):
             json.dumps({"product": "PaperLibrary", "version": "1.7.1", "tag": "v1.7.1"}),
             encoding="utf-8")
         shutil.copy2(ROOT / "tools" / "make_updater.ps1", cls.pkg / "tools" / "make_updater.ps1")
-        shutil.copy2(ROOT / "tools" / "updater" / "PaperLibraryUpdater.cs",
-                     cls.pkg / "tools" / "updater" / "PaperLibraryUpdater.cs")
+        for src in (ROOT / "tools" / "updater").glob("PaperLibraryUpdater*.cs"):
+            shutil.copy2(src, cls.pkg / "tools" / "updater" / src.name)
         proc = subprocess.run(
             [str(POWERSHELL), "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(cls.pkg / "tools" / "make_updater.ps1"), "-OutDir", str(cls.pkg)],

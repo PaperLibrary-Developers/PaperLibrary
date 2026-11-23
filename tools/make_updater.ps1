@@ -23,9 +23,14 @@ if (-not (Test-Path -LiteralPath $OutDir)) {
   throw "OutDir does not exist: $OutDir"
 }
 
-$source = Join-Path $root "tools\updater\PaperLibraryUpdater.cs"
+$sourceDir = Join-Path $root "tools\updater"
+$source = Join-Path $sourceDir "PaperLibraryUpdater.cs"
 if (-not (Test-Path -LiteralPath $source)) {
   throw "Missing helper source: $source"
+}
+$sources = @(Get-ChildItem -LiteralPath $sourceDir -Filter "PaperLibraryUpdater*.cs" -File | Sort-Object Name | ForEach-Object { $_.FullName })
+if ($sources.Count -eq 0) {
+  throw "No helper sources found in: $sourceDir"
 }
 
 $versionFile = Join-Path $root "version.json"
@@ -81,7 +86,9 @@ internal static class HelperInfo
 $versionCs = Join-Path ([System.IO.Path]::GetTempPath()) ("paperlibrary-helper-version-" + [guid]::NewGuid().ToString("N") + ".cs")
 try {
   [System.IO.File]::WriteAllText($versionCs, $versionSource, (New-Object System.Text.UTF8Encoding($true)))
-  & $csc /nologo /target:exe /optimize+ /out:$exe /r:System.dll /r:System.Web.Extensions.dll $source $versionCs
+  $cscArgs = @("/nologo", "/codepage:65001", "/target:exe", "/optimize+", "/out:$exe",
+               "/r:System.dll", "/r:System.Web.Extensions.dll") + $sources + @($versionCs)
+  & $csc $cscArgs
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
     throw "helper compile failed (csc exit code $LASTEXITCODE)"
   }

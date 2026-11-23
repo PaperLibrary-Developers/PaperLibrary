@@ -7,7 +7,6 @@ from __future__ import annotations
 import os
 import re
 import time
-from pathlib import Path
 
 from paperlib.util import sanitize_file_name
 

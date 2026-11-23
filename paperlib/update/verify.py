@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import os
 
-from paperlib import version as version_mod
 from paperlib.update import manifest as manifest_mod
 from paperlib.update import signing
 from paperlib.update import store as store_mod

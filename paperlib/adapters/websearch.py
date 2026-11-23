@@ -21,6 +21,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from paperlib.adapters.secret_store import dump_with_protected_secret, load_secret_field
 from paperlib.util import read_json, write_json_atomic
 
 API_BASE = "https://api.exa.ai"
@@ -82,11 +83,13 @@ class WebSearch:
             if isinstance(raw.get("usage"), dict):
                 usage.update(raw["usage"])
             self.settings["usage"] = usage
+        if load_secret_field(self.settings, "exaApiKey") and self.file.is_file():
+            self.save()
         return self.settings
 
     def save(self):
         try:
-            write_json_atomic(self.file, self.settings)
+            write_json_atomic(self.file, dump_with_protected_secret(self.settings, "exaApiKey"))
         except OSError as exc:
             print("[websearch] 配置保存失败：" + str(exc))
 

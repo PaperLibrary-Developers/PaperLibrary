@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import re
 
+from paperlib.util import UnsupportedMediaTypeError
+
 
 def compile_pattern(pattern: str):
     keys = []
@@ -67,6 +69,9 @@ class Router:
             route["handler"](ctx)
         except (BrokenPipeError, ConnectionResetError):
             raise
+        except UnsupportedMediaTypeError as exc:
+            if not ctx.started:
+                ctx.fail(exc.status, str(exc))
         except Exception as exc:  # noqa: BLE001 - HTTP 层兜底，不泄漏堆栈
             import traceback
 

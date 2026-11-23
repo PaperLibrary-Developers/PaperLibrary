@@ -6,9 +6,10 @@ import csv
 import re
 from io import StringIO
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from xml.etree import ElementTree
 from zipfile import ZipFile
+
+from paperlib.adapters.doc_text import extract_doc_text
 
 
 TEXT_LIMIT = 5 * 1024 * 1024
@@ -109,17 +110,13 @@ def _read_rtf(path):
 
 def _read_doc(path):
     with path.open("rb") as source:
-        if source.read(8).lstrip().startswith(b"{\\rtf"):
-            return _read_rtf(path)
-    if path.stat().st_size > OFFICE_LIMIT:
-        raise ValueError("DOC 文件超过 32MB")
-
-    from doc2docx import convert
-
-    with TemporaryDirectory(prefix="paperlibrary-si-") as folder:
-        converted = Path(folder) / "attachment.docx"
-        convert(path, converted)
-        return _read_docx(converted)
+        head = source.read(8)
+    if head.lstrip().startswith(b"{\\rtf"):
+        return _read_rtf(path)
+    if head.startswith(b"PK\x03\x04"):
+        return _read_docx(path)
+    data = _read_small_file(path, OFFICE_LIMIT, "DOC 文件超过 32MB")
+    return extract_doc_text(data)
 
 
 def _read_xlsx(path):
