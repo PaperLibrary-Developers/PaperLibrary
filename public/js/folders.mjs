@@ -16,16 +16,22 @@ import { getState } from './state/store.mjs'
   const ROOT_LABEL = '未分类'
   const expanded = new Set()        // 记住展开状态，跨重绘仍在（按路径）
   let cache = { folders: [], rootCount: 0, total: 0 }
+  let nextLoad = 0
+  let appliedLoad = 0
   let savingOrder = false
 
   /* ---------------- 数据 ---------------- */
 
   async function load () {
+    const request = ++nextLoad
     const res = await api.listFolders()
-    cache = {
-      folders: res.folders || [],
-      rootCount: res.rootCount || 0,
-      total: res.total || 0
+    if (request > appliedLoad) {
+      appliedLoad = request
+      cache = {
+        folders: res.folders || [],
+        rootCount: res.rootCount || 0,
+        total: res.total || 0
+      }
     }
     return cache
   }
@@ -68,8 +74,13 @@ import { getState } from './state/store.mjs'
     go('', { folder: path === '' ? '/' : path })
   }
 
-  function notifyChanged () {
-    document.dispatchEvent(new CustomEvent('folders:changed'))
+  function expandParents (path) {
+    for (let dir = parentOf(path); dir; dir = parentOf(dir)) expanded.add(dir)
+  }
+
+  function notifyChanged (options = {}) {
+    for (const path of options.reveal || []) expandParents(path)
+    document.dispatchEvent(new CustomEvent('folders:changed', { detail: options }))
   }
 
   /**
@@ -277,9 +288,16 @@ import { getState } from './state/store.mjs'
       else navTo(path)
     }
 
-    async function reload (nextActive) {
+    async function reload (nextActive, options = {}) {
       try {
-        data = await load()
+        const fresh = await load()
+        if (options.revealNew) {
+          const known = new Set(data.folders.map(row => row.path))
+          for (const row of fresh.folders) {
+            if (!known.has(row.path)) expandParents(row.path)
+          }
+        }
+        data = fresh
       } catch (err) {
         el.replaceChildren(h('div.fld-empty', '读取分类失败：' + err.message))
         return

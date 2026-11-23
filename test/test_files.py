@@ -546,6 +546,10 @@ class DirectoryScanTest(Base):
         self.assertEqual([entry["file"] for entry in first["failed"]], ["C/损坏.pdf"])
         paper_id = cards["A/子类/原文.pdf"]
         self.assertEqual(self.services.library.get(paper_id)["folder"], "A/子类")
+        folders = {row["path"]: row for row in self.services.folders.list()["folders"]}
+        self.assertEqual(folders["A/子类"]["parent"], "A")
+        self.assertEqual(folders["A/子类"]["count"], 1)
+        self.assertEqual(folders["A"]["countDeep"], 1)
         self.assertFalse(self.services.library.get(cards["根目录.pdf"]).get("folder"))
         self.assertTrue(self.services.fulltext.has(paper_id))
         self.assertEqual(self._scan()["imported"], [])

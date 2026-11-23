@@ -1,7 +1,7 @@
 /* 设置页（ESM：原 IIFE 脚本平移而来，保留原缩进便于与历史版本逐行对照） */
 import * as util from '../util.mjs'
 import { api } from '../api.mjs'
-import { notifyChanged as refreshFolders } from '../folders.mjs'
+import { notifyChanged as refreshFolders, parentOf } from '../folders.mjs'
 import { getState } from '../state/store.mjs'
 import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
 import { autoCheckEnabled, autoDownloadEnabled } from '../update-auto.mjs'
@@ -294,7 +294,7 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
         const res = sync ? await api.syncPdfDirectory() : await api.scanPdfs()
         if (sync) {
           result = res
-          refreshFolders()
+          refreshFolders({ revealNew: true, reveal: (res.imported || []).map(item => parentOf(item.file)) })
           await refreshMeta()
           libraryStats.textContent = libraryStatsText(getState().stats || stats)
         }

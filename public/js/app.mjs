@@ -359,7 +359,7 @@ const { h, toast, debounce } = util
     const folderTree = foldersUi.folderTree({ mode: 'side', active: getState().query.folder })
     activeFolderTree = folderTree
     // 先用缓存画（可能为空），再异步拉一次真实目录树
-    foldersUi.load().then(() => { if (activeFolderTree === folderTree) folderTree.reload() }).catch(() => {})
+    folderTree.reload()
     const totalEl = navItem('全部文献', '#/', '▤', state.stats ? state.stats.total : null, activePath === '/', 'total')
     const starredEl = navItem('我的收藏', '#/starred', '★',
       state.stats && state.stats.starred ? state.stats.starred : null, activePath === '/starred', 'starred')
@@ -847,8 +847,8 @@ const { h, toast, debounce } = util
     window.addEventListener('hashchange', () => scheduleRender())
     bindShortcuts()
     // 文件夹增删改 → 刷新侧栏那棵树（保留展开状态与当前选中）
-    document.addEventListener('folders:changed', () => {
-      if (activeFolderTree) activeFolderTree.reload()
+    document.addEventListener('folders:changed', ev => {
+      if (activeFolderTree) activeFolderTree.reload(undefined, ev.detail || {})
     })
     document.addEventListener('library:imported', () => {
       refreshMeta()
