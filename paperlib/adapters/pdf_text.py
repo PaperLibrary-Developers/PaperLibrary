@@ -15,7 +15,10 @@ PyMuPDF 的 "dict" 模式本身已经给出视觉行，不再需要像 pdfjs 那
 """
 from __future__ import annotations
 
+import os
 import re
+import shutil
+from pathlib import Path
 
 # 预检时看前几页（正式文献的 DOI 基本都在首页页眉/页脚或首页摘要旁）
 HEAD_PAGES = 3
@@ -23,6 +26,9 @@ HEAD_PAGES = 3
 _lib = None
 _probed = False
 _available = None
+_CONTINUATION = r"[\x80-\xbf€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]"
+_MOJIBAKE = re.compile(r"[ÃÂ]" + _CONTINUATION + "|â" + _CONTINUATION + "{2}")
+_UNMAPPED = re.compile(r"[\ufffd\x00-\x08\x0e-\x1f\x7f-\x9f\ue000-\uf8ff\U000f0000-\U0010fffd]")
 
 
 def _pymupdf():
@@ -76,6 +82,19 @@ def _clean_line(text):
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+def _repair_encoding(text):
+    def decode(match):
+        fragment = match[0]
+        for encoding in ("cp1252", "latin-1"):
+            try:
+                return fragment.encode(encoding).decode("utf-8")
+            except UnicodeError:
+                continue
+        return fragment
+
+    return _MOJIBAKE.sub(decode, text)
+
+
 def rich_lines_from_page(page, with_fonts=False):
     """一页的视觉行：[{text, y, fonts?}]。
 
@@ -83,7 +102,9 @@ def rich_lines_from_page(page, with_fonts=False):
     """
     out = []
     try:
-        data = page.get_text("dict")
+        lib = _pymupdf()
+        flags = lib.TEXTFLAGS_DICT & ~(lib.TEXT_PRESERVE_IMAGES | lib.TEXT_CID_FOR_UNKNOWN_UNICODE)
+        data = page.get_text("dict", flags=flags)
     except Exception:  # noqa: BLE001 - 单页坏掉只丢这一页
         return out
     for block in (data or {}).get("blocks") or []:
@@ -96,7 +117,7 @@ def rich_lines_from_page(page, with_fonts=False):
                 piece = span.get("text") or ""
                 if not piece.strip():
                     continue
-                parts.append(piece)
+                parts.append(_repair_encoding(piece))
                 if with_fonts:
                     key = (str(span.get("font") or ""), round(float(span.get("size") or 0), 1))
                     fonts[key] = fonts.get(key, 0) + len(piece)
@@ -134,6 +155,37 @@ def _repair_pages(chunks):
         return chunks
 
 
+def _bad_mapping(text):
+    unknown = len(_UNMAPPED.findall(text))
+    return unknown >= 3 and unknown * 20 >= len(text)
+
+
+def _ocr_settings():
+    configured = os.getenv("TESSDATA_PREFIX")
+    executable = shutil.which("tesseract")
+    if not configured and not executable:
+        return None
+    try:
+        data = Path(configured or _pymupdf().get_tessdata())
+    except (AttributeError, OSError, RuntimeError):
+        return None
+    languages = [lang for lang in ("eng", "chi_sim", "chi_tra")
+                 if (data / (lang + ".traineddata")).is_file()]
+    return {"tessdata": str(data), "language": "+".join(languages)} if languages else None
+
+
+def _recover_page(page, settings):
+    if settings:
+        try:
+            textpage = page.get_textpage_ocr(dpi=200, full=True, **settings)
+            recovered = _clean_line(page.get_text("text", textpage=textpage))
+            if len(recovered) >= 20 and not _bad_mapping(recovered):
+                return recovered
+        except Exception:  # noqa: BLE001 - OCR 不可用时由调用方报告页码
+            pass
+    return ""
+
+
 def extract_text(abs_path, options=None):
     """逐页抽取文本，按页拼接；返回 {pages, text, perPage}。
 
@@ -143,9 +195,19 @@ def extract_text(abs_path, options=None):
     try:
         chunks = []
         per_page = []
+        unreadable = []
+        ocr = None
+        checked_ocr = False
         for number in range(1, doc.page_count + 1):
             lines = page_lines(doc, number)
             text = _clean_line(" ".join(lines))
+            if _bad_mapping(text):
+                if not checked_ocr:
+                    ocr = _ocr_settings()
+                    checked_ocr = True
+                text = _recover_page(doc.load_page(number - 1), ocr)
+                if not text:
+                    unreadable.append(number)
             if text:
                 chunks.append(text)
             per_page.append({"page": number, "lines": len(lines), "chars": len(text)})
@@ -154,6 +216,7 @@ def extract_text(abs_path, options=None):
             "pages": int(doc.page_count),
             "text": "\n\n".join(p for p in pages if p),
             "perPage": per_page,
+            "unreadablePages": unreadable,
         }
     finally:
         try:

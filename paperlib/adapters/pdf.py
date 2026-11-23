@@ -213,6 +213,10 @@ class FullText:
         if not self.available():
             raise RuntimeError(self.install_hint())
         result = pdf_text.extract_text(abs_path)
+        unreadable = result["unreadablePages"]
+        if unreadable:
+            pages = "、".join(map(str, unreadable[:12])) + (" 等" if len(unreadable) > 12 else "")
+            raise ValueError("PDF 第 " + pages + " 页的字体字符映射异常，请使用「识图识别全文」。")
         return {"pages": int(result.get("pages") or 0), "text": str(result.get("text") or "")}
 
     def extract_with_meta(self, abs_path):

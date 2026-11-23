@@ -1039,7 +1039,8 @@ import * as foldersUi from '../folders.mjs'
     const ftStatus = h('div.hint', '')
 
     function renderFtState () {
-      extractButton.hidden = !paper.pdfFile || ftReady
+      extractButton.hidden = !paper.pdfFile
+      extractButton.textContent = ftReady ? '重新提取全文' : '提取全文'
       ocrButton.hidden = !paper.pdfFile
       if (!paper.pdfFile) {
         ftStatus.textContent = '还没有 PDF 原文；上传后会自动提取正文。'
@@ -1119,13 +1120,13 @@ import * as foldersUi from '../folders.mjs'
         ftStatus.textContent = '✓ 已提取 ' + res.chars + ' 字（可被全文检索，也会用于 AI 总结）'
         ftStatus.style.color = 'var(--accent-text)'
       } catch (err) {
+        if (isStale()) return
         ftStatus.textContent = '提取失败：' + err.message
         ftStatus.style.color = 'var(--danger)'
         toast('提取失败：' + err.message, 'error')
       } finally {
         extractButton.removeAttribute('disabled')
-        extractButton.textContent = '提取全文'
-        renderFtState()
+        extractButton.textContent = ftReady ? '重新提取全文' : '提取全文'
       }
     })
     renderFtState()

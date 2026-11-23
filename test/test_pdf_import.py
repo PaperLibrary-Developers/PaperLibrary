@@ -115,6 +115,30 @@ class PdfTextTest(unittest.TestCase):
         self.assertEqual(page["page"], 1)
         self.assertIn("Metal-Organic Cages", page["text"])
 
+    def test_extract_repairs_reversible_mojibake(self):
+        with pymupdf.open() as doc:
+            page = doc.new_page()
+            page.insert_text((72, 80), "FranÃ§ais: spectroscopie à haute résolution")
+            raw = doc.tobytes()
+        result = pdf_text.extract_text(raw)
+        self.assertIn("Français", result["text"])
+        self.assertIn("résolution", result["text"])
+        self.assertEqual(result["unreadablePages"], [])
+
+    def test_unmapped_page_needs_ocr(self):
+        from paperlib.adapters.pdf import FullText
+
+        with patch.object(pdf_text, "page_lines", return_value=["\ufffd\ue000\ufffd" * 20]), \
+             patch.object(pdf_text, "_ocr_settings", return_value=None):
+            with self.assertRaisesRegex(ValueError, "第 1 页.*识图识别全文"):
+                FullText(None).extract_from_file(self.pdf)
+
+        with patch.object(pdf_text, "page_lines", return_value=["\ufffd" * 30]), \
+             patch.object(pdf_text, "_recover_page", return_value="Recovered scientific text from page one."):
+            result = pdf_text.extract_text(self.pdf)
+        self.assertIn("Recovered scientific text", result["text"])
+        self.assertEqual(result["unreadablePages"], [])
+
 
 class PdfRulesTest(unittest.TestCase):
     def test_extract_dois_normalizes_and_dedupes(self):
