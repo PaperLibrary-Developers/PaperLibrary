@@ -16,6 +16,7 @@ import { getState } from './state/store.mjs'
   const ROOT_LABEL = '未分类'
   const expanded = new Set()        // 记住展开状态，跨重绘仍在（按路径）
   let cache = { folders: [], rootCount: 0, total: 0 }
+  let savingOrder = false
 
   /* ---------------- 数据 ---------------- */
 
@@ -29,13 +30,13 @@ import { getState } from './state/store.mjs'
     return cache
   }
 
-  /** 扁平列表 → 树（每个节点带 children，按名称排序） */
+  /** 扁平列表 → 树（每组兄弟节点优先按保存的顺序排列）。 */
   function buildTree (data) {
     const src = (data || cache).folders || []
     const byPath = new Map()
     for (const row of src) {
       byPath.set(row.path, { path: row.path, name: row.name, count: row.count || 0,
-        countDeep: row.countDeep || 0, children: [] })
+        countDeep: row.countDeep || 0, sort: row.sort ?? Infinity, children: [] })
     }
     const roots = []
     for (const row of src) {
@@ -45,7 +46,7 @@ import { getState } from './state/store.mjs'
       else roots.push(node)
     }
     const sortRec = list => {
-      list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
+      list.sort((a, b) => (a.sort - b.sort) || a.name.localeCompare(b.name, 'zh-Hans-CN'))
       list.forEach(item => sortRec(item.children))
     }
     sortRec(roots)
@@ -111,8 +112,34 @@ import { getState } from './state/store.mjs'
     const el = h('div.fld-tree', { role: 'tree', 'aria-label': '分类文件夹' })
     let active = opts.active == null ? null : opts.active
     let data = cache
+    let dragged = ''
+    let dropRow = null
 
-    function row (node, depth) {
+    function clearDropMarker () {
+      dropRow?.classList.remove('drop-before', 'drop-after')
+      dropRow = null
+    }
+
+    async function reorder (source, target, after, siblings) {
+      if (savingOrder || source === target) return
+      const paths = siblings.map(node => node.path)
+      const from = paths.indexOf(source)
+      paths.splice(from, 1)
+      const to = paths.indexOf(target) + Number(after)
+      if (from === to) return
+      paths.splice(to, 0, source)
+      savingOrder = true
+      try {
+        await api.reorderFolders(paths)
+      } catch (err) {
+        toast('排序失败：' + err.message, 'error')
+      } finally {
+        savingOrder = false
+        notifyChanged()
+      }
+    }
+
+    function row (node, depth, siblings) {
       const hasKids = node.children.length > 0
       const isOpen = expanded.has(node.path)
       const chevron = hasKids
@@ -144,6 +171,7 @@ import { getState } from './state/store.mjs'
       // 侧栏用 10px 起、每层 16px（图标正好落在上方导航项图标那条竖线上）；
       // 选择器/管理器在弹窗里，紧凑一点：6px 起、每层 14px
       const side = opts.mode === 'side'
+      const sortable = opts.mode !== 'picker' && siblings.length > 1
       const indent = (side ? 10 : 6) + depth * (side ? 16 : 14)
       const rowEl = h('div.fld-row' + (active === node.path ? '.active' : '') + (opts.mode === 'manager' ? '.fld-row--manager' : ''), {
         'data-path': node.path,
@@ -151,10 +179,16 @@ import { getState } from './state/store.mjs'
         'aria-level': String(depth + 1),
         'aria-expanded': hasKids ? (isOpen ? 'true' : 'false') : null,
         tabindex: '0',
+        draggable: sortable ? 'true' : null,
         title: node.path,
         style: { paddingLeft: indent + 'px' },
         onclick: () => pick(node.path),
-        onkeydown: ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(node.path) } }
+        onkeydown: ev => {
+          if (ev.target === ev.currentTarget && (ev.key === 'Enter' || ev.key === ' ')) {
+            ev.preventDefault()
+            pick(node.path)
+          }
+        }
       },
         chevron,
         folderIco(isOpen && hasKids ? 'open' : 'closed'),
@@ -162,12 +196,49 @@ import { getState } from './state/store.mjs'
         h('span.fld-count', String(opts.mode === 'manager' ? node.countDeep : node.count)),
         actions
       )
+      if (sortable) {
+        const canDrop = () => dragged && dragged !== node.path && parentOf(dragged) === parentOf(node.path)
+        const after = ev => {
+          const rect = rowEl.getBoundingClientRect()
+          return ev.clientY > rect.top + rect.height / 2
+        }
+        rowEl.addEventListener('dragstart', ev => {
+          if (savingOrder || ev.target !== rowEl) return ev.preventDefault()
+          dragged = node.path
+          ev.dataTransfer.setData('text/plain', node.path)
+          ev.dataTransfer.effectAllowed = 'move'
+        })
+        rowEl.addEventListener('dragover', ev => {
+          if (!canDrop()) return
+          ev.preventDefault()
+          ev.dataTransfer.dropEffect = 'move'
+          clearDropMarker()
+          dropRow = rowEl
+          rowEl.classList.add(after(ev) ? 'drop-after' : 'drop-before')
+        })
+        rowEl.addEventListener('dragleave', ev => {
+          if (dropRow === rowEl && !rowEl.contains(ev.relatedTarget)) clearDropMarker()
+        })
+        rowEl.addEventListener('drop', ev => {
+          if (!canDrop()) return
+          ev.preventDefault()
+          reorder(dragged, node.path, after(ev), siblings)
+          clearDropMarker()
+          dragged = ''
+        })
+        rowEl.addEventListener('dragend', () => {
+          clearDropMarker()
+          dragged = ''
+        })
+      }
       // 侧栏里 ▸ 绝对定位藏进缩进区：它不再占 flow 宽度，图标才能和导航图标对齐
       if (side) rowEl.style.setProperty('--fld-indent', indent + 'px')
 
       return h('div.fld-node',
         rowEl,
-        hasKids && isOpen ? h('div.fld-kids', { role: 'group' }, node.children.map(child => row(child, depth + 1))) : null
+        hasKids && isOpen
+          ? h('div.fld-kids', { role: 'group' }, node.children.map(child => row(child, depth + 1, node.children)))
+          : null
       )
     }
 
@@ -196,7 +267,7 @@ import { getState } from './state/store.mjs'
         )
         return
       }
-      el.replaceChildren(rootRow, h('div.fld-nodes', nodes.map(node => row(node, 0))))
+      el.replaceChildren(rootRow, h('div.fld-nodes', nodes.map(node => row(node, 0, nodes))))
     }
 
     function pick (path) {
@@ -434,7 +505,7 @@ import { getState } from './state/store.mjs'
       h('div.fld-hint',
         h('p', '点一行选中，「新建」建在它下面。'),
         h('p', '✎ 重命名；🗑 删除（文献会移到上一级）。'),
-        h('p', '分类只存在库里，电脑上不会建文件夹。'))))
+        h('p', '拖到同级文件夹的上方或下方可以调整顺序。'))))
 
     const footer = h('div.fld-foot',
       h('span.fld-hint', '共 ' + (cache.total || 0) + ' 篇文献'),

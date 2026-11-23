@@ -105,6 +105,19 @@ class FolderCRUDTest(unittest.TestCase):
             self.folders.rename("电催化", "催化")
         self.assertEqual(ctx.exception.status, 409)
 
+    def test_order_persists_and_follows_rename(self):
+        self.folders.ensure("A/one")
+        self.folders.ensure("A/two")
+        self.folders.ensure("B")
+        self.folders.reorder(["B", "A"])
+        self.folders.reorder(["A/two", "A/one"])
+        self.folders.rename("A", "C")
+        self.assertEqual(self.store.repo.folder_order(), {"B": 1, "C": 2, "C/two": 1, "C/one": 2})
+        with self.assertRaises(FolderError):
+            self.folders.reorder(["B", "C/one"])
+        self.folders.delete("C")
+        self.assertEqual(self.store.repo.folder_order(), {"B": 1})
+
     def test_delete_moves_papers_to_parent(self):
         self.folders.ensure("电催化/钙钛矿")
         self._paper_in("p1", "电催化/钙钛矿")

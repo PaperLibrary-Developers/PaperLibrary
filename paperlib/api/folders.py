@@ -5,6 +5,7 @@
   PATCH  /api/folders              → 重命名（{path, name}），整棵子树一起改
   DELETE /api/folders?path=A/B     → 删除（含子文件夹；文献上移到父级，不删文献）
   POST   /api/folders/move         → 把文献移到某个文件夹（{ids, path}）
+  PUT    /api/folders/order        → 保存同级顺序（{paths}）
 """
 from __future__ import annotations
 
@@ -64,3 +65,12 @@ def move_papers(ctx):
     except FolderError as exc:
         return _fail(ctx, exc)
     return ctx.json(200, result)
+
+
+def reorder_folders(ctx):
+    try:
+        body = ctx.read_json()
+        _folders(ctx).reorder(body.get("paths") if isinstance(body, dict) else None)
+    except ValueError as exc:
+        return _fail(ctx, exc)
+    return ctx.json(200, {"ok": True})

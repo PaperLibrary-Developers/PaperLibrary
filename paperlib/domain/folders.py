@@ -58,13 +58,14 @@ class Folders:
         with self.db.paper_writes():
             paths = [path for path, _ in walk_assets(self.db.papers_dir) if path]
             papers = self.db.list_papers()
+            order = self.db.repo.folder_order()
         direct = Counter(p.get("folder") or "" for p in papers)
         deep = direct.copy()
         for path in reversed(paths):
             deep[parent_of(path)] += deep[path]
         out = [{"path": path, "name": name_of(path), "parent": parent_of(path),
                 "depth": path.count("/"), "count": direct[path], "countDeep": deep[path],
-                "createdAt": ""} for path in paths]
+                "sort": order.get(path), "createdAt": ""} for path in paths]
         out.sort(key=lambda item: (item["parent"], item["name"].casefold()))
         return {"folders": out, "total": len(papers), "rootCount": direct[""]}
 
@@ -85,6 +86,18 @@ class Folders:
             return self.db.patch_papers(patches)
 
     # ---------------- 写 ----------------
+    def reorder(self, paths):
+        if not isinstance(paths, list) or len(paths) < 2 or not all(isinstance(path, str) and path for path in paths):
+            raise FolderError("请选择至少两个同级文件夹")
+        parent = parent_of(paths[0])
+        if any(parent_of(path) != parent for path in paths) or len(set(paths)) != len(paths):
+            raise FolderError("只能为同级文件夹排序")
+        with self.db.paper_writes():
+            siblings = {path for path, _ in walk_assets(self.db.papers_dir) if path and parent_of(path) == parent}
+            if set(paths) != siblings:
+                raise FolderError("文件夹列表已变更，请刷新后重试", 409)
+            self.db.repo.set_folder_order(paths)
+
     def ensure(self, path) -> str:
         """保证路径存在（逐级补建），返回归一化后的路径。导入时用它兜底。"""
         path = str(path or "").replace("\\", "/")
@@ -155,7 +168,7 @@ class Folders:
                     if file:
                         patch["pdfFile"] = target + file[len(path):]
                     patches[paper["id"]] = patch
-            moved = self.db.patch_papers(patches)
+            moved = self.db.patch_papers(patches, folder_relocation=(path, target))
             rollback.pop_all()
         return {"path": target, "name": new_name, "parent": parent, "renamed": True, "moved": moved}
 
@@ -197,7 +210,7 @@ class Folders:
                     next_file = locations.get(file, file)
                     patches[paper["id"]] = {"folder": dest if not file or file in locations else "",
                                             "pdfFile": next_file}
-            moved = self.db.patch_papers(patches)
+            moved = self.db.patch_papers(patches, folder_relocation=(path, None))
             rollback.pop_all()
             removed = len(dirs)
         return {"ok": True, "removed": removed, "moved": moved, "to": dest}

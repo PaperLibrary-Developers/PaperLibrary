@@ -141,7 +141,7 @@ class Store:
             self.papers[idx] = merged
             return merged
 
-    def patch_papers(self, patches):
+    def patch_papers(self, patches, *, folder_relocation=None):
         """同时提交多篇文献的文件位置，并在提交后更新内存。"""
         with self._lock:
             previous = {}
@@ -152,9 +152,12 @@ class Store:
                     previous[paper["id"]] = paper
                     records[index] = dict(paper, **patch)
             if not records:
+                if folder_relocation is not None:
+                    self.repo.write_papers(folder_relocation=folder_relocation)
                 return 0
             updated = now_iso()
-            self.repo.write_papers(records.values(), updated_at=updated, previous_by_id=previous)
+            self.repo.write_papers(records.values(), updated_at=updated, previous_by_id=previous,
+                                   folder_relocation=folder_relocation)
             for index, record in records.items():
                 self.papers[index] = record
                 self._hashes[record["id"]] = _hash_paper(record)

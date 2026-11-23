@@ -401,6 +401,9 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 .fld-row:hover { background: var(--surface-3); color: var(--text); }
 .fld-row.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .fld-row--root { margin-bottom: 2px; }
+.fld-row[draggable="true"] { cursor: grab; }
+.fld-row.drop-before { box-shadow: inset 0 2px var(--accent); }
+.fld-row.drop-after { box-shadow: inset 0 -2px var(--accent); }
 .fld-caret {
   flex: none; width: 14px; height: 14px; display: grid; place-items: center;
   border: 0; background: none; color: var(--faint); font-size: 10px; line-height: 1;

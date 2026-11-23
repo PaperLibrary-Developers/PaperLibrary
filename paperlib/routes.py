@@ -49,6 +49,7 @@ ROUTES = [
     {"name": "folders-update", "methods": ("PATCH",), "pattern": "/api/folders", "handler": folders.rename_folder},
     {"name": "folders-delete", "methods": ("DELETE",), "pattern": "/api/folders", "handler": folders.delete_folder},
     {"name": "folders-move", "methods": ("POST",), "pattern": "/api/folders/move", "handler": folders.move_papers},
+    {"name": "folders-order", "methods": ("PUT",), "pattern": "/api/folders/order", "handler": folders.reorder_folders},
 
     # 全库智能问答助手：概览（非流式）+ 提问（SSE）
     {"name": "copilot-overview", "methods": ("GET",), "pattern": "/api/copilot/overview", "handler": copilot.overview},

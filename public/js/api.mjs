@@ -318,6 +318,7 @@
     /* ---------- 文件夹分类（库内，类似资源管理器） ---------- */
     /** 扁平列表 + 计数；前端自己拼树 */
     listFolders: () => request('GET', '/api/folders'),
+    reorderFolders: paths => request('PUT', '/api/folders/order', { body: { paths } }),
     /** 新建：{path} 或 {parent,name}；已存在时幂等返回 */
     createFolder: body => request('POST', '/api/folders', { body }),
     /** 重命名：{path, name}，整棵子树一起改 */

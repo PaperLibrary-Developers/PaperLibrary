@@ -139,7 +139,8 @@ class Repository:
     def save_paper(self, paper):
         self.write_papers((paper,))
 
-    def write_papers(self, papers=(), removed=(), updated_at=None, *, previous=None, previous_by_id=None):
+    def write_papers(self, papers=(), removed=(), updated_at=None, *, previous=None, previous_by_id=None,
+                     folder_relocation=None):
         """Commit card records, related rows and library metadata together."""
         removed = tuple(removed)
         with self._lock:
@@ -148,10 +149,35 @@ class Repository:
                     self._save_paper(paper, previous_by_id.get(paper["id"]) if previous_by_id is not None else previous)
                 for paper_id in removed:
                     self._delete_paper(paper_id)
+                if folder_relocation is not None:
+                    self._relocate_folder_order(*folder_relocation)
                 if updated_at is not None:
                     self._set_meta("updatedAt", updated_at)
             for paper_id in removed:
                 self._record_body_change(paper_id)
+
+    def folder_order(self):
+        with self._lock:
+            return dict(self.conn.execute("SELECT path, sort FROM folders WHERE sort > 0").fetchall())
+
+    def _save_folder_order(self, paths_and_ranks):
+        self.conn.executemany(
+            "INSERT INTO folders (path, name, parent, sort) VALUES (?,?,?,?) "
+            "ON CONFLICT(path) DO UPDATE SET sort=excluded.sort",
+            ((path, path.rpartition("/")[2], path.rpartition("/")[0], rank) for path, rank in paths_and_ranks),
+        )
+
+    def set_folder_order(self, paths):
+        with self._lock, self.conn:
+            self._save_folder_order((path, rank) for rank, path in enumerate(paths, 1))
+
+    def _relocate_folder_order(self, path, new_path):
+        predicate = "path = ? OR substr(path, 1, length(?)) = ?"
+        params = (path, path + "/", path + "/")
+        rows = self.conn.execute("SELECT path, sort FROM folders WHERE " + predicate, params).fetchall()
+        self.conn.execute("DELETE FROM folders WHERE " + predicate, params)
+        if new_path is not None:
+            self._save_folder_order((new_path + row["path"][len(path):], row["sort"]) for row in rows)
 
     def _save_paper(self, paper, previous=None):
         data = dict(paper)
