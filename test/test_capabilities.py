@@ -34,7 +34,7 @@ from paperlib.legacy import figures as legacy_figures  # noqa: E402
 from paperlib.routes import ROUTES  # noqa: E402
 from paperlib.services import create_services  # noqa: E402
 
-DATA_DIR = tempfile.mkdtemp(prefix="nexus-cap-")
+DATA_DIR = tempfile.mkdtemp(prefix="helix-cap-")
 
 
 def _noise_png(width=420, height=300, seed=7):
@@ -299,7 +299,7 @@ class LlmReadinessTest(unittest.TestCase):
     def test_unconfigured_llm_is_never_called(self):
         from paperlib.adapters.llm import LLM
 
-        llm = LLM(tempfile.mkdtemp(prefix="nexus-llm-"))
+        llm = LLM(tempfile.mkdtemp(prefix="helix-llm-"))
         calls = []
         llm.chat = lambda *args, **kwargs: calls.append(1) or {"text": "{}"}
         services = _fake_services(llm)
@@ -440,7 +440,7 @@ class CaptionMatcherTest(unittest.TestCase):
 
 class FigureExtractionTest(unittest.TestCase):
     def test_extract_from_pdf(self):
-        directory = Path(tempfile.mkdtemp(prefix="nexus-fig-"))
+        directory = Path(tempfile.mkdtemp(prefix="helix-fig-"))
         pdf_path = directory / "demo.pdf"
         pdf_path.write_bytes(build_fixture_pdf())
         result = legacy_figures.extract_pdf_figures(pdf_path, "paper-x", directory)
@@ -460,7 +460,7 @@ class FigureExtractionTest(unittest.TestCase):
         self.assertIn("Fig. 2", captions)
 
     def test_resolve_rejects_escape(self):
-        directory = Path(tempfile.mkdtemp(prefix="nexus-fig2-"))
+        directory = Path(tempfile.mkdtemp(prefix="helix-fig2-"))
         self.assertIsNone(legacy_figures.resolve_image_path(directory, "../etc/passwd"))
 
 

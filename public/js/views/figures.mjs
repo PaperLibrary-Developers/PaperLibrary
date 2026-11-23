@@ -1,6 +1,6 @@
 /* 图表画廊视图 #/figures（合并后新增的浏览器视图；Node 参考实现与其前端都没有这一页，属新写）
    移植自 PaperLibrary app/figures_arxiv.py（图表画廊 + 图注匹配）与 app/thumbs.py（缩略图），
-   数据面换成 Nexus 的 HTTP 端点。契约：docs/合并新增端点契约-20261107.md
+   数据面换成 HELIX 的 HTTP 端点。契约：docs/合并新增端点契约-20261107.md
         §1 GET /api/figures（q / paperId / type / page / pageSize，响应 items/total/page/pageSize/pageCount）
         §2 GET|HEAD /api/figures/:id/image（图片流，可直接当 <img src>）
         §3 GET /api/papers/:id/figures

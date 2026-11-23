@@ -13,8 +13,8 @@
   · 去重：同 DOI（去前缀小写）或同标题（trim/lower）合并；用户编辑字段以 Sci-lib 侧为准。
   · 幂等：legacy_ids 已映射的条目不重复插入；文件按「目标已存在」判断是否复制。
   · dry_run=True 不写任何表 / 文件 / 备份，只返回统计。
-只读旧库 SQL 在本文件内（旧库是外部 SQLite，没有别的入口）；Nexus 自己的库一律走 store
-访问器，本文件不写一行 Nexus SQL。
+只读旧库 SQL 在本文件内（旧库是外部 SQLite，没有别的入口）；HELIX 自己的库一律走 store
+访问器，本文件不写一行 HELIX SQL。
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def discover_sources(config):
 
     优先级：config.extra["legacy"]{scilibDir,paperlibraryDir} → 同名 extra 键 →
     环境变量 PAPERLIB_SCILIB_DIR / PAPERLIB_PAPERLIBRARY_DIR →
-    与 Nexus 同级的老工程目录（<root>/../Sci-lib、<root>/../PaperLibrary/app）。
+    与 HELIX 同级的老工程目录（<root>/../Sci-lib、<root>/../PaperLibrary/app）。
     """
     extra = getattr(config, "extra", None) or {}
     legacy = extra.get("legacy") if isinstance(extra.get("legacy"), dict) else {}

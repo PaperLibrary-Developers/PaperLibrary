@@ -44,7 +44,7 @@ const { h, toast, debounce } = util
     document.documentElement.dataset.uiVersion = UI_VERSION
     const meta = document.querySelector('meta[name="ui-version"]')
     if (meta) meta.setAttribute('content', UI_VERSION)
-    document.title = 'PaperLibrary ' + UI_VERSION + ' Nexus · 我的文献资料库'
+    document.title = 'PaperLibrary ' + UI_VERSION + ' HELIX · 我的文献资料库'
   }
 
   /* ---------------- 全局状态（P4.4：本体在 state/store.mjs） ---------------- */
@@ -408,12 +408,12 @@ const { h, toast, debounce } = util
         type: 'button', 'aria-label': '关闭导航栏', title: '关闭导航栏（Esc）',
         onclick: () => closeDrawer()
       }, '✕'),
-      // 品牌区：标记 + （字标 + NEXUS 胶囊）+ 版本号。
+      // 品牌区：标记 + （字标 + HELIX 胶囊）+ 版本号。
       // 版本号仍在字标下方这一行（跟改造前同一个位置），只是收成 v<major>.<minor>——
       // 产品线名已经由胶囊表达，再写一遍是重复；整块高度仍由 logo 小块（36px）决定，导航位置不变。
       h('div.brand', {
-        title: UI_VERSION ? 'PaperLibrary ' + UI_VERSION + ' Nexus' : 'PaperLibrary Nexus',
-        'aria-label': UI_VERSION ? 'PaperLibrary ' + UI_VERSION + ' Nexus' : 'PaperLibrary Nexus'
+        title: UI_VERSION ? 'PaperLibrary ' + UI_VERSION + ' HELIX' : 'PaperLibrary HELIX',
+        'aria-label': UI_VERSION ? 'PaperLibrary ' + UI_VERSION + ' HELIX' : 'PaperLibrary HELIX'
       },
         // logo 是图片（自带浅灰底），放在同底色的小圆角块里，图与块之间不露接缝
         h('div.brand-mark', h('img', { src: '/paperlibrary-mark.png', alt: 'PaperLibrary', draggable: 'false' })),
@@ -425,7 +425,7 @@ const { h, toast, debounce } = util
               h('span.brand-teal', 'Library')
             ),
             // 产品线标记：跟字标同一行、字号小一档，不抢字标的视觉重心
-            h('span.brand-badge', 'NEXUS')
+            h('span.brand-badge', 'HELIX')
           ),
           h('span.brand-ver', UI_VERSION)
         )

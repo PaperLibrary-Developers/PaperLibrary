@@ -43,10 +43,10 @@ class ReleaseManifestTest(unittest.TestCase):
 
 class NamingTest(unittest.TestCase):
     def test_asset_name(self):
-        self.assertEqual(release.asset_name("v1.6"), "PaperLibrary.v1.6.Nexus.zip")
-        self.assertEqual(release.asset_name("v12.34"), "PaperLibrary.v12.34.Nexus.zip")
+        self.assertEqual(release.asset_name("v1.6"), "PaperLibrary.v1.6.HELIX.zip")
+        self.assertEqual(release.asset_name("v12.34"), "PaperLibrary.v12.34.HELIX.zip")
         # 补丁版本用完整的 vX.Y.Z 标签（与 version.json 规则一致）
-        self.assertEqual(release.asset_name("v1.7.1"), "PaperLibrary.v1.7.1.Nexus.zip")
+        self.assertEqual(release.asset_name("v1.7.1"), "PaperLibrary.v1.7.1.HELIX.zip")
         for bad in ("1.6", "v1", "v1.7.1.2", "", None, "v1.6/x"):
             with self.assertRaises(ValueError):
                 release.asset_name(bad)
@@ -55,7 +55,7 @@ class NamingTest(unittest.TestCase):
         self.assertEqual(
             release.release_asset_url("v1.6"),
             "https://github.com/PaperLibrary-Developers/PaperLibrary/releases/download/v1.6/"
-            "PaperLibrary.v1.6.Nexus.zip")
+            "PaperLibrary.v1.6.HELIX.zip")
         self.assertEqual(
             release.stable_manifest_url(),
             "https://github.com/PaperLibrary-Developers/PaperLibrary/releases/latest/download/"
@@ -132,7 +132,7 @@ class VerifyCliTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        self.zip = make_zip(self.dir / "PaperLibrary.v1.6.Nexus.zip",
+        self.zip = make_zip(self.dir / "PaperLibrary.v1.6.HELIX.zip",
                             {"PaperLibrary.exe": b"MZ", "paperlib/app.py": b"x"})
         self.asset = {
             "url": release.release_asset_url("v1.6"),

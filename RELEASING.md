@@ -20,7 +20,7 @@
 
 | 资产 | 命名 | 说明 |
 |---|---|---|
-| 完整包 | `PaperLibrary.<tag>.Nexus.zip`（如 `PaperLibrary.v1.6.Nexus.zip`） | 由 `tools/release.py` 构建 + `tools/package_zip.py` 打包；**不得包含 `data/`** |
+| 完整包 | `PaperLibrary.<tag>.HELIX.zip`（如 `PaperLibrary.v2.0.HELIX.zip`） | 由 `tools/release.py` 构建 + `tools/package_zip.py` 打包；**不得包含 `data/`** |
 | 更新清单 | `update-manifest.json` | schema=1，Ed25519 签名，见清单契约 |
 
 可选：`SHA256SUMS`（一行一个 `<sha256>  <文件名>`）、`release-notes-<tag>.md`（更新说明）。
@@ -59,7 +59,7 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 ### 3.3 真正发版（推送 tag + 创建 Release + 发布后校验）
 
-     python tools/update_publish.py --zip dist/PaperLibrary.v1.6.Nexus.zip \
+     python tools/update_publish.py --zip dist/PaperLibrary.v2.0.HELIX.zip \
          --min-windows <x.y.z> --publish --yes [--notes-file dist/release-notes-v1.6.md]
 
 脚本会：校验工作区干净 → 拒绝本地/远端已存在的 tag → 创建并推送 `v<major>.<minor>` tag →
@@ -72,7 +72,7 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 2. `python -m unittest discover -s test`；`python tools/release.py`；`python tools/package_zip.py --src <包>`。
 3. `python tools/update_manifest.py sign --in <manifest.json> --out dist/update-manifest.json`。
 4. `git tag v<tag>`；`git push origin v<tag>`；
-   `gh release create v<tag> <zip> dist/update-manifest.json --title "PaperLibrary v<tag> Nexus" --notes-file <说明>`。
+   `gh release create v<tag> <zip> dist/update-manifest.json --title "PaperLibrary v<tag> HELIX" --notes-file <说明>`。
 5. `python tools/verify_release.py --manifest dist/update-manifest.json --latest --download`。
 
 ### 3.5 发布后校验（必须全绿才视为发布成功）

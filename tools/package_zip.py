@@ -15,7 +15,7 @@ zip 格式不保存 Windows 文件属性：解压后 PaperLibrary.exe.config 会
 
 用法：
     python tools/package_zip.py --src dist/PaperLibrary-<stamp>
-    python tools/package_zip.py --src <包目录> --out dist/PaperLibrary.<tag>.Nexus.zip
+    python tools/package_zip.py --src <包目录> --out dist/PaperLibrary.<tag>.HELIX.zip
 """
 from __future__ import annotations
 

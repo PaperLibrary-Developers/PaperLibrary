@@ -82,7 +82,7 @@ def wait_url(url, timeout=20):
     return False
 
 
-def screenshot_desktop(path: Path, pid=None, title="PaperLibrary v1.7.1 Nexus"):
+def screenshot_desktop(path: Path, pid=None, title="PaperLibrary v1.7.1 HELIX"):
     """只截取启动器的 MessageBox（#32770）或主窗口，避免把桌面其它内容写入证据。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     activate = ""

@@ -38,7 +38,7 @@ export async function openPage (options) {
   const browserPath = opts.browserPath || findBrowser('')
   if (!browserPath) throw new Error('没有找到 Edge/Chrome')
 
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-cdp-'))
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'helix-cdp-'))
   const child = spawn(browserPath, [
     '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
     '--disable-extensions', '--disable-background-networking', '--mute-audio',

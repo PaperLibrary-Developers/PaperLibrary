@@ -25,7 +25,7 @@ TEST_PUBLIC = ed25519.public_key(TEST_SEED)
 CURRENT = load_version(ROOT)
 VERSION = CURRENT["version"]
 TAG = CURRENT["tag"]
-ASSET = "PaperLibrary.%s.Nexus.zip" % TAG
+ASSET = "PaperLibrary.%s.HELIX.zip" % TAG
 
 
 def local_tag_exists() -> bool:
@@ -61,7 +61,7 @@ class PublishUnitTest(unittest.TestCase):
             self.assertEqual(data["assets"]["full"]["sha256"], update_publish.sha256_file(zip_path))
             self.assertEqual(data["assets"]["full"]["url"],
                              "https://github.com/PaperLibrary-Developers/PaperLibrary/"
-                             "releases/download/v1.6/PaperLibrary.v1.6.Nexus.zip")
+                             "releases/download/v1.6/PaperLibrary.v1.6.HELIX.zip")
             manifest.validate(data, require_signature=False)
             signed = update_publish.sign_manifest(data, TEST_SEED, TEST_PUBLIC)
             signing.verify_manifest(signed, TEST_PUBLIC)

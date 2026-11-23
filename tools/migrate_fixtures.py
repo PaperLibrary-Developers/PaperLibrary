@@ -1,6 +1,6 @@
 """迁移工具的脚手架：对真实旧库干跑 / 正式迁移 / 迁移后自检 / 缩样造 fixture。
 
-用法（在 Nexus 仓库根执行）：
+用法（在 HELIX 仓库根执行）：
   python tools/migrate_fixtures.py --dry-run                     # 默认：真实旧库干跑，不写盘
   python tools/migrate_fixtures.py --apply --data-dir data-migrate
   python tools/migrate_fixtures.py --source <PaperLibrary app|data> \
@@ -169,7 +169,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="旧库迁移工具（干跑 / 正式 / 自检 / 造 fixture）")
     parser.add_argument("--source", help="PaperLibrary app 或 data 目录")
     parser.add_argument("--scilib", help="Sci-lib 仓库根或 data 目录")
-    parser.add_argument("--data-dir", default="data-migrate", help="Nexus 数据目录（默认 data-migrate）")
+    parser.add_argument("--data-dir", default="data-migrate", help="HELIX 数据目录（默认 data-migrate）")
     parser.add_argument("--dry-run", action="store_true", help="只干跑，不写库（默认行为）")
     parser.add_argument("--apply", action="store_true", help="真的写库")
     parser.add_argument("--verify", action="store_true", help="迁移后自检（计数/打开抽样/查重）")

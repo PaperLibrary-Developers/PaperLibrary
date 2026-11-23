@@ -159,7 +159,7 @@ class FakeCtx:
 
 class AiTestBase(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="nexus-t4-ai-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="helix-t4-ai-"))
         self.fake = FakeOpenAI()
 
     def tearDown(self):

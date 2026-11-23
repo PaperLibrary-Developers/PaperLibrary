@@ -76,7 +76,7 @@ FIXTURES = {
 class MarkdownMathTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="nexus-md-")
+        cls.tmp = tempfile.mkdtemp(prefix="helix-md-")
         harness = Path(cls.tmp) / "harness.mjs"
         harness.write_text(HARNESS, encoding="utf-8")
         fixtures = Path(cls.tmp) / "fixtures.json"

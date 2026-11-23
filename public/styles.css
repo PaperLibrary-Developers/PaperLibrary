@@ -20,7 +20,7 @@
   /* 品牌配色（取自 logo：深蓝的书 + 青色的 S） */
   --brand-navy: #1b2d56;
   --brand-teal: #0e9aab;
-  /* NEXUS 胶囊：参考样式是「青蓝 → 宝蓝 → 靛紫」的对角多色渐变（不是单色蓝的明暗），
+  /* HELIX 胶囊：参考样式是「青蓝 → 宝蓝 → 靛紫」的对角多色渐变（不是单色蓝的明暗），
      白字压在中段最深处，对比度仍然够（约 4.8:1）。三处色值取自参考图取样 */
   --badge-bg: linear-gradient(135deg, #119dea 0%, #2369eb 52%, #4a4ae6 100%);
   --badge-fg: #fff;
@@ -199,7 +199,7 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 /* 顶栏的抽屉开关：任何尺寸都在，用 aria-expanded 表达当前状态 */
 .side-toggle { flex: none; }
 .side-toggle.on { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
-/* ---------- 品牌区：标记 +（字标 + NEXUS 胶囊）+ 版本号，与下方导航项同高居中 ---------- */
+/* ---------- 品牌区：标记 +（字标 + HELIX 胶囊）+ 版本号，与下方导航项同高居中 ---------- */
 .sidebar > * { flex: 0 0 auto; }
 .brand { display: flex; align-items: center; gap: 8px; padding: 0 6px 4px; min-width: 0; }
 .brand-mark {
@@ -256,7 +256,7 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
   color: var(--muted); font-variant-numeric: tabular-nums;
   padding-left: 1px; white-space: nowrap;
 }
-/* NEXUS 胶囊：宽字距大写，高度约字标的 1.4 倍，做产品线标记而不是第二个标题 */
+/* HELIX 胶囊：宽字距大写，高度约字标的 1.4 倍，做产品线标记而不是第二个标题 */
 .brand-badge {
   flex: none; padding: 2px 5px; border-radius: 6px;
   background: var(--badge-bg); color: var(--badge-fg);

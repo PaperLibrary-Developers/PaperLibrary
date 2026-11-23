@@ -235,11 +235,11 @@ def publish(tag: str, assets, notes_file: str, pubkey_b64: str):
     if proc.returncode != 0:
         raise PublishError("推送 tag 失败：" + ((proc.stderr or proc.stdout or ""))[-400:])
     cmd = ["gh", "release", "create", tag] + [str(item) for item in assets]
-    cmd += ["--title", "PaperLibrary %s Nexus" % tag]
+    cmd += ["--title", "PaperLibrary %s HELIX" % tag]
     if notes_file:
         cmd += ["--notes-file", notes_file]
     else:
-        cmd += ["--notes", "PaperLibrary %s Nexus" % tag]
+        cmd += ["--notes", "PaperLibrary %s HELIX" % tag]
     proc = run(cmd, timeout=900)
     if proc.returncode != 0:
         raise PublishError("创建 GitHub Release 失败：" + ((proc.stderr or proc.stdout or ""))[-800:])

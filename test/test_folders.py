@@ -40,7 +40,7 @@ class PathNormalizeTest(unittest.TestCase):
 
 class FolderCRUDTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="nexus-folders-")
+        self.tmp = tempfile.mkdtemp(prefix="helix-folders-")
         self.store = Store(Path(self.tmp))
         self.store.load()
         self.folders = Folders(self.store)

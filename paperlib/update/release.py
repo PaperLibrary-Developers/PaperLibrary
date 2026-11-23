@@ -35,8 +35,8 @@ def check_tag(tag: str) -> str:
 
 
 def asset_name(tag: str) -> str:
-    """完整包资产命名：PaperLibrary.<tag>.Nexus.zip（如 PaperLibrary.v1.6.Nexus.zip）。"""
-    return "PaperLibrary.%s.Nexus.zip" % check_tag(tag)
+    """完整包资产命名：PaperLibrary.<tag>.HELIX.zip（如 PaperLibrary.v1.6.HELIX.zip）。"""
+    return "PaperLibrary.%s.HELIX.zip" % check_tag(tag)
 
 
 def release_asset_url(tag: str, name: str = "", repo: str = REPO) -> str:

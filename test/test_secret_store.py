@@ -49,7 +49,7 @@ class SecretStoreUnitTests(unittest.TestCase):
 
 class AdapterSecretPersistenceTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="nexus-dpapi-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="helix-dpapi-"))
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

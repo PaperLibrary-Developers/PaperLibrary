@@ -21,8 +21,8 @@ class Launcher
     const string Url = "http://127.0.0.1:4321/";
     // Window title = product + release tag from version.json (single source of truth).
     // ReadVersion() runs before the mutex/window so a missing file never breaks startup.
-    static string Title = "PaperLibrary Nexus";
-    const string MutexName = "PaperLibraryNexus.WebViewHost";
+    static string Title = "PaperLibrary HELIX";
+    const string MutexName = "PaperLibraryHELIX.WebViewHost";
 
     static readonly object LogLock = new object();
     static readonly object ServerLock = new object();
@@ -129,7 +129,7 @@ class Launcher
                 Log("version.json has no valid tag; window title without version");
                 return;
             }
-            Title = "PaperLibrary " + match.Groups[1].Value + " Nexus";
+            Title = "PaperLibrary " + match.Groups[1].Value + " HELIX";
             Log("window title from version.json: " + Title);
         }
         catch (Exception ex)

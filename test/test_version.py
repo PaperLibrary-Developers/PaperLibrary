@@ -202,7 +202,7 @@ class VersionCheckTest(unittest.TestCase):
             (root / "version.json").write_text(
                 json.dumps({"product": "PaperLibrary", "version": "1.7.0", "tag": "v1.7"}),
                 encoding="utf-8")
-            (root / "README.md").write_text("# PaperLibrary v1.7 Nexus\n", encoding="utf-8")
+            (root / "README.md").write_text("# PaperLibrary v1.7 HELIX\n", encoding="utf-8")
             problems, info = version_check.run(root)
             self.assertTrue(any("README.md" in item and "v1.7" in item for item in problems),
                             problems)

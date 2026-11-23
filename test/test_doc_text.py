@@ -49,7 +49,7 @@ class DocTextTests(unittest.TestCase):
             extract_doc_text(bytes(raw))
 
     def test_attachment_extractor_supports_doc_and_disguised_docx(self):
-        tmp = Path(tempfile.mkdtemp(prefix="nexus-doc-test-"))
+        tmp = Path(tempfile.mkdtemp(prefix="helix-doc-test-"))
         try:
             real_doc = tmp / "sample.doc"
             real_doc.write_bytes(WORD97_FIXTURE.read_bytes())
