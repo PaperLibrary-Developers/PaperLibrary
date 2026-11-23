@@ -459,7 +459,23 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
     const pdfPanel = foldPanel('assets-pdf', '原文与补充材料',
       h('div', { style: { display: 'grid', gap: '10px' } },
         h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
-          '把 PDF 放进 data/article/papers/，重新扫描后按实际目录导入和分类。' +
+          '把 PDF 放进 ',
+          h('button.link-ish.asset-directory-link', {
+            type: 'button', title: '在文件资源管理器中打开原文文件夹',
+            onclick: async event => {
+              const button = event.currentTarget
+              button.disabled = true
+              try {
+                await api.openPapersDirectory()
+                toast('已打开原文文件夹')
+              } catch (err) {
+                toast(err.message, 'error')
+              } finally {
+                button.disabled = false
+              }
+            }
+          }, 'data/article/papers/'),
+          '，重新扫描后按实际目录导入和分类。' +
           '根目录的 PDF 归入未分类。补充材料单独保存在 data/article/attachments/。'),
         h('div', { style: { display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' } },
           scanButton,

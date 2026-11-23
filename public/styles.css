@@ -2500,6 +2500,7 @@ html[data-theme="night"] .notice-actions .btn.primary {
 .import-bad { color: var(--danger); }
 .link-ish { border: 0; background: transparent; color: var(--accent-text, var(--accent)); cursor: pointer; font: inherit; padding: 0; text-align: left; }
 .link-ish:hover { text-decoration: underline; }
+.asset-directory-link { text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---------- 公式（KaTeX）----------
    行内公式不能把行高撑开（否则正文行距忽大忽小），所以用 inline-block + 垂直对齐微调；

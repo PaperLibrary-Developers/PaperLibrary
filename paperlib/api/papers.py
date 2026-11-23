@@ -4,6 +4,7 @@
   POST   /api/papers
   POST   /api/papers/bulk
   GET    /api/papers/scan/pdfs
+  POST   /api/papers/open-directory
   POST   /api/papers/associate-pdf
   POST   /api/papers/cleanup-duplicates
   POST   /api/papers/tidy-pdf-names
@@ -18,6 +19,7 @@
 """
 from __future__ import annotations
 
+from ipaddress import ip_address
 import json
 import os
 import threading
@@ -194,6 +196,24 @@ def scan_pdfs(ctx):
 
 def sync_pdfs(ctx):
     return ctx.json(200, {"ok": True, **ctx.services.library.sync_pdf_directory(ctx.services)})
+
+
+def open_papers_directory(ctx):
+    """通过系统文件管理器打开当前库的原文目录。"""
+    body = ctx.read_json(limit=4096)
+    if not ip_address(ctx.handler.client_address[0]).is_loopback:
+        return ctx.fail(403, "请在运行文献库服务的本机打开原文文件夹")
+    if body != {}:
+        return ctx.fail(400, "此操作不接收路径或其他参数")
+    if os.name != "nt":
+        return ctx.fail(501, "当前系统不支持从页面打开原文文件夹")
+    folder = ctx.services.db.papers_dir
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(folder), "explore")
+    except OSError:
+        return ctx.fail(500, "无法打开原文文件夹，请检查目录和访问权限")
+    return ctx.json(200, {"ok": True})
 
 
 def associate_pdf(ctx):

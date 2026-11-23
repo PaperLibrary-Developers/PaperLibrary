@@ -76,6 +76,7 @@ ROUTES = [
     {"name": "papers-bulk", "methods": ("POST",), "pattern": "/api/papers/bulk", "handler": papers.bulk},
     {"name": "papers-scan-pdfs", "methods": ("GET",), "pattern": "/api/papers/scan/pdfs", "handler": papers.scan_pdfs},
     {"name": "papers-sync-pdfs", "methods": ("POST",), "pattern": "/api/papers/scan/pdfs", "handler": papers.sync_pdfs},
+    {"name": "papers-open-directory", "methods": ("POST",), "pattern": "/api/papers/open-directory", "handler": papers.open_papers_directory},
     {"name": "papers-associate-pdf", "methods": ("POST",), "pattern": "/api/papers/associate-pdf", "handler": papers.associate_pdf},
     {"name": "papers-cleanup-duplicates", "methods": ("POST",), "pattern": "/api/papers/cleanup-duplicates", "handler": papers.cleanup_duplicates},
     {"name": "papers-tidy-pdf-names", "methods": ("POST",), "pattern": "/api/papers/tidy-pdf-names", "handler": papers.tidy_pdf_names},

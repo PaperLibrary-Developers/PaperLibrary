@@ -14,6 +14,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -94,6 +95,24 @@ class SmokeTest(unittest.TestCase):
         for key in ("ok", "app", "papers", "dataDir", "pid", "port", "uptimeSeconds",
                     "updatedAt", "bootMs", "rssMB", "version"):
             self.assertIn(key, data)
+
+    @unittest.skipUnless(os.name == "nt", "需要 Windows 文件资源管理器")
+    def test_open_papers_directory_uses_configured_store_path(self):
+        path = "/api/papers/open-directory"
+        with patch("paperlib.api.papers.os.startfile") as startfile:
+            self.assertEqual(self.fx.call("GET", path)[0], 404)
+            self.assertEqual(self.fx.call("POST", path, body={}, headers={"Origin": "https://example.org"})[0], 403)
+            self.assertEqual(self.fx.call("POST", path, body={"path": "ignored"})[0], 400)
+            startfile.assert_not_called()
+
+            self.assertEqual(self.fx.json("POST", path, {}), (200, {"ok": True}))
+            folder = self.fx.data_dir / "article" / "papers"
+            startfile.assert_called_once_with(str(folder), "explore")
+
+            startfile.side_effect = OSError
+            status, body = self.fx.json("POST", path, {})
+            self.assertEqual(status, 500)
+            self.assertIn("无法打开原文文件夹", body["error"])
 
     def test_static_and_shared(self):
         for path, needle in (("/", b"<html"), ("/main.mjs", b"import"), ("/styles.css", b""),
