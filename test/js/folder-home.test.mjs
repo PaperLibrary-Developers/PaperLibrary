@@ -112,9 +112,10 @@ const SAMPLE_FOLDERS = {
   rootCount: 1,
   folders: [
     { path: '电催化', name: '电催化', parent: '', depth: 0, count: 1, countDeep: 4 },
-    { path: '电催化/自旋与磁场', name: '自旋与磁场', parent: '电催化', depth: 1, count: 1, countDeep: 2 },
+    { path: '电催化/自旋与磁场', name: '自旋与磁场', parent: '电催化', depth: 1, count: 1, countDeep: 2, sort: 4 },
     { path: '电催化/自旋与磁场/洛伦兹力', name: '洛伦兹力', parent: '电催化/自旋与磁场', depth: 2, count: 1, countDeep: 1 },
-    { path: '电催化/CO₂ 还原', name: 'CO₂ 还原', parent: '电催化', depth: 1, count: 1, countDeep: 1 }
+    { path: '电催化/自旋与磁场/洛伦兹力/细分', name: '细分', parent: '电催化/自旋与磁场/洛伦兹力', depth: 3, count: 0, countDeep: 0 },
+    { path: '电催化/CO₂ 还原', name: 'CO₂ 还原', parent: '电催化', depth: 1, count: 1, countDeep: 1, sort: 2 }
   ]
 }
 
@@ -203,85 +204,65 @@ test('a delayed folder refresh cannot replace a newer paper list', async () => {
   }
 })
 
-test('entering folder shows browser tabs defaulting to direct papers, and nested subbar keeps sibling tabs in place', async () => {
+test('folder views show one ordered grid of direct child cards and restore the URL scope', async () => {
   const doc = makeDoc()
   const origDoc = globalThis.document
   const origFetch = globalThis.fetch
   const origLoc = globalThis.location
   const paperUrls = []
   globalThis.document = doc
-  globalThis.location = { hash: '#/?folder=%E7%94%B5%E5%82%AC%E5%8C%96' }
+  globalThis.location = { hash: '#/' }
   globalThis.fetch = async url => {
-    if (url.startsWith('/api/folders')) {
-      return { ok: true, status: 200, text: async () => JSON.stringify(SAMPLE_FOLDERS) }
-    }
+    if (url.startsWith('/api/folders')) return new Response(JSON.stringify(SAMPLE_FOLDERS))
     paperUrls.push(url)
-    return {
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({
-        ok: true,
-        items: [{ id: 'p1', title: 'Sample Paper', authors: ['A'], year: 2025, type: 'journal', folder: '电催化' }],
-        total: 1,
-        page: 1,
-        pageCount: 1
-      })
-    }
+    return new Response(JSON.stringify({
+      ok: true, total: 1, page: 1, pageCount: 1,
+      items: [{ id: 'p1', title: 'Sample Paper', authors: ['A'], year: 2025, type: 'journal' }]
+    }))
   }
 
+  let scope
+  async function renderList (path, query) {
+    scope?.abort()
+    scope = new AbortController()
+    const { signal } = scope
+    const outlet = new doc.El('div')
+    listHandler({ outlet, path, params: new URLSearchParams(query), signal, isStale: () => signal.aborted })
+    await flush()
+    return outlet
+  }
+  const childPaths = outlet => outlet.queryAll(n => n.classList.contains('fld-child'))
+    .map(card => card.getAttribute('data-path'))
+
   try {
-    // 1) 一级目录默认仅直属
-    const outlet1 = new doc.El('div')
-    const ac1 = new AbortController()
-    listHandler({ outlet: outlet1, path: '/', params: new URLSearchParams('folder=电催化'), signal: ac1.signal, isStale: () => ac1.signal.aborted })
-    await flush()
+    const root = await renderList('/', 'folder=电催化')
+    assert.match(paperUrls.at(-1), /includeSubfolders=false/)
+    assert.deepEqual(childPaths(root), ['电催化/CO₂ 还原', '电催化/自旋与磁场'])
+    assert.match(root.queryAll(n => n.classList.contains('fld-crumbs'))[0].textContent, /全部文献.*电催化/)
 
-    assert.match(paperUrls[0], /includeSubfolders=false/)
-    const tabs1 = outlet1.queryAll(n => n.classList.contains('fld-btab'))
-    assert.equal(tabs1.length, 4, '仅直属 + 全部 + 2 个二级子目录')
-    assert.equal(tabs1[0].classList.contains('active'), true)
-    assert.match(tabs1[0].textContent, /仅电催化直属/)
-    assert.equal(tabs1[1].classList.contains('active'), false)
-    ac1.abort()
+    const child = await renderList('/', 'folder=电催化/自旋与磁场')
+    assert.deepEqual(childPaths(child), ['电催化/自旋与磁场/洛伦兹力'])
 
-    // 2) 切到二级子目录：同级浏览器标签原地保留，且下方展开三级子目录胶囊
-    const outlet2 = new doc.El('div')
-    const ac2 = new AbortController()
-    listHandler({ outlet: outlet2, path: '/', params: new URLSearchParams('folder=电催化/自旋与磁场'), signal: ac2.signal, isStale: () => ac2.signal.aborted })
-    await flush()
+    const grandchild = await renderList('/', 'folder=电催化/自旋与磁场/洛伦兹力')
+    assert.deepEqual(childPaths(grandchild), ['电催化/自旋与磁场/洛伦兹力/细分'])
+    assert.equal(grandchild.queryAll(n => n.classList.contains('fld-children-grid')).length, 1)
 
-    const tabs2 = outlet2.queryAll(n => n.classList.contains('fld-btab'))
-    assert.equal(tabs2.length, 4, 'top-level browser tabs stay in place')
-    assert.equal(tabs2.some(t => t.textContent.includes('CO₂ 还原')), true)
-    assert.equal(tabs2.some(t => t.textContent.includes('自旋与磁场') && t.classList.contains('active')), true)
-    const pills = outlet2.queryAll(n => n.classList.contains('fld-subpill'))
-    assert.equal(pills.length, 3, '仅直属 + 全部 + 洛伦兹力')
-    assert.equal(pills[0].classList.contains('active'), true)
-    assert.equal(pills.some(p => p.textContent.includes('洛伦兹力')), true)
-    ac2.abort()
+    const leaf = await renderList('/', 'folder=电催化/自旋与磁场/洛伦兹力/细分')
+    assert.equal(leaf.queryAll(n => n.classList.contains('fld-children'))[0].hidden, true)
+    assert.deepEqual(childPaths(leaf), [])
 
-    // 3) deep=1 激活「全部（含子目录）」并请求 includeSubfolders=true
-    const outlet3 = new doc.El('div')
-    const ac3 = new AbortController()
-    listHandler({ outlet: outlet3, path: '/', params: new URLSearchParams('folder=电催化&deep=1'), signal: ac3.signal, isStale: () => ac3.signal.aborted })
-    await flush()
+    const recursive = await renderList('/', 'folder=电催化&deep=1')
+    assert.match(paperUrls.at(-1), /includeSubfolders=true/)
+    const checkbox = recursive.queryAll(n => n.getAttribute('type') === 'checkbox')[0]
+    assert.equal(checkbox.getAttribute('checked'), '')
+    assert.deepEqual(childPaths(recursive), childPaths(root))
 
-    assert.match(paperUrls[2], /includeSubfolders=true/)
-    const tabs3 = outlet3.queryAll(n => n.classList.contains('fld-btab'))
-    assert.equal(tabs3[1].classList.contains('active'), true)
-    ac3.abort()
-
-    // 4) /all 直接渲染全部文献列表，不渲染文件夹卡片
-    const outlet4 = new doc.El('div')
-    const ac4 = new AbortController()
-    listHandler({ outlet: outlet4, path: '/all', params: new URLSearchParams(''), signal: ac4.signal, isStale: () => ac4.signal.aborted })
-    await flush()
-
-    assert.equal(outlet4.queryAll(n => n.classList.contains('fld-home-card')).length, 0)
-    assert.equal(outlet4.queryAll(n => n.classList.contains('fld-btab')).length, 0)
-    assert.ok(outlet4.textContent.includes('Sample Paper'))
-    ac4.abort()
+    const all = await renderList('/all', '')
+    assert.equal(all.queryAll(n => n.classList.contains('fld-home-card')).length, 0)
+    assert.deepEqual(childPaths(all), [])
+    assert.ok(all.textContent.includes('Sample Paper'))
   } finally {
+    scope?.abort()
     globalThis.document = origDoc
     globalThis.fetch = origFetch
     globalThis.location = origLoc

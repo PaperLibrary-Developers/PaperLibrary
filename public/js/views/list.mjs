@@ -1,4 +1,4 @@
-/* 书库主页（文件夹卡片网格）与文献列表页（浏览器式子文件夹标签页 / 全部文献 / 我的收藏） */
+/* 书库主页（文件夹卡片网格）与文献列表页（子文件夹卡片 / 全部文献 / 我的收藏） */
 import * as util from '../util.mjs'
 import * as components from '../components.mjs'
 import { api } from '../api.mjs'
@@ -256,181 +256,83 @@ import * as foldersUi from '../folders.mjs'
     }
 
     const folderBar = h('div', { id: 'list-folder', hidden: true })
-    const folderTabs = h('div', { id: 'list-folder-tabs', hidden: true })
-    const subFolderBar = h('div', { id: 'list-subfolders', hidden: true })
+    const childrenBox = h('section.fld-children', { hidden: true, 'aria-label': '子文件夹' })
     const bar = h('div', { id: 'list-bar', style: { marginBottom: '14px', display: 'grid', gap: '10px' } })
     const results = h('div', { id: 'list-results' })
     const pager = h('div', { id: 'list-pager' })
-    const tabPanel = h('div.fld-tab-panel', subFolderBar, bar, results, pager)
-    const tabShell = h('div.fld-tab-shell', folderTabs, tabPanel)
-    const content = h('div.content', folderBar, tabShell)
+    const content = h('div.content', folderBar, childrenBox, bar, results, pager)
     outlet.replaceChildren(content)
 
     let items = []
     let loading = false
-    let folderTreeNodes = []
+    let folderNode = null
     const batchState = batch
     const selected = batchState.selected
     const isSelectMode = () => batchState.selectMode
 
-    /* ---------- 目录面包屑 + 浏览器式子文件夹标签页 ---------- */
-
     function renderFolderChrome () {
       const current = state.query.folder
-      if (current == null) {
-        folderBar.hidden = true
-        folderBar.replaceChildren()
-        folderTabs.hidden = true
-        folderTabs.replaceChildren()
-        subFolderBar.hidden = true
-        subFolderBar.replaceChildren()
-        tabShell.classList.remove('has-tabs')
-        return
-      }
+      if (current == null) return
 
-      // 1) 顶部面包屑栏
-      folderBar.hidden = false
-      const segs = current ? current.split('/') : []
+      const segments = current ? current.split('/') : [foldersUi.ROOT_LABEL]
       const crumbs = [
-        h('button.fld-crumb', { type: 'button', title: '回到主页', onclick: () => go('') }, '主页')
+        h('button.fld-crumb', { type: 'button', title: '回到全部文献', onclick: () => go('all') }, '全部文献')
       ]
-      if (!segs.length) {
+      segments.forEach((name, idx) => {
         crumbs.push(h('span.fld-crumb-sep', '/'))
-        crumbs.push(h('span.fld-crumb.current', foldersUi.ROOT_LABEL))
-      } else {
-        segs.forEach((seg, idx) => {
-          const prefix = segs.slice(0, idx + 1).join('/')
-          crumbs.push(h('span.fld-crumb-sep', '/'))
-          if (idx === segs.length - 1) {
-            crumbs.push(h('span.fld-crumb.current', seg))
-          } else {
-            crumbs.push(h('button.fld-crumb', {
-              type: 'button',
-              onclick: () => foldersUi.navTo(prefix)
-            }, seg))
-          }
-        })
-      }
+        if (idx === segments.length - 1) {
+          crumbs.push(h('span.fld-crumb.current', { 'aria-current': 'location' }, name))
+        } else {
+          const path = segments.slice(0, idx + 1).join('/')
+          crumbs.push(h('button.fld-crumb', { type: 'button', onclick: () => foldersUi.navTo(path) }, name))
+        }
+      })
 
-      const rightAction = current !== ''
+      const children = folderNode?.children || []
+      const deepToggle = current && (children.length || state.query.deep)
+        ? h('label.fld-deep', h('input', {
+          type: 'checkbox',
+          checked: state.query.deep,
+          onchange: ev => {
+            state.query.deep = ev.target.checked
+            state.query.page = 1
+            setHash(listRoute, queryToParams())
+          }
+        }), '含子文件夹')
+        : null
+      const rightAction = current
         ? h('button.btn.sm.ghost', {
           type: 'button',
           title: '在当前目录下新建子文件夹',
-          onclick: async () => { await promptCreateFolder(current) }
+          onclick: () => promptCreateFolder(current)
         }, '＋ 新建子文件夹')
         : h('span.fld-crumbs-tip', '提示：点下方「批量」可将未分类文献移入文件夹')
 
+      folderBar.hidden = false
       folderBar.replaceChildren(h('div.fld-crumbs',
-        h('button.btn.sm.ghost.fld-back-btn', {
-          type: 'button',
-          title: '返回主页',
-          onclick: () => go('')
-        }, '← 主页'),
-        h('span.fld-crumbs-div', '|'),
         h('span.fld-crumbs-ico', '📂'),
         ...crumbs,
         h('span', { style: { flex: '1 1 auto' } }),
+        deepToggle,
         rightAction
       ))
 
-      // 2) 浏览器式子文件夹标签页（样式一：顶层同级标签常驻，原地切换；默认「仅当前目录直属」）
-      const rootPath = segs[0] || ''
-      const rootNode = rootPath ? findNodeByPath(folderTreeNodes, rootPath) : null
-      if (!rootNode || !rootNode.children || !rootNode.children.length) {
-        folderTabs.hidden = true
-        folderTabs.replaceChildren()
-        subFolderBar.hidden = true
-        subFolderBar.replaceChildren()
-        tabShell.classList.remove('has-tabs')
+      childrenBox.hidden = children.length === 0
+      if (!children.length) {
+        childrenBox.replaceChildren()
         return
       }
-
-      tabShell.classList.add('has-tabs')
-      folderTabs.hidden = false
-      const isRootExact = current === rootNode.path
-      const isDeep = !!state.query.deep
-
-      const tabButtons = [
-        // 默认选中项：仅当前目录直属
-        h('button.fld-btab' + (isRootExact && !isDeep ? '.active' : ''), {
-          type: 'button',
-          role: 'tab',
-          'aria-selected': isRootExact && !isDeep ? 'true' : 'false',
-          title: `仅查看直接放在「${rootNode.name}」下的文献`,
-          onclick: () => foldersUi.navTo(rootNode.path, { deep: false })
+      childrenBox.replaceChildren(
+        h('div.fld-children-title', '子文件夹'),
+        h('div.fld-children-grid', children.map(folder => h('button.fld-child', {
+          type: 'button', title: folder.path, 'data-path': folder.path,
+          onclick: () => foldersUi.navTo(folder.path)
         },
-          h('span', `仅${rootNode.name}直属`),
-          h('span.fld-btab-count', String(rootNode.count))
-        ),
-        // 含子目录全部
-        h('button.fld-btab' + (isRootExact && isDeep ? '.active' : ''), {
-          type: 'button',
-          role: 'tab',
-          'aria-selected': isRootExact && isDeep ? 'true' : 'false',
-          title: `查看「${rootNode.name}」及所有子文件夹的全部文献`,
-          onclick: () => foldersUi.navTo(rootNode.path, { deep: true })
-        },
-          h('span', '全部（含子目录）'),
-          h('span.fld-btab-count', String(rootNode.countDeep))
-        ),
-        // 二级子文件夹标签页
-        ...rootNode.children.map(child => {
-          const isActive = current === child.path || current.startsWith(child.path + '/')
-          return h('button.fld-btab' + (isActive ? '.active' : ''), {
-            type: 'button',
-            role: 'tab',
-            'aria-selected': isActive ? 'true' : 'false',
-            title: child.children.length
-              ? `${child.name}（直属 ${child.count} 篇，含子目录共 ${child.countDeep} 篇）`
-              : `${child.name}（${child.count} 篇）`,
-            onclick: () => foldersUi.navTo(child.path, { deep: false })
-          },
-            foldersUi.folderIco(isActive ? 'open' : 'closed'),
-            h('span', child.name),
-            h('span.fld-btab-count', String(child.countDeep))
-          )
-        })
-      ]
-      folderTabs.replaceChildren(h('div.fld-btabs', { role: 'tablist', 'aria-label': '子文件夹标签页' }, tabButtons))
-
-      // 3) 更深层级（三级及以上）子文件夹胶囊条：保留上排浏览器标签不动，在面板顶部按层级自然展开
-      const subRows = []
-      for (let i = 1; i < segs.length; i++) {
-        const ancestorPath = segs.slice(0, i + 1).join('/')
-        const node = findNodeByPath(folderTreeNodes, ancestorPath)
-        if (!node || !node.children || !node.children.length) continue
-        const isExact = current === node.path
-        const pills = [
-          h('span.fld-subbar-label', `「${node.name}」子目录：`),
-          h('button.fld-subpill' + (isExact && !isDeep ? '.active' : ''), {
-            type: 'button',
-            onclick: () => foldersUi.navTo(node.path, { deep: false })
-          }, `仅直属 ${node.count}`),
-          h('button.fld-subpill' + (isExact && isDeep ? '.active' : ''), {
-            type: 'button',
-            onclick: () => foldersUi.navTo(node.path, { deep: true })
-          }, `全部 ${node.countDeep}`),
-          ...node.children.map(kid => {
-            const kidActive = current === kid.path || current.startsWith(kid.path + '/')
-            return h('button.fld-subpill' + (kidActive ? '.active' : ''), {
-              type: 'button',
-              onclick: () => foldersUi.navTo(kid.path, { deep: false })
-            },
-              foldersUi.folderIco(kidActive ? 'open' : 'closed'),
-              h('span', `${kid.name} ${kid.countDeep}`)
-            )
-          })
-        ]
-        subRows.push(h('div.fld-subbar', pills))
-      }
-
-      if (subRows.length) {
-        subFolderBar.hidden = false
-        subFolderBar.replaceChildren(...subRows)
-      } else {
-        subFolderBar.hidden = true
-        subFolderBar.replaceChildren()
-      }
+          components.folderGlyph('fld-child-icon'),
+          h('span.fld-name', folder.name),
+          h('span.fld-count', folder.countDeep + ' 篇')
+        )))
+      )
     }
 
     /* ---------- 顶部筛选条 ---------- */
@@ -539,11 +441,11 @@ import * as foldersUi from '../folders.mjs'
         }
         // 目录「仅当前目录直属」下无直属文献，但子文件夹里有文献 → 给出友好引导
         if (q.folder && !q.deep && !hasExtraFilter(q)) {
-          const curNode = findNodeByPath(folderTreeNodes, q.folder)
+          const curNode = folderNode
           if (curNode && curNode.countDeep > 0) {
             results.replaceChildren(h('div.empty',
               h('div.big', `「${curNode.name}」当前目录暂无直属文献`),
-              h('p', { text: `它的子文件夹中共有 ${curNode.countDeep} 篇文献，可点上方子文件夹标签页查看，或一键展开全部。` }),
+              h('p', { text: `它的子文件夹中共有 ${curNode.countDeep} 篇文献，可点上方子文件夹卡片查看，或展开当前目录的全部文献。` }),
               h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' } },
                 h('button.btn.primary', {
                   type: 'button',
@@ -804,7 +706,9 @@ import * as foldersUi from '../folders.mjs'
           state.query.folder != null ? foldersUi.load().catch(() => foldersUi.getCache()) : Promise.resolve(null)
         ])
         if (isStale() || request !== latestLoad) return
-        if (folderData) folderTreeNodes = foldersUi.buildTree(folderData)
+        if (folderData && state.query.folder) {
+          folderNode = findNodeByPath(foldersUi.buildTree(folderData), state.query.folder)
+        }
         items = res.items || []
         lastInfo = res
         rememberTitles(items)
@@ -827,7 +731,7 @@ import * as foldersUi from '../folders.mjs'
       renderPager(lastInfo)
     }
 
-    // 文件夹增删改（如在当前目录新建子文件夹、侧栏改名等）时同步刷新标签页与列表
+    // 文件夹增删改（如在当前目录新建子文件夹、侧栏改名等）时同步刷新子文件夹卡片与列表
     const onFoldersChanged = () => {
       if (isStale() || state.query.folder == null) return
       load().catch(() => {})
