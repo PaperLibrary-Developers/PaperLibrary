@@ -1,0 +1,26 @@
+{
+  "id": "2026-11-v1.9.1",
+  "enabled": true,
+  "badge": "版本更新 · v1.9.1",
+  "date": "2026-11-23",
+  "title": "PaperLibrary Nexus v1.9.1 已就绪",
+  "image": "",
+  "body": "所有文献、笔记与配置均保存在本机 data/ 目录，升级不会影响已有数据。重要更新如下：",
+  "bullets": [
+    "分类文件夹与磁盘目录实时对齐，支持嵌套分类与递归重扫",
+    "优化 PDF 内嵌阅读、补充材料标签页与 AI 中文总结体验",
+    "支持在「设置与备份 → 关于」中一键检查并安装后续更新"
+  ],
+  "action": {
+    "label": "更新说明",
+    "url": "https://github.com/PaperLibrary-Developers/PaperLibrary/releases"
+  },
+  "promo": {
+    "tag": "招租",
+    "title": "广告位与赞助合作火热招募中",
+    "desc": "直达高校师生与科研工作者，欢迎大模型 API、科研工具及学术服务品牌洽谈合作",
+    "linkLabel": "洽谈合作 ↗",
+    "url": "https://github.com/PaperLibrary-Developers/PaperLibrary/issues"
+  },
+  "expiresAt": ""
+}
