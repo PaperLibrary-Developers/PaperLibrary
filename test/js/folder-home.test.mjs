@@ -238,7 +238,8 @@ test('folder views show one ordered grid of direct child cards and restore the U
     const root = await renderList('/', 'folder=电催化')
     assert.match(paperUrls.at(-1), /includeSubfolders=false/)
     assert.deepEqual(childPaths(root), ['电催化/CO₂ 还原', '电催化/自旋与磁场'])
-    assert.match(root.queryAll(n => n.classList.contains('fld-crumbs'))[0].textContent, /全部文献.*电催化/)
+    assert.equal(root.queryAll(n => n.classList.contains('fld-back-btn'))[0].textContent, '← 主页')
+    assert.deepEqual(root.queryAll(n => n.classList.contains('fld-crumb')).map(n => n.textContent), ['主页', '电催化'])
 
     const child = await renderList('/', 'folder=电催化/自旋与磁场')
     assert.deepEqual(childPaths(child), ['电催化/自旋与磁场/洛伦兹力'])

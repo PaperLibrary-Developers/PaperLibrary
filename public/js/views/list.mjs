@@ -276,7 +276,7 @@ import * as foldersUi from '../folders.mjs'
 
       const segments = current ? current.split('/') : [foldersUi.ROOT_LABEL]
       const crumbs = [
-        h('button.fld-crumb', { type: 'button', title: '回到全部文献', onclick: () => go('all') }, '全部文献')
+        h('button.fld-crumb', { type: 'button', title: '回到主页', onclick: () => go('') }, '主页')
       ]
       segments.forEach((name, idx) => {
         crumbs.push(h('span.fld-crumb-sep', '/'))
@@ -310,7 +310,11 @@ import * as foldersUi from '../folders.mjs'
 
       folderBar.hidden = false
       folderBar.replaceChildren(h('div.fld-crumbs',
-        h('span.fld-crumbs-ico', '📂'),
+        h('button.btn.sm.fld-back-btn', {
+          type: 'button', title: '返回主页', onclick: () => go('')
+        }, '← 主页'),
+        h('span.fld-crumbs-div', { 'aria-hidden': 'true' }, '|'),
+        h('span.fld-crumbs-ico', { 'aria-hidden': 'true' }, '📂'),
         ...crumbs,
         h('span', { style: { flex: '1 1 auto' } }),
         deepToggle,

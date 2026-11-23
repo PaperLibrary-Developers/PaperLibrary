@@ -475,11 +475,15 @@ body.side-collapsed .sidebar { transform: translateX(-100%); }
 
 /* 列表页目录面包屑 */
 .fld-crumbs {
-  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   padding: 8px 12px; margin-bottom: 12px;
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
 }
-.fld-crumbs-ico { font-size: 13px; margin-right: 2px; }
+.btn.sm.fld-back-btn { background: var(--surface-2); border-color: transparent; color: var(--text); }
+.btn.sm.fld-back-btn:hover { background: var(--surface-3); }
+.fld-crumbs-div { color: var(--border-strong); font-size: 12px; margin: 0 2px; }
+.fld-crumbs-ico { font-size: 13px; margin-right: 1px; }
 .fld-crumb {
   border: 0; background: none; color: var(--accent-text); font-size: 13px; padding: 2px 4px; border-radius: 5px;
 }
