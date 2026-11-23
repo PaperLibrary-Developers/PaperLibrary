@@ -28,6 +28,7 @@ import { copilotHandler } from './views/copilot.mjs'
 // 文件夹分类：侧栏树、导入选目录、管理器共用的组件
 import * as foldersUi from './folders.mjs'
 import { autoCheckEnabled, autoDownloadEnabled, createAutoChecker } from './update-auto.mjs'
+import { maybeShowStartupNotice } from './notice.mjs'
 
 const { h, toast, debounce } = util
 
@@ -700,6 +701,7 @@ const { h, toast, debounce } = util
         return
       }
       if (typing) return
+      if (document.querySelector('.modal-back')) return
       if (ev.key === 'n') { go('#/new') }
       if (ev.key === 't') { toggleTheme() }
       if (ev.key === '/') {
@@ -781,14 +783,17 @@ const { h, toast, debounce } = util
     // state 变化 → 同步侧栏数字（refreshMeta 里不再手动调用）
     subscribe(() => updateSidebarCounts())
     registerRoutes()
-    // 服务端偏好（跨浏览器保留主题等）
-    api.getPrefs().then(res => {
+    // 服务端偏好（跨浏览器保留主题、公告已读状态等）
+    const prefsReady = api.getPrefs().then(res => {
       const server = res.prefs || {}
       if (server.theme && server.theme !== state.prefs.theme) {
         applyTheme(server.theme)
         patch({ prefs: { theme: server.theme } })
         const btn = document.getElementById('theme-toggle')
         if (btn) btn.textContent = server.theme === 'night' ? '☾' : '☀'
+      }
+      if (typeof server.noticeDismissedId === 'string' && server.noticeDismissedId !== state.prefs.noticeDismissedId) {
+        patch({ prefs: { noticeDismissedId: server.noticeDismissedId } })
       }
     }).catch(() => {})
 
@@ -853,9 +858,16 @@ const { h, toast, debounce } = util
     if (!location.hash) {
       location.hash = '#/'
       scheduleRender()
-      return
+    } else {
+      await render()
     }
-    await render()
+
+    // 开屏公告小弹窗（方案 A：本地 notice.json；仅首页按公告 id 去重弹出，失败静默）
+    prefsReady.then(() => maybeShowStartupNotice({
+      getPrefs: () => getState().prefs,
+      savePrefs,
+      isHomeRoute: () => parseHash().path === '/'
+    })).catch(() => {})
   }
 
   export { boot }

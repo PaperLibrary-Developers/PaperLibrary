@@ -6,6 +6,7 @@ import { getState } from '../state/store.mjs'
 import { refreshMeta, render, savePrefs } from '../shell/app-api.mjs'
 import { autoCheckEnabled, autoDownloadEnabled } from '../update-auto.mjs'
 import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update-install.mjs'
+import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
 
   const { h, toast, rich, confirmDialog, fileSize, formatDate } = util
   const DEFAULT_AI_MAX_TOKENS = 128000
@@ -1440,11 +1441,33 @@ import { isWebViewHost, requestInstall, fallbackInstallMessage } from '../update
           }, '取消跳过'))
         : null)
 
+    const noticeOpenBtn = h('button.btn.sm.ghost', {
+      id: 'notice-open-btn',
+      type: 'button',
+      onclick: async () => {
+        const notice = await fetchLocalNotice()
+        if (!notice) {
+          toast('当前暂无可查看的公告')
+          return
+        }
+        const dismissedId = String(getState().prefs.noticeDismissedId || '')
+        openNoticeModal(notice, {
+          defaultDismissChecked: dismissedId === notice.id,
+          onClose: ({ id, dismiss }) => {
+            if (dismiss) savePrefs({ noticeDismissedId: id }, { silent: true })
+            else if (String(getState().prefs.noticeDismissedId || '') === id) {
+              savePrefs({ noticeDismissedId: '' }, { silent: true })
+            }
+          }
+        })
+      }
+    }, '查看当前公告')
+
     const aboutPanel = panel('关于与更新',
       h('div.update-box',
         h('div.update-head',
           h('div.update-current', h('span.update-k', '当前版本'), updateCurrentVersion),
-          updateCheckBtn
+          h('div.update-head-actions', noticeOpenBtn, updateCheckBtn)
         ),
         updateStatus,
         updateProgress,
