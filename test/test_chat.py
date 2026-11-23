@@ -293,6 +293,16 @@ class TranscribeTests(AiTestBase):
         self.assertEqual(result["page"], 3)
         self.assertEqual(result["text"], "抄录正文")
         self.assertIn("第 3 页", self.fake.server.last_body["messages"][1]["content"][0]["text"])
+        self.assertEqual(self.fake.server.last_body["max_tokens"], services.llm.settings["maxTokens"])
+
+    def test_transcribe_rejects_partial_page(self):
+        self.fake.set({"sse": [delta("只有半页"), {"choices": [{"delta": {}, "finish_reason": "length"}]}]})
+        services = self.make_services(api_key="sk-test")
+        result = chat_domain.transcribe(services, self.add_paper(), {"image": IMAGE, "page": 3})
+        self.assertEqual(result["status"], 502)
+        self.assertIn("第 3 页", result["error"])
+        self.assertIn("max_tokens", result["error"])
+        self.assertNotIn("text", result)
 
     def test_transcribe_failure_is_502(self):
         self.fake.set({"status": 500, "json": {"error": {"message": "boom"}}})

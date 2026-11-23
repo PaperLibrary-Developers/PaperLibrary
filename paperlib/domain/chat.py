@@ -531,10 +531,11 @@ def transcribe(services, paper, body):
                     {"type": "image_url", "image_url": {"url": image}},
                 ]},
             ],
-            "maxTokens": 3000,
             "timeoutMs": 180000,
         })
         text = str((result or {}).get("text") or "".join(collected))
+        if (result or {}).get("finish_reason") == "length":
+            raise ValueError("转录未完成。请在模型支持的范围内提高 max_tokens，或使用支持更长输出的识图模型。")
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "status": 502, "error": "识别失败：" + str(exc)}
+        return {"ok": False, "status": 502, "error": "第 %d 页识别失败：%s" % (page or 1, exc)}
     return {"ok": True, "page": page, "text": text.strip()}

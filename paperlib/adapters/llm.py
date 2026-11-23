@@ -395,6 +395,10 @@ class LLM:
                     if on_delta:
                         on_delta(delta)
                 if isinstance(chunk, dict):
+                    if self._is_anthropic() and chunk.get("type") == "message_delta":
+                        stop = (chunk.get("delta") or {}).get("stop_reason")
+                        if stop:
+                            finish_reason = "length" if stop == "max_tokens" else str(stop)
                     choices = chunk.get("choices")
                     if isinstance(choices, list) and choices and isinstance(choices[0], dict):
                         choice = choices[0]

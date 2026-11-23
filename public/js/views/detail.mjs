@@ -1081,8 +1081,9 @@ import * as foldersUi from '../folders.mjs'
           ftStatus.style.color = ''
           const dataUrl = await viewer.capturePage(n, { scale: 2, format: 'image/jpeg', quality: 0.85 })
           if (isStale()) return
-          if (!dataUrl) { parts.push('（第 ' + n + ' 页渲染失败）'); continue }
+          if (!dataUrl) throw new Error('第 ' + n + ' 页渲染失败')
           const res = await api.transcribeImage(paper.id, dataUrl, n)
+          if (isStale()) return
           const text = String((res && res.text) || '').trim()
           parts.push('===== 第 ' + n + ' 页 =====\n' + (text || '（本页无文字）'))
         }
