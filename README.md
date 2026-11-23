@@ -560,7 +560,7 @@ JSON 包含题录、标签、AI 总结与对话记录，但不含 PDF 原文。
 ## 16. 版本与许可
 
 - 版本以程序内「设置与备份 → 关于」和根目录 `version.json` 为准；更新记录与安装包见 [GitHub Releases](https://github.com/PaperLibrary-Developers/PaperLibrary/releases)。
-- 本版要点（v2.0，代号 **HELIX**）：主页改为分类文件夹卡片入口并支持子文件夹标签页、图表按图注自动提取与定位、PDF 补充材料标签页与逐份批注、检索与分面提速（正文索引增量刷新）、API Key 改用 Windows DPAPI 加密、本机 HTTP 增加 CSRF 与 DNS 重绑定防护。
+- 本版要点（代号 **HELIX**）：主页改为分类文件夹卡片入口并支持子文件夹标签页、图表按图注自动提取与定位、PDF 补充材料标签页与逐份批注、检索与分面提速（正文索引增量刷新）、API Key 改用 Windows DPAPI 加密、本机 HTTP 增加 CSRF 与 DNS 重绑定防护。
 - 更新方式：`设置与备份 → 关于 → 关于与更新 → 检查更新`，下载后点 `立即安装`（安装会保留 `data/`）。
 - 许可证：[GNU Affero General Public License v3.0](LICENSE)。
 
