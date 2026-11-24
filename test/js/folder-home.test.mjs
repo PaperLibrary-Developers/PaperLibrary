@@ -151,8 +151,60 @@ test('folder home renders top-level folder cards plus independent uncategorized 
     assert.equal(uncat.length, 1, 'independent uncategorized card shown when rootCount > 0')
     assert.match(cards[0].textContent, /电催化/)
     assert.match(cards[0].textContent, /4 篇/)
+    assert.match(cards[0].textContent, /含 2 个子文件夹/)
+    assert.equal(cards[0].queryAll(n => n.classList.contains('fld-home-meta')).length, 1)
     assert.match(uncat[0].textContent, /未分类/)
     assert.equal(calls.some(u => u.startsWith('/api/papers')), false, 'folder home should not fetch all papers')
+    ac.abort()
+  } finally {
+    globalThis.document = origDoc
+    globalThis.fetch = origFetch
+    globalThis.location = origLoc
+  }
+})
+
+test('leaf top-level folder cards omit direct-storage subtitle and inline enter action', async () => {
+  const doc = makeDoc()
+  const origDoc = globalThis.document
+  const origFetch = globalThis.fetch
+  const origLoc = globalThis.location
+  globalThis.document = doc
+  globalThis.location = { hash: '#/' }
+  globalThis.fetch = async url => {
+    if (url.startsWith('/api/folders')) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          ok: true,
+          total: 11,
+          rootCount: 0,
+          folders: [
+            { path: 'Cu', name: 'Cu', parent: '', depth: 0, count: 5, countDeep: 5 },
+            { path: '电化学', name: '电化学', parent: '', depth: 0, count: 6, countDeep: 6 }
+          ]
+        })
+      }
+    }
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, items: [], total: 0, page: 1, pageCount: 1 }) }
+  }
+
+  try {
+    const outlet = new doc.El('div')
+    const ac = new AbortController()
+    listHandler({ outlet, path: '/', params: new URLSearchParams(''), signal: ac.signal, isStale: () => ac.signal.aborted })
+    await flush()
+
+    const cards = outlet.queryAll(n => n.classList.contains('fld-home-card'))
+    assert.equal(cards.length, 2)
+    for (const card of cards) {
+      assert.doesNotMatch(card.textContent, /直接存放文献/)
+      assert.equal(card.queryAll(n => n.classList.contains('fld-home-meta')).length, 0)
+      const nameRow = card.queryAll(n => n.classList.contains('fld-home-name-row'))
+      assert.equal(nameRow.length, 1)
+      assert.equal(nameRow[0].queryAll(n => n.classList.contains('fld-home-enter')).length, 1)
+      assert.match(nameRow[0].textContent, /进入 →/)
+    }
     ac.abort()
   } finally {
     globalThis.document = origDoc
