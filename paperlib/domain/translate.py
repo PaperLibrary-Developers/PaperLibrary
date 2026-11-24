@@ -18,9 +18,11 @@ from pathlib import Path
 from threading import Lock, Thread
 
 from paperlib.adapters.pdf_translate import (
+    blocks_from_content_list_v2,
     blocks_from_layout,
     blocks_from_pdf,
     dedupe_hierarchy,
+    extract_content_list_v2,
     extract_layout_from_zip,
     fill_empty_sources,
     relink,
@@ -148,6 +150,7 @@ class Translator:
             # 1) 版面解析
             self._write_state(paper_id, stage="parse")
             layout = None
+            content_v2 = None
             mineru = getattr(self.services, "mineru", None)
             if mineru and mineru.ready() and mineru.settings.get("enabled"):
                 try:
@@ -158,17 +161,29 @@ class Translator:
                     zip_path = mineru.download(item.get("full_zip_url"),
                                                work_dir / "result.zip")
                     layout = extract_layout_from_zip(zip_path, work_dir)
+                    content_v2 = extract_content_list_v2(work_dir)
                 except Exception as exc:  # noqa: BLE001 - 降级而不是整单失败
                     mineru_warning = "MinerU 不可用，已改用本地版面：" + str(exc)
                     print("[translate] " + mineru_warning)
 
-            blocks = blocks_from_layout(layout) if layout else blocks_from_pdf(pdf_path)
-            if layout:
-                # MinerU 的空文本块用 PyMuPDF 补；父块（罩住多段、文本只是其中一段）丢掉
-                blocks = fill_empty_sources(blocks, pdf_path)
-                blocks = relocate_by_text(blocks, pdf_path)
-                blocks = dedupe_hierarchy(blocks, pdf_path)
-                blocks = relink(blocks)
+            # 优先 content_list_v2：段落级块 + 归一化坐标，没有「整页父块」，文本层损坏页也有字
+            blocks = None
+            if content_v2:
+                page_sizes = [page.get("page_size") or [595.0, 841.0]
+                              for page in (layout or {}).get("pdf_info") or []]
+                blocks = blocks_from_content_list_v2(content_v2, page_sizes)
+                if blocks:
+                    blocks = fill_empty_sources(blocks, pdf_path)
+                    blocks = dedupe_hierarchy(blocks, pdf_path)
+                    blocks = relink(blocks)
+            if not blocks:
+                blocks = blocks_from_layout(layout) if layout else blocks_from_pdf(pdf_path)
+                if layout:
+                    # 旧通道兜底：空文本块用 PyMuPDF 补；父块按文本定位/收缩
+                    blocks = fill_empty_sources(blocks, pdf_path)
+                    blocks = relocate_by_text(blocks, pdf_path)
+                    blocks = dedupe_hierarchy(blocks, pdf_path)
+                    blocks = relink(blocks)
             if not blocks:
                 raise TranslateError("没有可翻译的文本块（可能是扫描件或图片版 PDF）")
 

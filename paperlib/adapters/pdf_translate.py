@@ -142,6 +142,69 @@ def _escape_keep_tags(text):
 # --------------------------------------------------------------------------- 版面
 
 
+V2_SKIP_TYPES = {
+    "image", "chart", "table", "page_header", "page_footer", "page_number",
+    "header", "footer", "footnote", "aside_text", "list", "index", "ref_text",
+}
+
+
+def blocks_from_content_list_v2(pages, page_sizes):
+    """MinerU content_list_v2（按页的段落级块）→ 统一块结构。
+
+    v2 比 layout.json 更干净：块是段落级（没有「整页父块」），bbox 是 0-1000 归一化坐标，
+    行内公式以 equation_inline span 给出（包 ⟦⟧）。文本层损坏的页面也只有 v2 里还有字。
+    """
+    blocks = []
+    for page_index, items in enumerate(pages or []):
+        page_no = page_index + 1
+        size = page_sizes[page_index] if page_index < len(page_sizes) else (595.0, 841.0)
+        width, height = float(size[0] or 595.0), float(size[1] or 841.0)
+        for item_index, item in enumerate(items or []):
+            kind = str(item.get("type") or "")
+            if kind in V2_SKIP_TYPES:
+                continue
+            content = item.get("content") or {}
+            parts = (content.get("paragraph_content") or content.get("title_content")
+                     or content.get("text_content") or [])
+            text = ""
+            for span in parts:
+                span_type = str(span.get("type") or "")
+                value = span.get("content") or ""
+                if "equation" in span_type:
+                    text += "⟦" + value.strip() + "⟧"
+                else:
+                    text += value
+            text = re.sub(r"\s+", " ", text).strip()
+            bbox = item.get("bbox") or []
+            if len(bbox) != 4:
+                continue
+            x0, y0 = bbox[0] / 1000.0 * width, bbox[1] / 1000.0 * height
+            x1, y1 = bbox[2] / 1000.0 * width, bbox[3] / 1000.0 * height
+            if x1 - x0 < 20 or y1 - y0 < 6:
+                continue
+            blocks.append({
+                "id": "p%dv%d" % (page_no, item_index),
+                "page": page_no,
+                "type": "title" if kind == "title" else "text",
+                "bbox": [x0, y0, x1, y1],
+                "source": text,
+            })
+    return relink(blocks)
+
+
+def extract_content_list_v2(work_dir):
+    """读 MinerU 结果里的 content_list_v2.json（可能没有）。"""
+    work_dir = Path(work_dir)
+    for candidate in sorted(work_dir.rglob("*_content_list_v2.json")) or sorted(work_dir.rglob("content_list_v2.json")):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(data, list) and data:
+            return data
+    return None
+
+
 def blocks_from_layout(layout):
     """MinerU layout.json → [{page,index,type,bbox,source,prev,next}]（坐标是 PDF 点）。"""
     blocks = []
