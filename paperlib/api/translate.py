@@ -17,7 +17,7 @@ def status(ctx):
     paper = require_paper(ctx)
     if not paper:
         return
-    state = ctx.services.translator.state(paper.get("id"))
+    state = ctx.services.translator.state(paper)
     return ctx.json(200, {"ok": True, "translation": state})
 
 
@@ -39,7 +39,7 @@ def cancel(ctx):
     paper = require_paper(ctx)
     if not paper:
         return
-    result = ctx.services.translator.cancel(paper.get("id"))
+    result = ctx.services.translator.cancel(paper)
     return ctx.json(200, {"ok": True, **result})
 
 
@@ -48,19 +48,19 @@ def remove(ctx):
     if not paper:
         return
     translator = ctx.services.translator
-    target = translator.pdf_path(paper.get("id"))
+    target = translator.pdf_path(paper)
     if target.is_file():
         target.unlink()
     translator._write_state(paper.get("id"), state="idle", stage="", progress=0,
                             total=0, pages=0, pagesDone=0, error="")
-    return ctx.json(200, {"ok": True, "translation": translator.state(paper.get("id"))})
+    return ctx.json(200, {"ok": True, "translation": translator.state(paper)})
 
 
 def pdf(ctx):
     paper = require_paper(ctx)
     if not paper:
         return
-    target = ctx.services.translator.pdf_path(paper.get("id"))
+    target = ctx.services.translator.pdf_path(paper)
     if not target.is_file():
         return ctx.fail(404, "还没有生成译文")
     ctx.send_file(str(target), content_type="application/pdf",

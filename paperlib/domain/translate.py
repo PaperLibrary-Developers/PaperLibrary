@@ -12,6 +12,7 @@ MinerU 不可用（未配 token、超时、业务错误）时自动降级到 PyM
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from threading import Lock, Thread
@@ -23,17 +24,27 @@ from paperlib.adapters.pdf_translate import (
     render_translated,
     translate_blocks,
 )
-from paperlib.util import read_json, write_json_atomic
+from paperlib.util import read_json, sanitize_file_name, write_json_atomic
 
 
 class TranslateError(RuntimeError):
     pass
 
 
+def translated_pdf_name(paper):
+    """译文文件名：与 papers/ 同级存放，命名 [Translated]<原文件名>.pdf。"""
+    stem = Path(str(paper.get("pdfFile") or "")).stem
+    if not stem:
+        stem = sanitize_file_name(paper.get("title") or "", 80) or str(paper.get("id"))
+    stem = re.sub(r"^\[Translated\]\s*", "", stem)
+    return "[Translated]" + stem + ".pdf"
+
+
 class Translator:
     def __init__(self, services):
         self.services = services
         self.root = Path(services.runtime.data_dir) / "translations"
+        self.article_dir = Path(services.runtime.data_dir) / "article" / "TranslatedPDF"
         self._lock = Lock()
         self._cancel = set()
 
@@ -44,11 +55,13 @@ class Translator:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def pdf_path(self, paper_id):
-        return self.root / str(paper_id) / "translated.pdf"
+    def pdf_path(self, paper):
+        self.article_dir.mkdir(parents=True, exist_ok=True)
+        return self.article_dir / translated_pdf_name(paper)
 
-    def state(self, paper_id):
-        path = self.root / str(paper_id) / "state.json"
+    def state(self, paper):
+        paper_id = str(paper.get("id"))
+        path = self.root / paper_id / "state.json"
         data = {}
         try:
             raw = read_json(path, {})
@@ -64,13 +77,20 @@ class Translator:
         data.setdefault("pages", 0)
         data.setdefault("error", "")
         data.setdefault("updatedAt", "")
-        has_pdf = self.pdf_path(paper_id).is_file()
+        has_pdf = self.pdf_path(paper).is_file()
         data["exists"] = has_pdf
         data["url"] = ("/api/papers/%s/translation.pdf" % paper_id) if has_pdf else ""
         return data
 
     def _write_state(self, paper_id, **patch):
-        current = self.state(paper_id)
+        path = self.root / str(paper_id) / "state.json"
+        current = {}
+        try:
+            raw = read_json(path, {})
+            if isinstance(raw, dict):
+                current = dict(raw)
+        except Exception:  # noqa: BLE001 - 损坏当作空
+            current = {}
         current.pop("exists", None)
         current.pop("url", None)
         current.update(patch)
@@ -78,16 +98,17 @@ class Translator:
         write_json_atomic(self.root / str(paper_id) / "state.json", current)
         return current
 
-    def is_running(self, paper_id):
-        return self.state(paper_id).get("state") == "running"
+    def is_running(self, paper):
+        return self.state(paper).get("state") == "running"
 
-    def cancel(self, paper_id):
+    def cancel(self, paper):
+        paper_id = str(paper.get("id"))
         with self._lock:
-            self._cancel.add(str(paper_id))
-        state = self.state(paper_id)
+            self._cancel.add(paper_id)
+        state = self.state(paper)
         if state.get("state") == "running":
             self._write_state(paper_id, stage="cancelling")
-        return {"cancelled": True, "state": self.state(paper_id)}
+        return {"cancelled": True, "state": self.state(paper)}
 
     def _should_cancel(self, paper_id):
         return str(paper_id) in self._cancel
@@ -97,7 +118,7 @@ class Translator:
     def start(self, paper, *, force=False):
         paper_id = str(paper.get("id"))
         with self._lock:
-            state = self.state(paper_id)
+            state = self.state(paper)
             if state.get("state") == "running":
                 return {"started": False, "reason": "running", "state": state}
             if state.get("exists") and not force:
@@ -107,7 +128,7 @@ class Translator:
             self._write_state(paper_id, state="running", stage="queued", progress=0,
                               total=0, pages=0, pagesDone=0, error="")
             Thread(target=self._run, args=(paper,), daemon=True).start()
-            return {"started": True, "state": self.state(paper_id)}
+            return {"started": True, "state": self.state(paper)}
 
     # ---------------- 管线 ----------------
 
@@ -155,7 +176,7 @@ class Translator:
 
             # 3) 回填
             self._write_state(paper_id, stage="render")
-            out_pdf = self.pdf_path(paper_id)
+            out_pdf = self.pdf_path(paper)
             font_dir, font_name = _pick_font()
             pages_report = render_translated(
                 pdf_path=pdf_path, layout=layout, translations=blocks,
@@ -176,6 +197,12 @@ class Translator:
                 "seconds": round(time.time() - started, 1),
             }
             write_json_atomic(self.dir_for(paper_id) / "report.json", report)
+            legacy_pdf = self.root / paper_id / "translated.pdf"
+            if legacy_pdf.is_file():     # 旧版本把产物放在 translations/<id>/，成功后清掉
+                try:
+                    legacy_pdf.unlink()
+                except OSError:
+                    pass
             self._write_state(
                 paper_id, state="done", stage="done", error="",
                 progress=len(blocks), total=len(blocks),

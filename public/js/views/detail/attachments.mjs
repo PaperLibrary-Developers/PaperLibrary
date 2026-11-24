@@ -132,7 +132,7 @@ export function buildPdfAndAttachments ({
   const translateBtn = h('button.btn.sm', {
     type: 'button',
     title: '把原文就地翻译成中文并保留原版式，可随时切回原文',
-    onclick: () => startTranslation()
+    onclick: () => toggleTranslation()
   }, '翻译')
   const langSwitch = h('div.pdf-lang-switch', { role: 'group', 'aria-label': '原文 / 翻译', hidden: '' },
     h('button.pdf-lang-btn', { type: 'button', 'data-mode': 'orig', 'aria-pressed': 'true', onclick: () => switchLang('orig') }, '原文'),
@@ -180,10 +180,15 @@ export function buildPdfAndAttachments ({
       btn.setAttribute('aria-pressed', String(on))
       btn.disabled = btn.dataset.mode === 'trans' && !hasTrans && !translationInfo.translating
     }
-    translateBtn.disabled = translationInfo.translating
+    translateBtn.disabled = false
     translateBtn.textContent = translationInfo.translating
-      ? '翻译中 ' + (translationInfo.progress || 0) + (translationInfo.total ? '/' + translationInfo.total : '')
+      ? '取消翻译 ' + (translationInfo.progress || 0) + (translationInfo.total ? '/' + translationInfo.total : '')
       : (hasTrans ? '重新翻译' : '翻译')
+    translateBtn.title = translationInfo.translating
+      ? '正在翻译：点一下取消（已经花掉的模型调用不会退回）'
+      : (translationInfo.state === 'failed' && translationInfo.error
+          ? '上次失败：' + translationInfo.error
+          : '把原文就地翻译成中文并保留原版式，可随时切回原文')
   }
 
   async function refreshTranslationState (silent) {
@@ -217,8 +222,22 @@ export function buildPdfAndAttachments ({
     }
   }
 
+  async function toggleTranslation () {
+    if (translationInfo.translating) return cancelTranslation()
+    return startTranslation()
+  }
+
+  async function cancelTranslation () {
+    try {
+      await api.cancelTranslation(paper.id)
+      toast('已请求取消，正在收尾…')
+    } catch (err) {
+      toast(err.message, 'error')
+    }
+  }
+
   async function startTranslation () {
-    if (!pdfOk || translationInfo.translating) return
+    if (!pdfOk) return
     translationInfo.translating = true
     paintLangSwitch()
     try {
