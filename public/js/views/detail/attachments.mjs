@@ -121,12 +121,25 @@ export function buildPdfAndAttachments ({
     }
   })
 
-  const pdfTabs = new Map([['', { file: '', title: 'PDF 原文', url: pdfOk ? api.pdfUrl(paper.id) : '' }]])
+  const pdfTabs = new Map([['', { file: '', title: 'PDF', url: pdfOk ? api.pdfUrl(paper.id) : '' }]])
+  let translationMode = 'orig'
+  let translationInfo = { state: 'idle', exists: false, translating: false, progress: 0, total: 0, error: '' }
+  let translationPoll = null
   let activePdfTab = ''
   let pdfMount = null
   const pdfTabBar = h('div.pdf-doc-tabs', { role: 'tablist', 'aria-label': 'PDF 文档' })
   const pdfBody = h('div', { id: 'pdf-document-panel', role: 'tabpanel' })
+  const translateBtn = h('button.btn.sm', {
+    type: 'button',
+    title: '把原文就地翻译成中文并保留原版式，可随时切回原文',
+    onclick: () => startTranslation()
+  }, '翻译')
+  const langSwitch = h('div.pdf-lang-switch', { role: 'group', 'aria-label': '原文 / 翻译', hidden: '' },
+    h('button.pdf-lang-btn', { type: 'button', 'data-mode': 'orig', 'aria-pressed': 'true', onclick: () => switchLang('orig') }, '原文'),
+    h('button.pdf-lang-btn', { type: 'button', 'data-mode': 'trans', 'aria-pressed': 'false', onclick: () => switchLang('trans') }, '翻译')
+  )
   const originalPdfActions = h('div.right.pdf-original-actions',
+    pdfOk ? translateBtn : null,
     pdfOk ? h('a.btn.sm', { href: api.pdfUrl(paper.id), target: '_blank', rel: 'noopener' }, '新标签页打开') : null,
     h('button.btn.sm', { type: 'button', onclick: () => uploadInput.click() }, paper.pdfFile ? '更换文件' : '上传 PDF'),
     paper.pdfFile ? h('button.btn.sm.danger', {
@@ -155,8 +168,92 @@ export function buildPdfAndAttachments ({
     h('button.btn.primary', { type: 'button', onclick: () => uploadInput.click() }, '选择 PDF 文件上传')
   )
   const pdfPanel = h('section.panel', { id: 'pdf-panel' },
-    h('div.panel-head', pdfTabBar, originalPdfActions), uploadInput, pdfBody
+    h('div.panel-head', pdfTabBar, langSwitch, originalPdfActions), uploadInput, pdfBody
   )
+
+  /* ---------- 原文 / 译文切换（保留原版式的原位翻译） ---------- */
+  function paintLangSwitch () {
+    const hasTrans = !!translationInfo.exists
+    langSwitch.hidden = !pdfOk || activePdfTab !== ''
+    for (const btn of langSwitch.querySelectorAll('.pdf-lang-btn')) {
+      const on = btn.dataset.mode === translationMode
+      btn.setAttribute('aria-pressed', String(on))
+      btn.disabled = btn.dataset.mode === 'trans' && !hasTrans && !translationInfo.translating
+    }
+    translateBtn.disabled = translationInfo.translating
+    translateBtn.textContent = translationInfo.translating
+      ? '翻译中 ' + (translationInfo.progress || 0) + (translationInfo.total ? '/' + translationInfo.total : '')
+      : (hasTrans ? '重新翻译' : '翻译')
+  }
+
+  async function refreshTranslationState (silent) {
+    try {
+      const res = await api.translationStatus(paper.id, signal)
+      const t = (res && res.translation) || {}
+      translationInfo = {
+        state: t.state || 'idle', exists: !!t.exists, translating: t.state === 'running',
+        progress: t.progress || 0, total: t.total || 0, stage: t.stage || '', error: t.error || ''
+      }
+    } catch (err) {
+      if (!silent) toast(err.message, 'error')
+    }
+    paintLangSwitch()
+  }
+
+  function switchLang (mode) {
+    if (mode === 'trans' && !translationInfo.exists) return
+    translationMode = mode
+    const tab = pdfTabs.get('')
+    if (!tab) return
+    if (activePdfViewer) tab.view = activePdfViewer.getViewState()
+    tab.url = mode === 'trans' ? api.translationUrl(paper.id) : api.pdfUrl(paper.id)
+    tab.title = mode === 'trans' ? 'PDF（译文）' : 'PDF'
+    pdfTabs.set('', tab)
+    paintPdfTabs()
+    if (activePdfTab === '') {
+      abortViewer()
+      pdfTabController = new AbortController()
+      pdfMount = openPdfDocument(pdfTabs.get(''), pdfTabController.signal)
+    }
+  }
+
+  async function startTranslation () {
+    if (!pdfOk || translationInfo.translating) return
+    translationInfo.translating = true
+    paintLangSwitch()
+    try {
+      const res = await api.startTranslation(paper.id, translationInfo.exists)
+      if (res && res.reason === 'cached') {
+        await refreshTranslationState(true)
+        switchLang('trans')
+        return
+      }
+      toast('已开始翻译：完成后会自动切到译文（关掉页面任务也会在后台继续）')
+      if (!translationPoll) {
+        translationPoll = setInterval(async () => {
+          await refreshTranslationState(true)
+          if (!translationInfo.translating) {
+            clearInterval(translationPoll)
+            translationPoll = null
+            if (translationInfo.state === 'done') {
+              toast('译文已生成')
+              switchLang('trans')
+            } else if (translationInfo.state === 'failed') {
+              toast('翻译失败：' + (translationInfo.error || '未知原因'), 'error')
+            }
+          }
+        }, 2500)
+      }
+    } catch (err) {
+      translationInfo.translating = false
+      paintLangSwitch()
+      toast(err.message, 'error')
+    }
+  }
+
+  signal.addEventListener('abort', () => {
+    if (translationPoll) { clearInterval(translationPoll); translationPoll = null }
+  }, { once: true })
 
   function paintPdfTabs () {
     const files = [...pdfTabs.keys()]
@@ -184,6 +281,7 @@ export function buildPdfAndAttachments ({
         }, '×') : null)
     }))
     originalPdfActions.hidden = activePdfTab !== ''
+    paintLangSwitch()
   }
 
   function selectPdfTab (file, focus = false) {
@@ -388,6 +486,8 @@ export function buildPdfAndAttachments ({
     )
   )
   loadAttachments()
+
+  refreshTranslationState(true)
 
   return {
     pdfPanel,

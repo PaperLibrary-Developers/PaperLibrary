@@ -573,6 +573,92 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
          这里保持「不渲染」不变，只把参数收敛成 panel 真正支持的两个。 */
     )
 
+    /* ---------- MinerU API（版面解析，翻译用） ---------- */
+    let mineruCfg = { settings: {}, note: '' }
+    try {
+      const res = await api.mineruSettings()
+      mineruCfg = { settings: res.settings || {}, note: (res.settings || {}).note || '' }
+    } catch (err) {
+      mineruCfg = { settings: {}, note: '读取失败：' + err.message }
+    }
+    if (isStale()) return
+    const mu = mineruCfg.settings || {}
+    const muStatus = h('div', {
+      style: {
+        fontSize: '13px', borderRadius: 'var(--radius-sm)', padding: '9px 12px',
+        background: mu.hasKey ? 'var(--accent-soft)' : 'var(--surface-3)',
+        color: mu.hasKey ? 'var(--accent-text)' : 'var(--muted)'
+      }
+    }, mu.hasKey
+      ? ('MinerU 已配置（Token ' + (mu.keyHint || '') + (mu.fromEnv ? '，来自环境变量' : '') + '）')
+      : 'MinerU 尚未配置 Token')
+    const muNote = h('div.hint', mineruCfg.note || '')
+    const fMuKey = h('input.input', {
+      type: 'password', value: '', autocomplete: 'off',
+      placeholder: mu.hasKey ? '已保存，留空表示不修改' : '粘贴 mineru.net 的 API Token（免费额度约 1000 页/天）'
+    })
+    const fMuEnabled = h('input', { type: 'checkbox', checked: mu.enabled !== false })
+    const fMuModel = h('select.input',
+      h('option', { value: 'pipeline' }, 'pipeline（默认：版面 + 公式 + 表格，CPU 可跑）'),
+      h('option', { value: 'vlm' }, 'vlm（更强，慢一些、更吃额度）'))
+    fMuModel.value = mu.modelVersion || 'pipeline'
+    const muResult = h('div.hint', '')
+
+    async function saveMineruSettings () {
+      const patch = { enabled: !!fMuEnabled.checked, modelVersion: fMuModel.value }
+      const key = trimValue(fMuKey.value)
+      if (key) patch.apiKey = key
+      const res = await api.mineruSaveSettings(patch)
+      const s = res.settings || {}
+      muResult.style.color = 'var(--accent-text)'
+      muResult.textContent = '已保存（Token 不会回显）'
+      muStatus.textContent = s.hasKey
+        ? ('MinerU 已配置（Token ' + (s.keyHint || '') + '）')
+        : 'MinerU 尚未配置 Token'
+      muStatus.style.background = s.hasKey ? 'var(--accent-soft)' : 'var(--surface-3)'
+      muStatus.style.color = s.hasKey ? 'var(--accent-text)' : 'var(--muted)'
+      fMuKey.value = ''
+      fMuKey.placeholder = s.hasKey ? '已保存，留空表示不修改' : fMuKey.placeholder
+      return res
+    }
+
+    const mineruPanel = foldPanel('api-mineru', 'MinerU API',
+      h('div', { style: { display: 'grid', gap: '13px' } },
+        h('div', { style: { color: 'var(--muted)', fontSize: '13.5px' } },
+          rich('MinerU 负责「看懂版面」：给每个文字块类型和坐标，把图注、参考文献、页眉页脚分出来。' +
+            '不填 Token 时翻译会退回本地 PyMuPDF 提取，图注与参考文献分不开。Token 只存本机、不回显；' +
+            '解析时 PDF 会上传到 mineru.net（免费额度约 1000 页/天）。')),
+        muStatus,
+        muNote,
+        h('div.field', h('label', 'MinerU API Token'), fMuKey),
+        h('div.field', h('label', '版面解析档位'), fMuModel,
+          h('div.hint', 'pipeline：约 30 秒 / 14 页；vlm：效果更好但更慢、更吃额度。')),
+        h('div', { style: { display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' } },
+          h('label', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center', fontSize: '13px' } },
+            fMuEnabled, '启用 MinerU 解析（关闭后一律用本地 PyMuPDF）'),
+          h('button.btn.sm.primary', {
+            type: 'button',
+            onclick: async ev => {
+              const btn = ev.currentTarget
+              btn.setAttribute('disabled', '')
+              muResult.style.color = ''
+              try {
+                await saveMineruSettings()
+              } catch (err) {
+                muResult.style.color = 'var(--danger)'
+                muResult.textContent = '保存失败：' + err.message
+              } finally {
+                btn.removeAttribute('disabled')
+              }
+            }
+          }, '保存'),
+          h('a.btn.sm.ghost', {
+            href: mu.signupUrl || 'https://mineru.net', target: '_blank', rel: 'noopener'
+          }, '去 mineru.net 注册拿 Token ↗')
+        ),
+        muResult
+      ))
+
     /* ---------- 学术检索来源（OpenAlex Key 与配额） ---------- */
 
     let srcSettings = null
@@ -1515,8 +1601,8 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
       assetsSec.open = true
       pdfPanel.open = true
     }
-    const apiSec = section('api', 'API服务', '大模型 · 学术检索来源（OpenAlex） · 网络检索（Exa）',
-      [aiPanel, sourcesPanel, webPanel])
+    const apiSec = section('api', 'API服务', '大模型 · MinerU API · 学术检索来源（OpenAlex） · 网络检索（Exa）',
+      [aiPanel, mineruPanel, sourcesPanel, webPanel])
     const aboutSec = section('about', '关于', '关于与更新 · 服务与数据',
       [aboutPanel, infoPanel])
 
