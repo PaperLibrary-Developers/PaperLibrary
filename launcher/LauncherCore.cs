@@ -42,6 +42,8 @@ public static class LauncherCore
 {
     public const string InstallRequestType = "paperlibrary:install.request";
     public const string InstallResultType = "paperlibrary:install.result";
+    public const string PapersDirectoryRequestType = "paperlibrary:papers-directory.request";
+    public const string PapersDirectoryResultType = "paperlibrary:papers-directory.result";
     public const int InstallLockStaleMinutes = 30;
 
     // ---------- JSON helpers ----------
@@ -158,7 +160,7 @@ public static class LauncherCore
         string type = JsonString(obj, "type");
         if (type != InstallRequestType) { error = "not-install-request"; return null; }
         string requestId = JsonString(obj, "requestId");
-        if (!Regex.IsMatch(requestId, "^[A-Za-z0-9._:-]{1,128}$"))
+        if (!IsValidRequestId(requestId))
         { error = "invalid-request-id"; return null; }
         string version = JsonString(obj, "version");
         if (version.Length > 0 && !Regex.IsMatch(version, "^[0-9]+\\.[0-9]+\\.[0-9]+$"))
@@ -171,8 +173,18 @@ public static class LauncherCore
 
     public static string InstallResultJson(string requestId, bool ok, string code, string message)
     {
+        return WebMessageResultJson(InstallResultType, requestId, ok, code, message);
+    }
+
+    public static bool IsValidRequestId(string requestId)
+    {
+        return Regex.IsMatch(requestId, @"\A[A-Za-z0-9._:-]{1,128}\z");
+    }
+
+    public static string WebMessageResultJson(string type, string requestId, bool ok, string code, string message)
+    {
         Dictionary<string, object> payload = new Dictionary<string, object>();
-        payload["type"] = InstallResultType;
+        payload["type"] = type;
         payload["requestId"] = requestId ?? "";
         payload["ok"] = ok;
         payload["code"] = code ?? "";

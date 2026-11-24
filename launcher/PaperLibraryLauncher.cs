@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -461,26 +462,26 @@ class Launcher
     {
         try
         {
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(Url + "api/health");
-            request.Timeout = 800;
-            request.ReadWriteTimeout = 1200;
-            request.Proxy = null;
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-            {
-                using (Stream stream = response.GetResponseStream())
-                {
-                    if (stream == null) return false;
-                    using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
-                    {
-                        string body = reader.ReadToEnd();
-                        return body.IndexOf("literature-vault", StringComparison.Ordinal) >= 0;
-                    }
-                }
-            }
+            return ReadServiceHealth() != null;
         }
         catch (Exception)
         {
             return false;
+        }
+    }
+
+    static Dictionary<string, object> ReadServiceHealth()
+    {
+        HttpWebRequest request = (HttpWebRequest)WebRequest.Create(Url + "api/health");
+        request.Timeout = 800;
+        request.ReadWriteTimeout = 1200;
+        request.Proxy = null;
+        request.AllowAutoRedirect = false;
+        using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+        using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+        {
+            var health = LauncherCore.ParseJsonObject(reader.ReadToEnd());
+            return LauncherCore.JsonString(health, "app") == "literature-vault" ? health : null;
         }
     }
 
@@ -898,6 +899,14 @@ class Launcher
             PostInstallResult("", false, "invalid-message", "无法读取安装请求");
             return;
         }
+        var payload = LauncherCore.ParseJsonObject(json);
+        if (LauncherCore.JsonString(payload, "type") == LauncherCore.PapersDirectoryRequestType)
+        {
+            string requestId = LauncherCore.JsonString(payload, "requestId");
+            if (payload.Count == 2 && LauncherCore.IsValidRequestId(requestId))
+                OpenPapersDirectory(requestId);
+            return;
+        }
         string error;
         InstallRequest request = LauncherCore.ParseInstallRequest(json, out error);
         if (request == null)
@@ -925,18 +934,49 @@ class Launcher
         PostInstallResult(request.RequestId, started, code, message);
     }
 
+    static async void OpenPapersDirectory(string requestId)
+    {
+        string error = "";
+        try
+        {
+            string folder = await Task.Run(delegate
+            {
+                string dataDir = LauncherCore.JsonString(ReadServiceHealth(), "dataDir");
+                if (!Path.IsPathRooted(dataDir)) throw new IOException("missing service data directory");
+                return Directory.CreateDirectory(Path.Combine(dataDir, "article", "papers")).FullName;
+            });
+            if (closing) return;
+            // Invoke the shell on the WinForms UI thread that owns the user's foreground window.
+            Process explorer = Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true, Verb = "explore" });
+            if (explorer != null) explorer.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Log("open papers directory failed: " + ex.Message);
+            error = "无法打开原文文件夹，请检查目录和访问权限";
+        }
+        bool ok = error.Length == 0;
+        PostWebMessageResult(LauncherCore.PapersDirectoryResultType, requestId, ok,
+            ok ? "" : "open-directory-failed", error);
+    }
+
     static void PostInstallResult(string requestId, bool ok, string code, string message)
+    {
+        PostWebMessageResult(LauncherCore.InstallResultType, requestId, ok, code, message);
+    }
+
+    static void PostWebMessageResult(string type, string requestId, bool ok, string code, string message)
     {
         try
         {
             if (webView == null || webView.CoreWebView2 == null) return;
             webView.CoreWebView2.PostWebMessageAsJson(
-                LauncherCore.InstallResultJson(requestId, ok, code, message));
-            Log("install result posted: request=" + requestId + " ok=" + ok + " code=" + code);
+                LauncherCore.WebMessageResultJson(type, requestId, ok, code, message));
+            Log(type + " posted: request=" + requestId + " ok=" + ok + " code=" + code);
         }
         catch (Exception ex)
         {
-            Log("post install result failed: " + ex.Message);
+            Log("post " + type + " failed: " + ex.Message);
         }
     }
 

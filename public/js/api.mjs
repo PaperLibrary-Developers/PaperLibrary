@@ -1,4 +1,5 @@
 /* 与本地服务通信的接口封装（ESM：原 IIFE 脚本平移而来，保留原缩进便于与历史版本逐行对照） */
+import { createRequestId, isWebViewHost, requestWebView } from './webview-request.mjs'
 
   export class ApiError extends Error {
     constructor (message, status) {
@@ -304,7 +305,19 @@
     bulk: (ids, patch) => request('POST', '/api/papers/bulk', { body: { ids, patch } }),
     scanPdfs: () => request('GET', '/api/papers/scan/pdfs'),
     syncPdfDirectory: () => request('POST', '/api/papers/scan/pdfs'),
-    openPapersDirectory: () => request('POST', '/api/papers/open-directory', { body: {} }),
+    openPapersDirectory: () => {
+      if (!isWebViewHost()) return request('POST', '/api/papers/open-directory', { body: {} })
+      const failureMessage = '无法打开原文文件夹，请检查目录和访问权限'
+      return requestWebView({
+        type: 'paperlibrary:papers-directory.request', requestId: createRequestId()
+      }, 'paperlibrary:papers-directory.result', {
+        timeoutMs: 5000,
+        failureCode: 'open-directory-failed',
+        failureMessage,
+        postFailureMessage: failureMessage,
+        noHostMessage: failureMessage
+      })
+    },
     associatePdf: (paperId, file) => request('POST', '/api/papers/associate-pdf', { body: { paperId, file } }),
     cleanupDuplicates: files => request('POST', '/api/papers/cleanup-duplicates', { body: { files: files || [] } }),
     tidyPdfNames: () => request('POST', '/api/papers/tidy-pdf-names'),
