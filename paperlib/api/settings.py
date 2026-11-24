@@ -59,3 +59,18 @@ def websearch_settings(ctx):
     websearch.update(patch)
     return ctx.json(200, {"ok": True, "settings": websearch.public_settings(),
                           "ready": websearch.ready()})
+
+
+def mineru_settings(ctx):
+    if not _method_guard(ctx, ("GET", "PUT", "POST")):
+        return
+    mineru = ctx.services.mineru
+    if ctx.method == "GET":
+        return ctx.json(200, {"ok": True, "settings": mineru.public_settings(),
+                              "ready": mineru.ready()})
+    patch = ctx.read_json() or {}
+    if not isinstance(patch, dict):
+        return ctx.fail(400, "请求体必须是对象")
+    mineru.update(patch)
+    return ctx.json(200, {"ok": True, "settings": mineru.public_settings(),
+                          "ready": mineru.ready()})

@@ -15,10 +15,12 @@ from paperlib import __version__
 from paperlib.adapters import external, metadata
 from paperlib.adapters.attachment_text import extract_attachment_text
 from paperlib.adapters.llm import LLM
+from paperlib.adapters.mineru import MinerU
 from paperlib.adapters.pdf import FullText
 from paperlib.adapters.sources import Sources
 from paperlib.adapters.websearch import WebSearch
 from paperlib.domain.folders import Folders
+from paperlib.domain.translate import Translator
 from paperlib.domain.library import Library
 from paperlib.legacy import figures
 from paperlib.update.service import UpdateService
@@ -80,6 +82,7 @@ def create_services(config, store):
     library = Library(store, fulltext)
     folders = Folders(store)
     llm = LLM(config.data_dir)
+    mineru = MinerU(config.data_dir)
     websearch = WebSearch(config.data_dir)
     sources = Sources(config.data_dir)
     prefs = Prefs(store)
@@ -169,6 +172,7 @@ def create_services(config, store):
         prefs=prefs,
         fulltext=fulltext,
         llm=llm,
+        mineru=mineru,
         websearch=websearch,
         sources=sources,
         external=external,
@@ -183,4 +187,5 @@ def create_services(config, store):
         trigger_auto_summary_zh=trigger_auto_summary_zh,
         update=UpdateService(config.root, config.data_dir),
     )
+    services.translator = Translator(services)
     return services
