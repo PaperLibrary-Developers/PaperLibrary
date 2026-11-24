@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import zipfile
@@ -32,11 +33,14 @@ GREEK = {
 SYSTEM_PROMPT = (
     "你是学术论文英译中专家。把【本段】译成规范学术中文。\n"
     "硬性规则：\n"
+    "0) 译文里不得出现英文单词或英文短语（专有名词、化学式、单位、软件/仪器名除外）；\n"
     "1) 只输出译文正文，不要解释、前缀或引号；\n"
     "2) 原文中 ⟦...⟧ 包裹的是数学公式，属于不可变 token：必须逐字复制、数量与原文完全一致、位置对应；\n"
     "3) 保留 <sup>..</sup> 等 HTML 标签与文献引用标号；\n"
     "4) 化学领域通行译名，术语准确；\n"
-    "5) 不增删信息。【前文】【后文】只用于理解语境，不要翻译。"
+    "5) 不增删信息。【前文】【后文】只用于理解语境，不要翻译；\n"
+    "6) 不得保留英文单词（专有名词、化学式、单位、仪器/软件名除外）；\n"
+    "7) 译文长度尽量与原文相当，不要扩写或解释，避免比原文长很多。"
 )
 
 
@@ -71,6 +75,14 @@ def merge_lines(lines):
         else:
             parts.append(cur)
     return re.sub(r"\s+", " ", " ".join(parts)).strip()
+
+
+_SMALL_EN = re.compile(r"\b[a-z]{4,}\b")
+
+
+def _english_words(text):
+    """译文里残留的小写英文单词（大写缩写/化学式/专名不算）。"""
+    return sorted({w for w in _SMALL_EN.findall(text or "")})
 
 
 def placeholder_count(text):
@@ -557,6 +569,28 @@ def _sample_color(pix, page_rect, rect, inset=2.0, band=5.0):
     return pixels[len(pixels) // 2]
 
 
+def _estimate_height(html_text, font_size, width):
+    """估算这段中文排进 width 宽需要多高（pt）。"""
+    plain = re.sub(r"<[^>]+>", "", html_text or "")
+    if not plain:
+        return 0.0
+    per_line = max(1.0, width / (max(font_size, 4.0) * 0.95))
+    lines = math.ceil(len(plain) / per_line)
+    return lines * font_size * 1.32
+
+
+def _free_space_below(rect, obstacles, page_rect, margin=3.0):
+    """rect 下方到最近障碍物（块/图/页脚区）之间的空白高度。"""
+    limit = page_rect.y1 - 42.0      # 留出页脚/页码区，别把正文压到页脚上
+    for obstacle in obstacles:
+        if obstacle is rect:
+            continue
+        if obstacle.y0 >= rect.y1 - 0.5 and obstacle.y0 < limit \
+                and obstacle.x1 > rect.x0 + 1 and obstacle.x0 < rect.x1 - 1:
+            limit = obstacle.y0 - margin
+    return max(0.0, limit - rect.y1)
+
+
 def _shrink_against_images(rect, image_rects):
     """文字块与图片相交时，收缩到不相交的最大子矩形；实在不行就跳过。"""
     hit = 0.0
@@ -651,6 +685,18 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
         dropped = merged_count
         plan = kept
 
+        # 译文可能比原文长：先估算，需要的空间比原块多就向下借空白（不越过相邻块/图）
+        obstacles = [it["rect"] for it in plan] + list(image_rects)
+        for item in plan:
+            item["fill_rect"] = item["rect"]
+            needed = _estimate_height(item["html"], item["fs"], item["rect"].width)
+            if needed > item["rect"].height * 1.03:
+                extra = _free_space_below(item["rect"], obstacles, page.rect)
+                if extra > 6:
+                    grow = min(needed - item["rect"].height, extra)
+                    item["fill_rect"] = fitz.Rect(item["rect"].x0, item["rect"].y0,
+                                                  item["rect"].x1, item["rect"].y1 + grow)
+
         for item in plan:
             page.add_redact_annot(item["rect"], fill=tuple(c / 255 for c in item["color"]))
         if plan:
@@ -669,11 +715,15 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                 covered += 1
 
         errors = 0
+        crowded = 0
         for item in plan:
             try:
-                page.insert_htmlbox(item["rect"], item["html"],
-                                    css="*{font-size:%.2fpt;}" % item["fs"] + css,
-                                    archive=archive, scale_low=0.40)
+                spare, scale = page.insert_htmlbox(item["fill_rect"], item["html"],
+                                                   css="*{font-size:%.2fpt;}" % item["fs"] + css,
+                                                   archive=archive, scale_low=0.55)
+                if (isinstance(scale, (int, float)) and scale < 0.6) or \
+                        (isinstance(spare, (int, float)) and spare < 0):
+                    crowded += 1
             except Exception as exc:  # noqa: BLE001 - 单块失败不影响整页
                 errors += 1
                 print("[translate] 回填失败 %s：%s" % (item["id"], exc))
@@ -681,7 +731,8 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
 
         pages_report.append({
             "page": page_no, "replaced": len(plan), "covered_xobject": covered,
-            "no_translation": skipped_notr, "dropped_overlap": dropped, "errors": errors,
+            "no_translation": skipped_notr, "dropped_overlap": dropped,
+            "errors": errors, "crowded": crowded,
         })
         if on_page:
             on_page(page_no, len(doc))
@@ -709,6 +760,7 @@ def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_bl
         if expected:
             prompt += "\n\n注意：本段含 %d 个 ⟦...⟧ 公式 token，译文必须包含同样多个。" % expected
         best = ""
+        nudged = False
         for attempt in range(2):
             try:
                 result = llm.chat(
@@ -720,6 +772,14 @@ def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_bl
                 print("[translate] 块 %s 翻译失败：%s" % (block["id"], exc))
                 candidate = ""
             if candidate and placeholder_count(candidate) == expected:
+                # 残留小写英文单词（expediently、presumed 这类）：带点名指令再试一次
+                leftovers = _english_words(candidate)
+                if leftovers and not nudged:
+                    prompt += ("\n\n注意：你的译文中出现了英文单词 %s，必须全部译成中文后再输出，"
+                               "公式占位 ⟦...⟧ 仍保持原样。" % "、".join(leftovers[:6]))
+                    nudged = True
+                    best = candidate
+                    continue
                 best = candidate
                 break
             if candidate and not best:
