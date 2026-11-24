@@ -20,7 +20,10 @@ from threading import Lock, Thread
 from paperlib.adapters.pdf_translate import (
     blocks_from_layout,
     blocks_from_pdf,
+    dedupe_hierarchy,
     extract_layout_from_zip,
+    fill_empty_sources,
+    relink,
     render_translated,
     translate_blocks,
 )
@@ -159,6 +162,11 @@ class Translator:
                     print("[translate] " + mineru_warning)
 
             blocks = blocks_from_layout(layout) if layout else blocks_from_pdf(pdf_path)
+            if layout:
+                # MinerU 的空文本块用 PyMuPDF 补；父块（罩住多段、文本只是其中一段）丢掉
+                blocks = fill_empty_sources(blocks, pdf_path)
+                blocks = dedupe_hierarchy(blocks, pdf_path)
+                blocks = relink(blocks)
             if not blocks:
                 raise TranslateError("没有可翻译的文本块（可能是扫描件或图片版 PDF）")
 

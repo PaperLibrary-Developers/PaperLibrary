@@ -152,14 +152,15 @@ def blocks_from_layout(layout):
             if block.get("type") not in TRANSLATABLE:
                 continue
             text = merge_lines(block.get("lines") or [])
-            if not text:
-                continue
             rects = [fitz.Rect(line["bbox"]) for line in block.get("lines") or [] if line.get("bbox")]
-            if not rects:
+            if rects:
+                box = rects[0]
+                for extra in rects[1:]:
+                    box |= extra
+            else:
+                box = fitz.Rect(block["bbox"])   # 没有行信息：用块 bbox，文本稍后补
+            if box.width < 12 or box.height < 5:
                 continue
-            box = rects[0]
-            for extra in rects[1:]:
-                box |= extra
             page_blocks.append({
                 "id": "p%db%d" % (page_no, index),
                 "page": page_no,
@@ -167,11 +168,157 @@ def blocks_from_layout(layout):
                 "bbox": [box.x0, box.y0, box.x1, box.y1],
                 "source": text,
             })
-        for pos, item in enumerate(page_blocks):
-            item["prev"] = page_blocks[pos - 1]["source"][-160:] if pos > 0 else ""
-            item["next"] = page_blocks[pos + 1]["source"][:160] if pos + 1 < len(page_blocks) else ""
         blocks.extend(page_blocks)
+    return relink(blocks)
+
+
+def relink(blocks):
+    """按页、按阅读顺序（y 再 x）重算前后文，供翻译时给上下文。"""
+    by_page = {}
+    for block in blocks:
+        by_page.setdefault(block["page"], []).append(block)
+    for items in by_page.values():
+        items.sort(key=lambda b: (round(b["bbox"][1], 1), round(b["bbox"][0], 1)))
+        for index, block in enumerate(items):
+            block["prev"] = items[index - 1]["source"][-160:] if index > 0 else ""
+            block["next"] = items[index + 1]["source"][:160] if index + 1 < len(items) else ""
     return blocks
+
+
+def fill_empty_sources(blocks, pdf_path):
+    """MinerU 偶尔给出「有 bbox、无文本」的块（字体没有 ToUnicode）；用 PyMuPDF 回填。"""
+    empty = [b for b in blocks if not b.get("source")]
+    if not empty:
+        return blocks
+    doc = fitz.open(str(pdf_path))
+    for block in empty:
+        try:
+            text = doc[block["page"] - 1].get_text("text", clip=fitz.Rect(block["bbox"]))
+        except Exception:  # noqa: BLE001 - 取不到就保持空
+            text = ""
+        text = re.sub(r"\s+", " ", text or "").strip()
+        if len(text) >= 20:
+            block["source"] = text
+    doc.close()
+    return [b for b in blocks if b.get("source")]
+
+
+_PAGE_CACHE = {}
+
+
+def _page_of(blocks, page_no):
+    """按页取 fitz 页面对象（块里带 _pdf_path 时）。"""
+    doc = _PAGE_CACHE.get("doc")
+    if doc is None:
+        return None
+    try:
+        return doc[page_no - 1]
+    except Exception:
+        return None
+
+
+def _locate_by_text(blocks, parent, original):
+    """用父块文本在页面上搜索真实行位置；找不到返回 None。"""
+    page = _page_of(blocks, parent["page"])
+    if page is None:
+        return None
+    probe = clean_source(parent.get("source") or "")[:70]
+    for attempt in (probe, " ".join(re.findall(r"[A-Za-z]{3,}", probe)[:6])):
+        if not attempt or len(attempt) < 8:
+            continue
+        try:
+            hits = page.search_for(attempt)
+        except Exception:  # noqa: BLE001
+            hits = []
+        if hits:
+            box = hits[0]
+            # 用命中行所在的 PyMuPDF 段落块（get_text("blocks") 已按段落合并），
+            # 这样拿到的是一整段而不是单行
+            try:
+                fitz_blocks = page.get_text("blocks")
+            except Exception:  # noqa: BLE001
+                fitz_blocks = []
+            for raw in fitz_blocks:
+                rect = fitz.Rect(raw[0], raw[1], raw[2], raw[3])
+                if rect.contains(box) or (rect & box).get_area() > 0:
+                    if rect.height >= 8 and rect.width >= 20:
+                        return rect
+            left = min(original.x0, box.x0)
+            right = max(original.x1, box.x1)
+            return fitz.Rect(left, box.y0 - 1, right, box.y1 + 1)
+    return None
+
+
+def _subtract_rect(rect, cut):
+    """rect 减去 cut 后剩下的矩形列表（最多 4 块）。"""
+    if not rect.intersects(cut):
+        return [rect]
+    out = []
+    if cut.y0 > rect.y0:
+        out.append(fitz.Rect(rect.x0, rect.y0, rect.x1, cut.y0))
+    if cut.y1 < rect.y1:
+        out.append(fitz.Rect(rect.x0, cut.y1, rect.x1, rect.y1))
+    top, bottom = max(rect.y0, cut.y0), min(rect.y1, cut.y1)
+    if cut.x0 > rect.x0:
+        out.append(fitz.Rect(rect.x0, top, cut.x0, bottom))
+    if cut.x1 < rect.x1:
+        out.append(fitz.Rect(cut.x1, top, rect.x1, bottom))
+    return [r for r in out if not r.is_empty]
+
+
+def dedupe_hierarchy(blocks, pdf_path=None):
+    """处理 MinerU 的「父块」：bbox 罩住多块、文本却只是其中一段的块。
+
+    之前直接丢弃会让父块自己的那段整段漏翻（p9 右栏底部的 Cbn 段）；
+    现在改成「父块减去所有子块」，把父块收缩到剩下的空白区域（通常正是它那段文字的位置），
+    减去后没有可用区域才丢弃。
+    """
+    if pdf_path:
+        _PAGE_CACHE["doc"] = fitz.open(str(pdf_path))
+    by_page = {}
+    for block in blocks:
+        by_page.setdefault(block["page"], []).append(block)
+    for items in by_page.values():
+        for parent in items:
+            outer = fitz.Rect(parent["bbox"]) + (-3, -3, 3, 3)
+            children = [b for b in items
+                        if b is not parent and outer.contains(fitz.Rect(b["bbox"]))]
+            if len(children) < 2:
+                continue
+            parent_text = parent.get("source") or ""
+            if any((parent_text in (c.get("source") or ""))
+                   or ((c.get("source") or "") in parent_text) for c in children):
+                continue
+            original = fitz.Rect(parent["bbox"])
+            # 优先用文字定位：父块的文本常只占其中一段，搜索到真实行位置最可靠
+            located = _locate_by_text(blocks, parent, original)
+            if located is not None:
+                parent["bbox"] = [located.x0, located.y0, located.x1, located.y1]
+                continue
+            remain = [original]
+            for child in children:
+                cut = fitz.Rect(child["bbox"])
+                next_remain = []
+                for rect in remain:
+                    next_remain.extend(_subtract_rect(rect, cut))
+                remain = next_remain
+            candidates = [r for r in remain if r.height >= 12 and r.width >= 60]
+            if not candidates:
+                parent["drop"] = True
+                continue
+            best = max(candidates, key=lambda r: r.get_area())
+            # 减法把块切窄一半以上（典型是跨栏块），说明位置不可信：丢掉，别错位
+            if best.width < original.width * 0.8:
+                parent["drop"] = True
+                continue
+            parent["bbox"] = [best.x0, best.y0, best.x1, best.y1]
+    doc = _PAGE_CACHE.pop("doc", None)
+    if doc is not None:
+        try:
+            doc.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return [b for b in blocks if not b.get("drop")]
 
 
 def blocks_from_pdf(pdf_path):
@@ -338,14 +485,29 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                 "html": build_html(zh), "color": _sample_color(pix, page.rect, rect),
                 "fs": float(block.get("font_size") or 9.0), "ratio": round(ratio, 3),
             })
-        # 同页重叠块去重：叠印比漏译更糟，保留面积大的
+        # 同页仍重叠的块：合并成一块（bbox 并集 + 译文按阅读顺序拼接），不再丢弃
         kept = []
-        for item in sorted(plan, key=lambda it: -it["rect"].get_area()):
-            if any((item["rect"] & other["rect"]).get_area()
-                   > 0.30 * min(item["rect"].get_area(), other["rect"].get_area()) for other in kept):
-                continue
-            kept.append(item)
-        dropped = len(plan) - len(kept)
+        merged_count = 0
+        for item in sorted(plan, key=lambda it: (round(it["rect"].y0, 1), round(it["rect"].x0, 1))):
+            merged = False
+            for other in kept:
+                small = min(item["rect"].get_area(), other["rect"].get_area())
+                if not small:
+                    continue
+                if (item["rect"] & other["rect"]).get_area() / small <= 0.30:
+                    continue
+                if item["rect"].y0 < other["rect"].y0:
+                    other["html"] = item["html"] + other["html"]
+                else:
+                    other["html"] = other["html"] + item["html"]
+                other["rect"] |= item["rect"]
+                other["fs"] = min(other["fs"], item["fs"])
+                merged = True
+                merged_count += 1
+                break
+            if not merged:
+                kept.append(item)
+        dropped = merged_count
         plan = kept
 
         for item in plan:
