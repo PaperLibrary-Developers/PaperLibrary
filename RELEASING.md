@@ -92,6 +92,17 @@ SHA-256、zip 无 `data/`、含 `PaperLibrary.exe` 与匹配的 `version.json`�
 
 ## 5. 当前状态（2026-11-24）
 
+- **v2.0.1 已发布**（2026-11-24，版本 `2.0.1`；tag `v2.0.1`（annotated `c96b6544`）→ **`a0608993`**，主页卡片紧凑化、桌面版打开原文目录的前台焦点修复、启动器消息通道统一）：
+  - zip `PaperLibrary.v2.0.1.HELIX.zip` 46,562,512 字节，sha256 `0153569f610a3461d19d7eaa0c223e4e3d96dea6bb1397ff385bf0ec10cf1656`；
+  - 资产：zip、`update-manifest.json`（keyId=e777a2f6、minWindows 10.0.17763）、`SHA256SUMS`、`release-v2.0.1.json`；
+  - 发布后校验：9 PASS / 0 FAIL / 0 WARN（latest 清单一致、匿名下载、字节数与 SHA-256、zip 无 `data/`、含 `PaperLibrary.exe`）；
+  - 发布前验证：Python 全量 **782 项 / 1 跳过 / 0 失败**（跳过的 `test_migrate.RealSourcesTest` 需真实旧库环境变量，与发布逻辑无关）；
+    Node **53**；API 契约 **64 通过 / 0 失败 / 12 跳过（共 76）**；`tools/check_windows.ps1` 完整模式通过（1024 文件 / 99.0 MB → zip 44.2 MB，解包后包内解释器复跑契约 64 / 0 / 12）；
+  - 打 tag 后复跑 `test_update_publish` **8 项全通过、0 跳过**。
+  - 本版内容：`99995acc`（主页无子文件夹卡片去掉「直接存放文献」文案，进入按钮并入名称行）、`d45f9b44`（该布局前端单测）、
+    `bf8f8c7e`（桌面版打开原文目录改经启动器在 UI 线程调用资源管理器，修复前台焦点；新增 `webview-request.mjs` 统一请求/超时，
+    收紧 requestId 与消息字段校验）；另有合并 `f2dd3a3f` 与 v2.0 簿记 `7ccf74a2`。
+  - 兼容性：无 HTTP 端点变化（契约仍 76 条）；新增桌面版内部 WebView 消息 `paperlibrary:papers-directory.request/.result`；`data/` 结构不变。
 - **v2.0 已发布**（2026-11-24，版本 `2.0.0`；tag `v2.0`（annotated `be9a37f7`）→ **`28c2b2d9`**，代号 Nexus→HELIX、主页文件夹卡片与子文件夹标签页、图表按图注自动提取与定位、开屏公告、DPAPI 密钥加密与 HTTP 防护、README 与使用文档重写）：
   - zip `PaperLibrary.v2.0.HELIX.zip` 46,560,320 字节，sha256 `53fdc5d77c6049d2eb7cbb0ceaabf0a82b5e46e0e9160db83a48190f8b8f84e6`；
   - 资产：zip、`update-manifest.json`（keyId=e777a2f6、minWindows 10.0.17763）、`SHA256SUMS`、`release-v2.0.json`；
