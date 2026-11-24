@@ -569,14 +569,36 @@ def _sample_color(pix, page_rect, rect, inset=2.0, band=5.0):
     return pixels[len(pixels) // 2]
 
 
+def _font_size_of(page, rect):
+    """取该矩形内原文的真实字号（span size 中位数）；取不到返回 None。"""
+    try:
+        sizes = []
+        for block in page.get_text("dict", clip=rect).get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if (span.get("text") or "").strip():
+                        sizes.append(float(span.get("size") or 0))
+        sizes = [s for s in sizes if 4 < s < 60]
+        if sizes:
+            sizes.sort()
+            return sizes[len(sizes) // 2]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _estimate_height(html_text, font_size, width):
     """估算这段中文排进 width 宽需要多高（pt）。"""
     plain = re.sub(r"<[^>]+>", "", html_text or "")
     if not plain:
         return 0.0
-    per_line = max(1.0, width / (max(font_size, 4.0) * 0.95))
-    lines = math.ceil(len(plain) / per_line)
-    return lines * font_size * 1.32
+    # 中文按 1 个字宽、其余按 0.5 字宽折算，比「一律按 0.95」准得多
+    units = 0.0
+    for char in plain:
+        units += 1.0 if "\u4e00" <= char <= "\u9fff" else 0.5
+    per_line = max(1.0, width / max(font_size, 4.0))
+    lines = math.ceil(units / per_line)
+    return lines * font_size * 1.18
 
 
 def _free_space_below(rect, obstacles, page_rect, margin=3.0):
@@ -632,7 +654,7 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
     archive = fitz.Archive(str(font_dir)) if font_dir else None
     css = ("@font-face { font-family: han; src: url(%s); }\n" % font_name
            if font_name else "")
-    css += ("* { font-family: han; margin:0; padding:0; line-height:1.30; color:#111; }\n"
+    css += ("* { font-family: han; margin:0; padding:0; line-height:1.18; color:#111; }\n"
             "sub, sup { font-size: 68%; }")
     pages_report = []
     for page_no in range(1, len(doc) + 1):
@@ -655,10 +677,12 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
             rect, ratio = _shrink_against_images(rect, image_rects)
             if rect is None:
                 continue
+            measured = _font_size_of(page, rect)
+            font_size = measured * 0.96 if measured else float(block.get("font_size") or 9.0)
             plan.append({
                 "id": block["id"], "rect": rect, "source": block["source"],
                 "html": build_html(zh), "color": _sample_color(pix, page.rect, rect),
-                "fs": float(block.get("font_size") or 9.0), "ratio": round(ratio, 3),
+                "fs": font_size, "ratio": round(ratio, 3),
             })
         # 同页仍重叠的块：合并成一块（bbox 并集 + 译文按阅读顺序拼接），不再丢弃
         kept = []
@@ -690,7 +714,7 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
         for item in plan:
             item["fill_rect"] = item["rect"]
             needed = _estimate_height(item["html"], item["fs"], item["rect"].width)
-            if needed > item["rect"].height * 1.03:
+            if needed > item["rect"].height * 0.95:
                 extra = _free_space_below(item["rect"], obstacles, page.rect)
                 if extra > 6:
                     grow = min(needed - item["rect"].height, extra)
