@@ -249,6 +249,77 @@ def _locate_by_text(blocks, parent, original):
     return None
 
 
+def relocate_by_text(blocks, pdf_path):
+    """用文本在页面上把每块「钉」回它真正的段落位置（MinerU 的 bbox 常是整页/整栏）。
+
+    只接受与原 bbox 有实质重叠的结果，避免把段落钉到别处。
+    """
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception:  # noqa: BLE001
+        return blocks
+    cache = {}
+    occupied = {}
+    for block in blocks:
+        # 公式/占位符会打断文本连续性：在第一个公式标记处截断，用前面的纯文字定位
+        probe = re.split(r"⟦|\\", clean_source(block.get("source") or ""))[0][:60].strip()
+        if len(probe) < 12:
+            continue
+        page = cache.get(block["page"])
+        if page is None:
+            page = doc[block["page"] - 1]
+            cache[block["page"]] = page
+        words = probe.split()
+        candidates = [probe]
+        if len(words) > 6:
+            candidates.append(" ".join(words[:6]))
+        if len(words) > 4:
+            candidates.append(" ".join(words[:4]))
+        hits = []
+        for candidate in candidates:
+            if len(candidate) < 10:
+                continue
+            try:
+                hits = page.search_for(candidate)
+            except Exception:  # noqa: BLE001
+                hits = []
+            if hits:
+                break
+        if not hits:
+            continue
+        target = hits[0]
+        original = fitz.Rect(block["bbox"])
+        for raw in page.get_text("blocks"):
+            rect = fitz.Rect(raw[0], raw[1], raw[2], raw[3])
+            if not rect.intersects(target):
+                continue
+            if rect.height < 12 or rect.width < 20:
+                continue
+            inter = (rect & original).get_area()
+            if inter <= 0.3 * min(rect.get_area(), original.get_area()):
+                break
+            if any((rect & used).get_area() > 0.8 * min(rect.get_area(), used.get_area())
+                   for used in occupied.get(block["page"], [])):
+                break
+            # 定位到一行（原段有 4 行）说明文本层被拆碎，位置不可靠：保留原 bbox
+            if rect.height < min(24.0, original.height * 0.5):
+                break
+            block["bbox"] = [rect.x0, rect.y0, rect.x1, rect.y1]
+            block["relocated"] = True
+            occupied.setdefault(block["page"], []).append(rect)
+            break
+    doc.close()
+    return blocks
+
+
+def _covers(outer, inner):
+    """outer 覆盖 inner 至少 80%，且面积明显更大（父子块判定，不要求严格包含）。"""
+    if inner.is_empty:
+        return False
+    inter = (outer & inner).get_area()
+    return inter / inner.get_area() >= 0.8 and outer.get_area() >= inner.get_area() * 1.4
+
+
 def _subtract_rect(rect, cut):
     """rect 减去 cut 后剩下的矩形列表（最多 4 块）。"""
     if not rect.intersects(cut):
@@ -281,11 +352,18 @@ def dedupe_hierarchy(blocks, pdf_path=None):
     for items in by_page.values():
         for parent in items:
             outer = fitz.Rect(parent["bbox"]) + (-3, -3, 3, 3)
-            children = [b for b in items
-                        if b is not parent and outer.contains(fitz.Rect(b["bbox"]))]
+            children = [b for b in items if b is not parent and _covers(outer, fitz.Rect(b["bbox"]))]
+            parent_text = parent.get("source") or ""
+            # 冗余子块：B 被 A 包含、且 B 的文本就是 A 的一段 → 丢 B（否则两段译文会叠印）
+            for child in children:
+                child_text = child.get("source") or ""
+                if child_text and child_text in parent_text:
+                    child["drop"] = True
+            children = [c for c in children if not c.get("drop")]
+            if not children:
+                continue
             if len(children) < 2:
                 continue
-            parent_text = parent.get("source") or ""
             if any((parent_text in (c.get("source") or ""))
                    or ((c.get("source") or "") in parent_text) for c in children):
                 continue

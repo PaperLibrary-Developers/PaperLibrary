@@ -24,6 +24,7 @@ from paperlib.adapters.pdf_translate import (
     extract_layout_from_zip,
     fill_empty_sources,
     relink,
+    relocate_by_text,
     render_translated,
     translate_blocks,
 )
@@ -165,6 +166,7 @@ class Translator:
             if layout:
                 # MinerU 的空文本块用 PyMuPDF 补；父块（罩住多段、文本只是其中一段）丢掉
                 blocks = fill_empty_sources(blocks, pdf_path)
+                blocks = relocate_by_text(blocks, pdf_path)
                 blocks = dedupe_hierarchy(blocks, pdf_path)
                 blocks = relink(blocks)
             if not blocks:
