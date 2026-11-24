@@ -168,11 +168,18 @@ import * as foldersUi from '../folders.mjs'
             h('div.fld-home-ico', bigFolderSvg('folder')),
             h('span.fld-home-count', `${node.countDeep} 篇`)
           ),
-          h('div.fld-home-name', node.name),
-          h('div.fld-home-meta',
-            h('span', kids.length ? `含 ${kids.length} 个子文件夹` : '直接存放文献'),
-            h('span.fld-home-enter', '进入 →')
-          ),
+          kids.length
+            ? h('div.fld-home-name', node.name)
+            : h('div.fld-home-name-row',
+              h('div.fld-home-name', node.name),
+              h('span.fld-home-enter', '进入 →')
+            ),
+          kids.length
+            ? h('div.fld-home-meta',
+              h('span', `含 ${kids.length} 个子文件夹`),
+              h('span.fld-home-enter', '进入 →')
+            )
+            : null,
           kids.length ? h('div.fld-home-kids', previewKids) : null
         )
       })
