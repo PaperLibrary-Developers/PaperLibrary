@@ -11,6 +11,7 @@ import math
 import re
 import zipfile
 from collections import Counter
+from difflib import SequenceMatcher
 from html import unescape
 from pathlib import Path
 from statistics import median
@@ -20,8 +21,22 @@ import pymupdf as fitz
 
 TRANSLATABLE = ("text", "title", "abstract")
 PLACEHOLDER = re.compile(r"⟦.*?⟧", re.S)
-PROTECTED_TOKEN = re.compile(r"(?:⟦[^⟦⟧]*⟧|<sup>[^<>]*</sup>|<sub>[^<>]*</sub>)+")
+PROTECTED_TOKEN = re.compile(
+    r"(?:⟦[^⟦⟧]*⟧|<sup>[^<>]*</sup>|<sub>[^<>]*</sub>|−\d+(?:\.\d+)?)+"
+)
 TAG_RE = re.compile(r"(</?(?:sup|sub|i|b|em|strong)>)")
+LETTER_SCRIPT = re.compile(r"<(sup|sub)>([^<>]*[a-z][^<>]*)</\1>")
+NATIVE_FORMULA = re.compile(
+    r"(?<![A-Za-z])(?:[A-Z][a-z]?(?:<sub>[\d/]+</sub>|<sup>[IVX]+</sup>)+)+(?:⊂\d+)?"
+    r"|\b\d+(?:\.\d+)?°"
+)
+PDF_CONTROLS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+NATIVE_GLYPHS = {
+    "AdvP4C4E74": str.maketrans({"\x84": "⊂", "¢": "−"}),
+    "AdvPi1": str.maketrans({"8": "°"}),
+    "AdvPS_GRTI": str.maketrans({"p": "π"}),
+    "AdvPS_GRTU": str.maketrans({"p": "π"}),
+}
 GREEK = {
     r"\Delta": "Δ", r"\delta": "δ", r"\gamma": "γ", r"\alpha": "α", r"\beta": "β",
     r"\lambda": "λ", r"\mu": "μ", r"\pi": "π", r"\sigma": "σ", r"\tau": "τ",
@@ -39,6 +54,16 @@ SYSTEM_PROMPT = (
 )
 
 # --------------------------------------------------------------------------- 文本工具
+
+
+def _normalize_pdf_symbols(text):
+    """Recover recognizable legacy PDF glyphs and keep other controls out of HTML."""
+    text = re.sub(r"(?<=[(\s])\x00(?=\d)", "−", text)
+    text = re.sub(r"<sup>\x00</sup>\s*<sup>(\d+)</sup>", r"<sup>−\1</sup>", text)
+    text = re.sub(r"(?<=[CH])\x00(?=H|<sup>\d)", "–", text)
+    text = re.sub(r"(?<=[\d) e])\x03(?=<sup>3</sup>|[.)])", "Å", text)
+    text = re.sub(r"(?<=\d)\x84(?=\d)", "⊂", text)
+    return PDF_CONTROLS.sub("�", text)
 
 
 def _span_text(span):
@@ -116,11 +141,13 @@ def latex_to_html(src):
 
 
 def build_html(zh):
+    zh = _normalize_pdf_symbols(zh or "")
+
     def replace(match):
         return "<span>" + _escape_keep_tags(latex_to_html(match.group(0))) + "</span>"
 
-    parts = PLACEHOLDER.split(zh or "")
-    formulas = PLACEHOLDER.finditer(zh or "")
+    parts = PLACEHOLDER.split(zh)
+    formulas = PLACEHOLDER.finditer(zh)
     html = [_escape_keep_tags(parts[0])]
     for formula, tail in zip(formulas, parts[1:]):
         html.extend((replace(formula), _escape_keep_tags(tail)))
@@ -321,22 +348,67 @@ def relink(blocks):
 
 
 
-def fill_empty_sources(blocks, pdf_path):
-    """MinerU 偶尔给出「有 bbox、无文本」的块（字体没有 ToUnicode）；用 PyMuPDF 回填。"""
-    empty = [b for b in blocks if not b.get("source")]
-    if not empty:
+def repair_sources(blocks, pdf_path):
+    """Use the PDF text layer where OCR is empty or repeatedly marks prose as scripts."""
+    suspect = [b for b in blocks if not b.get("source") or len(LETTER_SCRIPT.findall(b["source"])) >= 5]
+    if not suspect:
         return blocks
-    doc = fitz.open(str(pdf_path))
-    for block in empty:
-        try:
-            text = doc[block["page"] - 1].get_text("text", clip=fitz.Rect(block["bbox"]))
-        except Exception:  # noqa: BLE001 - 取不到就保持空
-            text = ""
-        text = re.sub(r"\s+", " ", text or "").strip()
-        if len(text) >= 20:
-            block["source"] = text
-    doc.close()
+    with fitz.open(str(pdf_path)) as doc:
+        page_lines = {}
+        for block in suspect:
+            source = block.get("source") or ""
+            page_no = block["page"]
+            if page_no not in page_lines:
+                page_lines[page_no] = _page_text_lines(doc[page_no - 1])
+            rect = fitz.Rect(block["bbox"])
+            lines = [(box, spans) for box, spans in page_lines[page_no] if _line_in_frame(box, rect)]
+            native = _native_frame_text(lines)
+            if not source:
+                if len(clean_source(native)) >= 20:
+                    block["source"] = native
+                continue
+            # Compare letters since the OCR path represents formulas as LaTeX.
+            ocr_letters = re.sub(r"[^a-zA-Z]", "", clean_source(source)).lower()
+            native_letters = re.sub(r"[^a-zA-Z]", "", clean_source(native)).lower()
+            if (native_letters and "�" not in native
+                    and SequenceMatcher(None, ocr_letters, native_letters, autojunk=False).ratio() >= 0.68):
+                # Keep each complete chemical label together through translation.
+                block["source"] = NATIVE_FORMULA.sub(lambda match: f"⟦{match[0]}⟧", native)
+            else:
+                block["source"] = LETTER_SCRIPT.sub(r"\2", source)
     return [b for b in blocks if b.get("source")]
+
+
+def _native_frame_text(lines):
+    rows = []
+    for _, spans in lines:
+        main = max(spans, key=lambda span: span["size"])
+        y = main["origin"][1]
+        for baseline, size, row in rows:
+            if abs(y - baseline) < max(size, main["size"]) * 0.24:
+                row.extend(spans)
+                break
+        else:
+            rows.append((y, main["size"], list(spans)))
+    merged = []
+    for baseline, size, spans in sorted(rows, key=lambda row: row[0]):
+        pieces = []
+        previous_right = None
+        for span in sorted(spans, key=lambda span: span["origin"][0]):
+            x, y = span["origin"]
+            value = span["text"]
+            glyphs = NATIVE_GLYPHS.get(span["font"])
+            if glyphs:
+                value = value.translate(glyphs)
+            if previous_right is not None and x - previous_right > size * 0.16:
+                pieces.append(" ")
+            if span["size"] < size * 0.83 and abs(y - baseline) > size * 0.12 and value.strip():
+                tag = "sup" if y < baseline else "sub"
+                value = f"<{tag}>{value}</{tag}>"
+            pieces.append(value)
+            previous_right = span["bbox"][2]
+        merged.append({"spans": [{"content": "".join(pieces).strip()}]})
+    return _normalize_pdf_symbols(merge_lines(merged))
 
 
 def _locate_by_text(page, parent, original):
@@ -803,9 +875,16 @@ def _fit_run(run, obstacles, page_rect, css, archive):
         before_title = b["type"] == "title" and a["type"] != "title"
         gap = b["rect"].y0 - a["rect"].y1
         gaps.append(min(11.0, max(6.0, gap)) if before_title else min(7.0, max(3.0, gap + 3.0)))
-    # Try more even spacing at the original size and within the original frame.
-    # Only the normal fitting passes can use the small spare area below the run.
+    # Spread a short translation across the available column using both leading
+    # and paragraph gaps. Keep a gap bonus bounded by one line of body type.
     styles = []
+    if len(run) >= 3:
+        body_size = median(item["fs"] for item in run)
+        styles.extend((
+            (1.00, min(1.58, original_leading + 0.24), body_size * 0.85),
+            (1.00, min(1.52, original_leading + 0.16), body_size * 0.55),
+            (1.00, min(1.46, original_leading + 0.11), body_size * 0.30),
+        ))
     if gaps or last["rect"].height >= 2 * last["fs"]:
         styles.extend((
             (1.00, min(1.43, original_leading + 0.08), 1.4),
@@ -1051,7 +1130,8 @@ def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_bl
                 on_block(index + 1, total)
             continue
         # OCR may mark the accent of an accented Latin letter as superscript.
-        source = normalize("NFC", re.sub(r"<sup>([\u0300-\u036f]+)</sup>", r"\1", block["source"]))
+        source = _normalize_pdf_symbols(block["source"])
+        source = normalize("NFC", re.sub(r"<sup>([\u0300-\u036f]+)</sup>", r"\1", source))
         tokens = {"⟦T%d⟧" % number: match.group(0)
                   for number, match in enumerate(PROTECTED_TOKEN.finditer(source), 1)}
         token_ids = iter(tokens)

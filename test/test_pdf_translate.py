@@ -9,7 +9,7 @@ import pymupdf as fitz
 
 from paperlib.adapters.pdf_translate import (
     _font_dir, _protected_boxes, apply_text_budgets, blocks_from_content_list_v2, blocks_from_layout,
-    render_translated, translate_blocks,
+    render_translated, repair_sources, translate_blocks,
 )
 from paperlib.domain.translate import Translator
 
@@ -94,6 +94,37 @@ class TranslationFramesTest(unittest.TestCase):
         block = {"id": "1", "source": "The result is ⟦A⟧."}
         translate_blocks(llm, [block])
         self.assertEqual(block["translation"], "")
+
+    def test_corrupt_ocr_scripts_use_native_prose_and_keep_real_subscripts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pdf = Path(folder) / "source.pdf"
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_htmlbox(
+                    fitz.Rect(30, 30, 290, 82),
+                    "<div>The observed structure retained formula Fe<sup>II</sup><sub>4</sub>.</div>",
+                )
+                doc.save(pdf)
+            block = {
+                "page": 1, "bbox": [30, 30, 290, 82],
+                "source": "Th<sub>e</sub> o<sub>b</sub>se<sub>rv</sub>ed str<sub>uc</sub>ture "
+                          "r<sup>e</sup>tained formula ⟦Fe^{II}_{4}⟧.",
+            }
+            repair_sources([block], pdf)
+        self.assertEqual(block["source"], "The observed structure retained formula ⟦Fe<sup>II</sup><sub>4</sub>⟧.")
+        llm = Mock()
+        llm.chat.return_value = {"text": "测得结构保留了化学式⟦T1⟧。"}
+        block["id"] = "1"
+        translate_blocks(llm, [block])
+        self.assertEqual(block["translation"], "测得结构保留了化学式⟦Fe<sup>II</sup><sub>4</sub>⟧。")
+
+    def test_known_null_symbols_are_recovered_before_protecting_values(self):
+        block = {"id": "1", "source": "The energy was (\x00" "15.80 kcal mol<sup>\x00</sup> <sup>1</sup>)."}
+        llm = Mock()
+        llm.chat.return_value = {"text": "能量为⟦T1⟧ kcal mol⟦T2⟧。"}
+        translate_blocks(llm, [block])
+        self.assertEqual(block["translation"], "能量为−15.80 kcal mol<sup>−1</sup>。")
+        self.assertNotIn("\0", llm.chat.call_args.args[0][1]["content"])
 
 
 class TranslationRenderTest(unittest.TestCase):
@@ -198,6 +229,54 @@ class TranslationRenderTest(unittest.TestCase):
                 prev = max(pos for pos in positions if pos < second - 0.05)
                 self.assertGreater(second - prev, 16.5)
                 self.assertLess(positions[-1], blocks[-1]["bbox"][3])
+
+    def test_roomy_column_spreads_short_paragraphs_with_uniform_gaps(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.pdf"
+            output = Path(folder) / "translation.pdf"
+            with fitz.open() as doc:
+                page = doc.new_page(width=400, height=450)
+                for y in range(64, 197, 12):
+                    page.insert_text((42, y), "Original paragraph on a 12-point grid.", fontsize=10)
+                doc.save(source)
+            blocks = [
+                {"id": name, "page": 1, "bbox": [40, y, 220, y + 48], "source": "Original.",
+                 "translation": name + "这段译文比原文短，段落需要均匀铺开。" * 2}
+                for name, y in zip(("第一段", "第二段", "第三段"), (53, 101, 149))
+            ]
+            font_dir, font_name = _font_dir()
+            report = render_translated(pdf_path=source, layout=None, translations=blocks,
+                                       out_pdf=output, font_dir=font_dir, font_name=font_name)
+            self.assertEqual(report[0]["replaced"], 3)
+            with fitz.open(output) as doc:
+                spans = [s for item in doc[0].get_text("dict")["blocks"] for line in item.get("lines", [])
+                         for s in line["spans"]]
+                self.assertTrue(all(abs(s["size"] - 10) < 0.05 for s in spans))
+                starts = [s["origin"][1] for s in spans if s["text"].startswith(("第一", "第二", "第三"))]
+                self.assertEqual(len(starts), 3)
+                self.assertGreater(starts[1] - starts[0], 39)
+                self.assertAlmostEqual(starts[1] - starts[0], starts[2] - starts[1], places=1)
+                self.assertLess(spans[-1]["bbox"][3], blocks[-1]["bbox"][3])
+
+    def test_render_preserves_text_after_null_even_with_pretranslated_blocks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.pdf"
+            output = Path(folder) / "translation.pdf"
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_text((42, 78), "Original paragraph with interaction energy.", fontsize=10)
+                doc.save(source)
+            block = {"id": "1", "page": 1, "bbox": [40, 62, 310, 100], "source": "Original.",
+                     "translation": "相互作用能(\x00" "15.80 kcal mol<sup>\x00</sup><sup>1</sup>)，余文必须完整。"}
+            font_dir, font_name = _font_dir()
+            report = render_translated(pdf_path=source, layout=None, translations=[block],
+                                       out_pdf=output, font_dir=font_dir, font_name=font_name)
+            self.assertEqual(report[0]["replaced"], 1)
+            with fitz.open(output) as doc:
+                text = doc[0].get_text()
+                self.assertIn("−15.80", text)
+                self.assertIn("余文必须完整", text)
+                self.assertNotIn("Original paragraph", text)
 
     def test_same_column_compacts_and_overflow_keeps_original(self):
         with tempfile.TemporaryDirectory() as folder:

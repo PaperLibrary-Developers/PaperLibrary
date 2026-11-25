@@ -26,10 +26,10 @@ from paperlib.adapters.pdf_translate import (
     dedupe_hierarchy,
     extract_content_list_v2,
     extract_layout_from_zip,
-    fill_empty_sources,
     relink,
     relocate_by_text,
     render_translated,
+    repair_sources,
     translate_blocks,
 )
 from paperlib.util import read_json, sanitize_file_name, write_json_atomic
@@ -175,14 +175,14 @@ class Translator:
                               for page in (layout or {}).get("pdf_info") or []]
                 blocks = blocks_from_content_list_v2(content_v2, page_sizes, layout)
                 if blocks:
-                    blocks = fill_empty_sources(blocks, pdf_path)
+                    blocks = repair_sources(blocks, pdf_path)
                     blocks = dedupe_hierarchy(blocks, pdf_path)
                     blocks = relink(blocks)
             if not blocks:
                 blocks = blocks_from_layout(layout) if layout else blocks_from_pdf(pdf_path)
                 if layout:
-                    # 旧通道兜底：空文本块用 PyMuPDF 补；父块按文本定位/收缩
-                    blocks = fill_empty_sources(blocks, pdf_path)
+                    # 旧通道兜底：先修复文本，再按文字定位父块。
+                    blocks = repair_sources(blocks, pdf_path)
                     blocks = relocate_by_text(blocks, pdf_path)
                     blocks = dedupe_hierarchy(blocks, pdf_path)
                     blocks = relink(blocks)
