@@ -148,16 +148,21 @@ class MinerU:
 
     def upload(self, upload_url, pdf_path):
         """PUT 上传 PDF。curl 优先（urllib 对 OSS 预签名地址容易 SSL EOF）。"""
-        pdf_path = str(pdf_path)
         curl = "curl.exe" if os.name == "nt" else "curl"
+        command = [curl, "-sS", "-o", os.devnull, "-w", "%{http_code}",
+                   "-T", str(pdf_path), upload_url]
         try:
-            proc = subprocess.run(
-                [curl, "-sS", "-X", "PUT", "-T", pdf_path, upload_url],
-                capture_output=True, timeout=300,
-            )
-            if proc.returncode == 0:
+            proc = subprocess.run(command, capture_output=True, timeout=300)
+            if proc.returncode == 6:  # 主机名解析失败，尚未发送 PDF。
+                time.sleep(1)
+                proc = subprocess.run(command, capture_output=True, timeout=300)
+            if proc.returncode:
+                detail = proc.stderr.decode("utf-8", "replace").replace(upload_url, "[上传地址]")
+                raise MinerUError("curl 上传失败：%s" % detail[:200])
+            status = proc.stdout.decode("ascii", "replace").strip()
+            if status.isdecimal() and 200 <= int(status) < 300:
                 return True
-            raise MinerUError("curl 上传失败：%s" % proc.stderr.decode("utf-8", "replace")[:200])
+            raise MinerUError("OSS 上传失败（HTTP %s）" % status)
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
         # 兜底：urllib
@@ -165,7 +170,9 @@ class MinerU:
             body = Path(pdf_path).read_bytes()
             req = urllib.request.Request(upload_url, data=body, method="PUT")
             with urllib.request.urlopen(req, timeout=300) as resp:
-                return 200 <= resp.status < 300
+                if 200 <= resp.status < 300:
+                    return True
+                raise MinerUError("OSS 上传失败（HTTP %s）" % resp.status)
         except Exception as exc:  # noqa: BLE001
             raise MinerUError("上传 PDF 失败：%s" % exc) from exc
 

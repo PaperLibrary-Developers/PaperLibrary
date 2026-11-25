@@ -10,6 +10,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -88,6 +89,68 @@ class SmokeTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.fx.stop()
+
+    def test_translation_recovers_interrupted_job_and_cancel_preserves_pdf(self):
+        import pymupdf
+
+        status, data = self.fx.json("POST", "/api/papers", {"title": "Translation lifecycle"})
+        self.assertEqual(status, 201)
+        paper_id = data["paper"]["id"]
+        path = "/api/papers/" + paper_id + "/translation"
+        with pymupdf.open() as doc:
+            page = doc.new_page()
+            page.insert_text((72, 72), "This sample PDF contains the scientific paragraph used for translation.", fontsize=12)
+            pdf_bytes = doc.tobytes()
+        status, _, _ = self.fx.call("POST", "/api/papers/upload", raw=(pdf_bytes, {
+            "Content-Type": "application/pdf", "X-Filename": "translation-lifecycle.pdf", "X-Paper-Id": paper_id,
+        }))
+        self.assertEqual(status, 201)
+        translator = self.fx.services.translator
+        translator._write_state(paper_id, state="running", stage="translate")
+        self.assertEqual(self.fx.json("GET", path)[1]["translation"]["state"], "failed")
+
+        def wait_for_state(expected):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                state = self.fx.json("GET", path)[1]["translation"]
+                if state["state"] == expected and paper_id not in translator._running:
+                    return state
+                time.sleep(0.02)
+            self.fail(f"Expected {expected}, got {state}")
+
+        with patch.object(self.fx.services.mineru, "ready", return_value=False), \
+                patch.object(self.fx.services.llm, "chat", return_value={"text": "这是用于验证的译文。"}) as chat:
+            self.assertTrue(self.fx.json("POST", path, {})[1]["started"])
+            completed = wait_for_state("done")
+            self.assertTrue(completed["exists"])
+            self.assertEqual(self.fx.json("POST", path, {})[1]["reason"], "cached")
+            status, media, translated = self.fx.call("GET", completed["url"])
+            self.assertEqual((status, media), (200, "application/pdf"))
+            with pymupdf.open(stream=translated) as doc:
+                self.assertIn("这是用于验证的译文。", doc[0].get_text())
+
+            entered = threading.Event()
+            release = threading.Event()
+
+            def hold_translation(*args, **kwargs):
+                entered.set()
+                release.wait(10)
+                return {"text": "这次翻译已取消。"}
+
+            chat.side_effect = hold_translation
+            try:
+                self.assertTrue(self.fx.json("POST", path, {"force": True})[1]["started"])
+                self.assertTrue(entered.wait(10))
+                self.assertEqual(self.fx.json("POST", path, {"force": True})[1]["reason"], "running")
+                self.assertEqual(self.fx.json("DELETE", path)[0], 409)
+                self.assertEqual(self.fx.json("POST", path + "/cancel", {})[1]["state"]["stage"], "cancelling")
+            finally:
+                release.set()
+
+            wait_for_state("cancelled")
+            self.assertEqual(self.fx.call("GET", completed["url"])[2], translated)
+            self.assertEqual(self.fx.json("DELETE", path)[1]["translation"]["state"], "idle")
+            self.assertEqual(self.fx.call("GET", completed["url"])[0], 404)
 
     def test_health_keys(self):
         status, data = self.fx.json("GET", "/api/health")

@@ -1,37 +1,37 @@
 """原文 / 译文切换式翻译任务：状态、产物与编排。
 
-产物目录 data/translations/<paper_id>/
+任务目录 data/translations/<paper_id>/
     state.json        状态（idle / running / done / failed / cancelled + 阶段与进度）
-    translated.pdf    保留原版式的译文 PDF
     report.json       块级报告（替换数、XObject 兜底数、未译块数）
-    mineru/           MinerU 原始解析结果（zip 与解压目录，便于复查）
+    mineru/           MinerU 原始解析 ZIP，便于复查
 
+产物按文献存于 data/article/TranslatedPDF/<paper_id>/。
 同一篇文档同时只跑一个任务；取消通过内存标记 + 每页/每块轮询实现。
 MinerU 不可用（未配 token、超时、业务错误）时自动降级到 PyMuPDF 自带块。
 """
 from __future__ import annotations
 
-import json
 import re
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Lock, Thread
+from threading import RLock, Thread
 
 from paperlib.adapters.pdf_translate import (
+    _font_dir,
     apply_text_budgets,
     blocks_from_content_list_v2,
     blocks_from_layout,
     blocks_from_pdf,
     dedupe_hierarchy,
-    extract_content_list_v2,
-    extract_layout_from_zip,
+    read_mineru_result,
     relink,
     relocate_by_text,
     render_translated,
     repair_sources,
     translate_blocks,
 )
+from paperlib.assets import asset_path
 from paperlib.util import read_json, sanitize_file_name, write_json_atomic
 
 
@@ -40,7 +40,6 @@ class TranslateError(RuntimeError):
 
 
 def translated_pdf_name(paper):
-    """译文文件名：与 papers/ 同级存放，命名 [Translated]<原文件名>.pdf。"""
     stem = Path(str(paper.get("pdfFile") or "")).stem
     if not stem:
         stem = sanitize_file_name(paper.get("title") or "", 80) or str(paper.get("id"))
@@ -53,7 +52,8 @@ class Translator:
         self.services = services
         self.root = Path(services.runtime.data_dir) / "translations"
         self.article_dir = Path(services.runtime.data_dir) / "article" / "TranslatedPDF"
-        self._lock = Lock()
+        self._lock = RLock()
+        self._running = set()
         self._cancel = set()
 
     # ---------------- 路径与状态 ----------------
@@ -64,19 +64,43 @@ class Translator:
         return path
 
     def pdf_path(self, paper):
-        self.article_dir.mkdir(parents=True, exist_ok=True)
-        return self.article_dir / translated_pdf_name(paper)
+        return asset_path(self.article_dir, f"{paper['id']}/{translated_pdf_name(paper)}")
+
+    def _state_path(self, paper_id):
+        return self.root / str(paper_id) / "state.json"
+
+    def _read_state(self, paper_id):
+        raw = read_json(self._state_path(paper_id), {})
+        return raw if isinstance(raw, dict) else {}
+
+    def existing_pdf(self, paper, data=None):
+        if not paper.get("pdfFile"):
+            return None
+        if data is None:
+            data = self._read_state(paper.get("id"))
+        target = self.pdf_path(paper)
+        if target is None:
+            return None
+        if "outputSource" in data:
+            return target if data["outputSource"] == paper["pdfFile"] and target.is_file() else None
+        # 旧版把各目录的译文放在同一目录，只有归属唯一的旧产物才可复用。
+        legacy = asset_path(self.article_dir, target.name)
+        if legacy is None or not legacy.is_file() or "translated" not in data:
+            return None
+        if any(other.get("id") != paper.get("id") and other.get("pdfFile")
+               and translated_pdf_name(other).casefold() == target.name.casefold()
+               for other in self.services.db.list_papers()):
+            return None
+        return legacy
 
     def state(self, paper):
         paper_id = str(paper.get("id"))
-        path = self.root / paper_id / "state.json"
-        data = {}
-        try:
-            raw = read_json(path, {})
-            if isinstance(raw, dict):
-                data = dict(raw)
-        except Exception:  # noqa: BLE001 - 状态文件损坏当作没跑过
-            data = {}
+        with self._lock:
+            data = self._read_state(paper_id)
+            if data.get("state") == "running" and paper_id not in self._running:
+                data.update(state="failed", stage="failed", error="翻译任务已中断，请重新翻译")
+            has_pdf = self.existing_pdf(paper, data) is not None
+        data.pop("outputSource", None)
         data.setdefault("state", "idle")
         data.setdefault("stage", "")
         data.setdefault("progress", 0)
@@ -85,41 +109,45 @@ class Translator:
         data.setdefault("pages", 0)
         data.setdefault("error", "")
         data.setdefault("updatedAt", "")
-        has_pdf = self.pdf_path(paper).is_file()
         data["exists"] = has_pdf
         data["url"] = ("/api/papers/%s/translation.pdf" % paper_id) if has_pdf else ""
         return data
 
     def _write_state(self, paper_id, **patch):
-        path = self.root / str(paper_id) / "state.json"
-        current = {}
-        try:
-            raw = read_json(path, {})
-            if isinstance(raw, dict):
-                current = dict(raw)
-        except Exception:  # noqa: BLE001 - 损坏当作空
-            current = {}
-        current.pop("exists", None)
-        current.pop("url", None)
-        current.update(patch)
-        current["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        write_json_atomic(self.root / str(paper_id) / "state.json", current)
-        return current
-
-    def is_running(self, paper):
-        return self.state(paper).get("state") == "running"
+        with self._lock:
+            current = self._read_state(paper_id)
+            current.pop("exists", None)
+            current.pop("url", None)
+            current.update(patch)
+            if paper_id in self._cancel and current.get("state") == "running":
+                current["stage"] = "cancelling"
+            current["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            write_json_atomic(self._state_path(paper_id), current)
 
     def cancel(self, paper):
         paper_id = str(paper.get("id"))
         with self._lock:
-            self._cancel.add(paper_id)
-        state = self.state(paper)
-        if state.get("state") == "running":
-            self._write_state(paper_id, stage="cancelling")
-        return {"cancelled": True, "state": self.state(paper)}
+            if self._read_state(paper_id).get("state") == "running" and paper_id in self._running:
+                self._cancel.add(paper_id)
+                self._write_state(paper_id, stage="cancelling")
+            return {"cancelled": True, "state": self.state(paper)}
+
+    def remove(self, paper):
+        paper_id = str(paper.get("id"))
+        with self._lock:
+            if paper_id in self._running:
+                raise TranslateError("翻译正在运行，请先取消或等待完成")
+            target = self.existing_pdf(paper)
+            if target is not None:
+                target.unlink(missing_ok=True)
+            self._write_state(paper_id, state="idle", stage="", progress=0, total=0,
+                              pages=0, pagesDone=0, error="", translated=0, preservedOriginal=0,
+                              warning="", seconds=0, outputSource=None)
+            return self.state(paper)
 
     def _should_cancel(self, paper_id):
-        return str(paper_id) in self._cancel
+        with self._lock:
+            return paper_id in self._cancel
 
     # ---------------- 启动 ----------------
 
@@ -127,15 +155,19 @@ class Translator:
         paper_id = str(paper.get("id"))
         with self._lock:
             state = self.state(paper)
-            if state.get("state") == "running":
+            if paper_id in self._running:
                 return {"started": False, "reason": "running", "state": state}
             if state.get("exists") and not force:
                 return {"started": False, "reason": "cached", "state": state}
-            self._cancel.discard(paper_id)
-            self.dir_for(paper_id)
             self._write_state(paper_id, state="running", stage="queued", progress=0,
                               total=0, pages=0, pagesDone=0, error="")
-            Thread(target=self._run, args=(paper,), daemon=True).start()
+            self._running.add(paper_id)
+            try:
+                Thread(target=self._run, args=(paper,), daemon=True).start()
+            except RuntimeError as exc:
+                self._running.discard(paper_id)
+                self._write_state(paper_id, state="failed", stage="failed", error=str(exc))
+                raise
             return {"started": True, "state": self.state(paper)}
 
     # ---------------- 管线 ----------------
@@ -162,30 +194,31 @@ class Translator:
                     item = mineru.wait(batch_id, should_cancel=lambda: self._should_cancel(paper_id))
                     zip_path = mineru.download(item.get("full_zip_url"),
                                                work_dir / "result.zip")
-                    layout = extract_layout_from_zip(zip_path, work_dir)
-                    content_v2 = extract_content_list_v2(work_dir)
+                    layout, content_v2 = read_mineru_result(zip_path)
                 except Exception as exc:  # noqa: BLE001 - 降级而不是整单失败
-                    mineru_warning = "MinerU 不可用，已改用本地版面：" + str(exc)
-                    print("[translate] " + mineru_warning)
+                    if not self._should_cancel(paper_id):
+                        mineru_warning = "MinerU 不可用，已改用本地版面：" + str(exc)
+                        print("[translate] " + mineru_warning)
 
-            # 优先 content_list_v2：段落级块 + 归一化坐标，没有「整页父块」，文本层损坏页也有字
-            blocks = None
+            if self._should_cancel(paper_id):
+                self._write_state(paper_id, state="cancelled", stage="cancelled")
+                return
+
+            blocks = []
             if content_v2:
+                # 优先用归一化的段落框，旧通道需要按文字重新定位父块。
                 page_sizes = [page.get("page_size") or [595.0, 841.0]
                               for page in (layout or {}).get("pdf_info") or []]
                 blocks = blocks_from_content_list_v2(content_v2, page_sizes, layout)
                 if blocks:
                     blocks = repair_sources(blocks, pdf_path)
-                    blocks = dedupe_hierarchy(blocks, pdf_path)
-                    blocks = relink(blocks)
-            if not blocks:
-                blocks = blocks_from_layout(layout) if layout else blocks_from_pdf(pdf_path)
-                if layout:
-                    # 旧通道兜底：先修复文本，再按文字定位父块。
-                    blocks = repair_sources(blocks, pdf_path)
-                    blocks = relocate_by_text(blocks, pdf_path)
-                    blocks = dedupe_hierarchy(blocks, pdf_path)
-                    blocks = relink(blocks)
+                    blocks = relink(dedupe_hierarchy(blocks, pdf_path))
+            if not blocks and layout:
+                blocks = repair_sources(blocks_from_layout(layout), pdf_path)
+                blocks = relocate_by_text(blocks, pdf_path)
+                blocks = relink(dedupe_hierarchy(blocks, pdf_path))
+            elif not blocks:
+                blocks = blocks_from_pdf(pdf_path)
             if not blocks:
                 raise TranslateError("没有可翻译的文本块（可能是扫描件或图片版 PDF）")
 
@@ -205,56 +238,61 @@ class Translator:
             # 3) 回填
             self._write_state(paper_id, stage="render")
             out_pdf = self.pdf_path(paper)
-            font_dir, font_name = _pick_font()
+            if out_pdf is None:
+                raise TranslateError("译文保存路径无效")
+            out_pdf.parent.mkdir(parents=True, exist_ok=True)
+            font_dir, font_name = _font_dir()
+
+            def on_page(done, total):
+                if self._should_cancel(paper_id):
+                    raise TranslateError("任务已取消")
+                self._write_state(paper_id, stage="render", pagesDone=done, pages=total)
+
             with TemporaryDirectory(prefix=".translate-", dir=out_pdf.parent) as work_dir:
                 staged_pdf = Path(work_dir) / "translated.pdf"
                 pages_report = render_translated(
                     pdf_path=pdf_path, layout=layout, translations=blocks,
-                    out_pdf=staged_pdf, font_dir=font_dir, font_name=font_name,
-                    on_page=lambda done, total: self._write_state(
-                        paper_id, stage="render", pagesDone=done, pages=total),
+                    out_pdf=staged_pdf, font_dir=font_dir, font_name=font_name, on_page=on_page,
                 )
-                if self._should_cancel(paper_id):
-                    self._write_state(paper_id, state="cancelled", stage="cancelled")
-                    return
-                staged_pdf.replace(out_pdf)
-
-            preserved = sum(page["preserved_original"] for page in pages_report)
-            report = {
-                "blocks": len(blocks),
-                "translated": sum(1 for b in blocks if b.get("translation")),
-                "pages": pages_report,
-                "mineru": bool(layout),
-                "preservedOriginal": preserved,
-                "warning": mineru_warning,
-                "seconds": round(time.time() - started, 1),
-            }
-            write_json_atomic(self.dir_for(paper_id) / "report.json", report)
+                preserved = sum(page["preserved_original"] for page in pages_report)
+                report = {
+                    "blocks": len(blocks),
+                    "translated": sum(1 for b in blocks if b.get("translation")),
+                    "pages": pages_report,
+                    "mineru": bool(layout),
+                    "preservedOriginal": preserved,
+                    "warning": mineru_warning,
+                    "seconds": round(time.time() - started, 1),
+                }
+                with self._lock:
+                    if self._should_cancel(paper_id):
+                        self._write_state(paper_id, state="cancelled", stage="cancelled")
+                        return
+                    staged_pdf.replace(out_pdf)
+                    write_json_atomic(self.dir_for(paper_id) / "report.json", report)
+                    self._write_state(
+                        paper_id, state="done", stage="done", error="",
+                        progress=len(blocks), total=len(blocks), pages=len(pages_report), pagesDone=len(pages_report),
+                        translated=report["translated"], preservedOriginal=preserved, warning=mineru_warning,
+                        seconds=report["seconds"], outputSource=paper["pdfFile"],
+                    )
             legacy_pdf = self.root / paper_id / "translated.pdf"
             if legacy_pdf.is_file():     # 旧版本把产物放在 translations/<id>/，成功后清掉
                 try:
                     legacy_pdf.unlink()
                 except OSError:
                     pass
-            self._write_state(
-                paper_id, state="done", stage="done", error="",
-                progress=len(blocks), total=len(blocks),
-                pages=len(pages_report), pagesDone=len(pages_report),
-                translated=report["translated"], preservedOriginal=preserved, warning=mineru_warning,
-                seconds=report["seconds"],
-            )
         except Exception as exc:  # noqa: BLE001 - 失败写进状态，前端可读
             print("[translate] 任务失败：%s" % exc)
             try:
-                self._write_state(paper_id, state="failed", stage="failed",
-                                  error=str(exc)[:400])
+                with self._lock:
+                    if self._should_cancel(paper_id):
+                        self._write_state(paper_id, state="cancelled", stage="cancelled")
+                    else:
+                        self._write_state(paper_id, state="failed", stage="failed", error=str(exc)[:400])
             except Exception:  # noqa: BLE001
                 pass
         finally:
             with self._lock:
                 self._cancel.discard(paper_id)
-
-
-def _pick_font():
-    from paperlib.adapters.pdf_translate import _font_dir
-    return _font_dir()
+                self._running.discard(paper_id)

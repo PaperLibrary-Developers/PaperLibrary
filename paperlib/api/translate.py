@@ -8,9 +8,8 @@
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from paperlib.api.paper_scope import require_paper
+from paperlib.domain.translate import TranslateError
 
 
 def status(ctx):
@@ -47,21 +46,19 @@ def remove(ctx):
     paper = require_paper(ctx)
     if not paper:
         return
-    translator = ctx.services.translator
-    target = translator.pdf_path(paper)
-    if target.is_file():
-        target.unlink()
-    translator._write_state(paper.get("id"), state="idle", stage="", progress=0,
-                            total=0, pages=0, pagesDone=0, error="")
-    return ctx.json(200, {"ok": True, "translation": translator.state(paper)})
+    try:
+        state = ctx.services.translator.remove(paper)
+    except TranslateError as exc:
+        return ctx.fail(409, str(exc))
+    return ctx.json(200, {"ok": True, "translation": state})
 
 
 def pdf(ctx):
     paper = require_paper(ctx)
     if not paper:
         return
-    target = ctx.services.translator.pdf_path(paper)
-    if not target.is_file():
+    target = ctx.services.translator.existing_pdf(paper)
+    if target is None:
         return ctx.fail(404, "还没有生成译文")
     ctx.send_file(str(target), content_type="application/pdf",
                   inline="translated.pdf", cache="no-cache")

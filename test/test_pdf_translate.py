@@ -1,17 +1,49 @@
 """Regression coverage for physical text frames and PDF translation fitting."""
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from zipfile import ZipFile
 
 import pymupdf as fitz
 
+from paperlib.adapters.mineru import MinerU, MinerUError
 from paperlib.adapters.pdf_translate import (
     _font_dir, _protected_boxes, apply_text_budgets, blocks_from_content_list_v2, blocks_from_layout,
-    render_translated, repair_sources, translate_blocks,
+    read_mineru_result, render_translated, repair_sources, translate_blocks,
 )
 from paperlib.domain.translate import Translator
+
+
+class MinerUTranslationTest(unittest.TestCase):
+    def test_only_current_archive_can_supply_layout_and_v2(self):
+        with tempfile.TemporaryDirectory() as folder:
+            work = Path(folder)
+            (work / "old_content_list_v2.json").write_text('[[]]', encoding="utf-8")
+            archive = work / "result.zip"
+            layout = {"pdf_info": [{"page_idx": 0}]}
+            with ZipFile(archive, "w") as stream:
+                stream.writestr("new/layout.json", json.dumps(layout))
+                stream.writestr("new/broken_content_list_v2.json", "invalid JSON")
+            self.assertEqual(read_mineru_result(archive), (layout, None))
+            content = [[{"type": "paragraph"}]]
+            with ZipFile(archive, "a") as stream:
+                stream.writestr("new/content_list_v2.json", json.dumps(content))
+            self.assertEqual(read_mineru_result(archive), (layout, content))
+
+    def test_dns_upload_failure_retries_but_http_failure_is_final(self):
+        client = MinerU.__new__(MinerU)
+        with patch("paperlib.adapters.mineru.subprocess.run") as run, patch("paperlib.adapters.mineru.time.sleep"):
+            run.side_effect = [SimpleNamespace(returncode=6), SimpleNamespace(returncode=0, stdout=b"200")]
+            self.assertTrue(client.upload("https://example.com/upload", "input.pdf"))
+            self.assertEqual(run.call_count, 2)
+            run.reset_mock(side_effect=True)
+            run.return_value = SimpleNamespace(returncode=0, stdout=b"403")
+            with self.assertRaisesRegex(MinerUError, "HTTP 403"):
+                client.upload("https://example.com/upload", "input.pdf")
+            self.assertEqual(run.call_count, 1)
 
 
 class TranslationFramesTest(unittest.TestCase):
@@ -128,6 +160,34 @@ class TranslationFramesTest(unittest.TestCase):
 
 
 class TranslationRenderTest(unittest.TestCase):
+    def test_matching_pdf_names_are_isolated_and_unique_legacy_still_loads(self):
+        with tempfile.TemporaryDirectory() as folder:
+            first = {"id": "first", "pdfFile": "left/same.pdf"}
+            second = {"id": "second", "pdfFile": "right/same.pdf"}
+            papers = [first]
+            translator = Translator(SimpleNamespace(
+                runtime=SimpleNamespace(data_dir=folder), db=SimpleNamespace(list_papers=lambda: papers),
+            ))
+            translator.article_dir.mkdir(parents=True)
+            legacy = translator.article_dir / "[Translated]same.pdf"
+            legacy.write_bytes(b"legacy")
+            translator._write_state("first", state="done", translated=1)
+            self.assertEqual(translator.existing_pdf(first), legacy)
+
+            papers.append(second)
+            self.assertIsNone(translator.existing_pdf(first))
+            self.assertIsNone(translator.existing_pdf(second))
+            for paper in papers:
+                output = translator.pdf_path(paper)
+                output.parent.mkdir()
+                output.write_bytes(paper["id"].encode())
+                translator._write_state(paper["id"], state="done", outputSource=paper["pdfFile"])
+            self.assertEqual(translator.existing_pdf(first).read_bytes(), b"first")
+            self.assertEqual(translator.existing_pdf(second).read_bytes(), b"second")
+            self.assertFalse(translator.remove(first)["exists"])
+            self.assertEqual(translator.existing_pdf(second).read_bytes(), b"second")
+            self.assertEqual(legacy.read_bytes(), b"legacy")
+
     def test_application_publishes_a_complete_pdf(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)

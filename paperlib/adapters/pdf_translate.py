@@ -230,19 +230,6 @@ def blocks_from_content_list_v2(pages, page_sizes, layout=None):
     return _join_frame_clauses(blocks)
 
 
-def extract_content_list_v2(work_dir):
-    """读 MinerU 结果里的 content_list_v2.json（可能没有）。"""
-    work_dir = Path(work_dir)
-    for candidate in sorted(work_dir.rglob("*_content_list_v2.json")) or sorted(work_dir.rglob("content_list_v2.json")):
-        try:
-            data = json.loads(candidate.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            continue
-        if isinstance(data, list) and data:
-            return data
-    return None
-
-
 def _matching_layout_block(rect, blocks):
     best_ratio = 0.70
     best = None
@@ -618,16 +605,28 @@ def blocks_from_pdf(pdf_path):
     return blocks
 
 
-def extract_layout_from_zip(zip_path, work_dir):
-    """解压 MinerU 结果，返回 layout.json 的 dict。"""
-    work_dir = Path(work_dir)
-    work_dir.mkdir(parents=True, exist_ok=True)
+def read_mineru_result(zip_path):
+    """从本次 MinerU ZIP 读取版面与可选的段落数据。"""
     with zipfile.ZipFile(str(zip_path)) as archive:
-        archive.extractall(str(work_dir))
-    for candidate in [work_dir / "layout.json"] + sorted(work_dir.rglob("layout.json")):
-        if candidate.is_file():
-            return json.loads(candidate.read_text(encoding="utf-8"))
-    raise RuntimeError("MinerU 结果里没有 layout.json")
+        files = sorted(archive.namelist())
+        layout_name = "layout.json" if "layout.json" in files else next(
+            (name for name in files if name.endswith("/layout.json")), None,
+        )
+        if layout_name is None:
+            raise RuntimeError("MinerU 结果里没有 layout.json")
+        layout = json.loads(archive.read(layout_name))
+        if not isinstance(layout, dict):
+            raise RuntimeError("MinerU 版面数据格式错误")
+        candidates = [name for name in files if name.endswith("_content_list_v2.json")]
+        candidates.extend(name for name in files if name.rsplit("/", 1)[-1] == "content_list_v2.json")
+        for candidate in candidates:
+            try:
+                content = json.loads(archive.read(candidate))
+            except ValueError:
+                continue
+            if isinstance(content, list) and content:
+                return layout, content
+        return layout, None
 
 
 # --------------------------------------------------------------------------- 回填

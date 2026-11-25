@@ -123,8 +123,10 @@ export function buildPdfAndAttachments ({
 
   const pdfTabs = new Map([['', { file: '', title: 'PDF', url: pdfOk ? api.pdfUrl(paper.id) : '' }]])
   let translationMode = 'orig'
-  let translationInfo = { state: 'idle', exists: false, translating: false, progress: 0, total: 0, error: '' }
+  let translationInfo = { state: 'idle', exists: false }
   let translationPoll = null
+  let translationAction = false
+  let translationRevision = 0
   let activePdfTab = ''
   let pdfMount = null
   const pdfTabBar = h('div.pdf-doc-tabs', { role: 'tablist', 'aria-label': 'PDF 文档' })
@@ -174,36 +176,57 @@ export function buildPdfAndAttachments ({
   /* ---------- 原文 / 译文切换（保留原版式的原位翻译） ---------- */
   function paintLangSwitch () {
     const hasTrans = !!translationInfo.exists
+    const translating = translationInfo.state === 'running'
     langSwitch.hidden = !pdfOk || activePdfTab !== ''
     for (const btn of langSwitch.querySelectorAll('.pdf-lang-btn')) {
       const on = btn.dataset.mode === translationMode
       btn.setAttribute('aria-pressed', String(on))
-      btn.disabled = btn.dataset.mode === 'trans' && !hasTrans && !translationInfo.translating
+      btn.disabled = btn.dataset.mode === 'trans' && !hasTrans
     }
-    translateBtn.disabled = false
-    translateBtn.textContent = translationInfo.translating
+    translateBtn.disabled = translationAction
+    translateBtn.textContent = translating
       ? '取消翻译 ' + (translationInfo.progress || 0) + (translationInfo.total ? '/' + translationInfo.total : '')
       : (hasTrans ? '重新翻译' : '翻译')
-    translateBtn.title = translationInfo.translating
+    translateBtn.title = translating
       ? '正在翻译：点一下取消（已经花掉的模型调用不会退回）'
       : (translationInfo.state === 'failed' && translationInfo.error
           ? '上次失败：' + translationInfo.error
           : '把原文就地翻译成中文并保留原版式，可随时切回原文')
   }
 
-  async function refreshTranslationState (silent) {
-    try {
-      const res = await api.translationStatus(paper.id, signal)
-      const t = (res && res.translation) || {}
-      translationInfo = {
-        state: t.state || 'idle', exists: !!t.exists, translating: t.state === 'running',
-        progress: t.progress || 0, total: t.total || 0, stage: t.stage || '', error: t.error || '',
-        preservedOriginal: t.preservedOriginal || 0
-      }
-    } catch (err) {
-      if (!silent) toast(err.message, 'error')
-    }
+  function updateTranslationState (state) {
+    const wasRunning = translationInfo.state === 'running'
+    translationInfo = state
     paintLangSwitch()
+    if (!wasRunning) return
+    if (state.state === 'done') {
+      if (state.preservedOriginal) toast(`译文已生成，${state.preservedOriginal} 个文本块仍显示原文`, 'warn')
+      else toast('译文已生成')
+      switchLang('trans')
+    } else if (state.state === 'failed') {
+      toast('翻译失败：' + (state.error || '未知原因'), 'error')
+    }
+  }
+
+  async function refreshTranslationState () {
+    const revision = translationRevision
+    try {
+      const { translation } = await api.translationStatus(paper.id, signal)
+      if (!signal.aborted && !translationAction && revision === translationRevision) {
+        updateTranslationState(translation)
+      }
+    } catch {
+      // 保留上一次状态，后台任务仍在运行时会继续轮询。
+    }
+  }
+
+  function scheduleTranslationPoll () {
+    if (signal.aborted || translationPoll !== null || translationInfo.state !== 'running') return
+    translationPoll = setTimeout(async () => {
+      await refreshTranslationState()
+      translationPoll = null
+      scheduleTranslationPoll()
+    }, 2500)
   }
 
   function switchLang (mode) {
@@ -211,10 +234,9 @@ export function buildPdfAndAttachments ({
     translationMode = mode
     const tab = pdfTabs.get('')
     if (!tab) return
-    if (activePdfViewer) tab.view = activePdfViewer.getViewState()
+    if (activePdfTab === '' && activePdfViewer) tab.view = activePdfViewer.getViewState()
     tab.url = mode === 'trans' ? api.translationUrl(paper.id) : api.pdfUrl(paper.id)
     tab.title = mode === 'trans' ? 'PDF（译文）' : 'PDF'
-    pdfTabs.set('', tab)
     paintPdfTabs()
     if (activePdfTab === '') {
       abortViewer()
@@ -224,57 +246,37 @@ export function buildPdfAndAttachments ({
   }
 
   async function toggleTranslation () {
-    if (translationInfo.translating) return cancelTranslation()
-    return startTranslation()
-  }
-
-  async function cancelTranslation () {
-    try {
-      await api.cancelTranslation(paper.id)
-      toast('已请求取消，正在收尾…')
-    } catch (err) {
-      toast(err.message, 'error')
-    }
-  }
-
-  async function startTranslation () {
-    if (!pdfOk) return
-    translationInfo.translating = true
+    if (!pdfOk || translationAction) return
+    const cancelling = translationInfo.state === 'running'
+    translationAction = true
+    translationRevision++
     paintLangSwitch()
     try {
-      const res = await api.startTranslation(paper.id, translationInfo.exists)
-      if (res && res.reason === 'cached') {
-        await refreshTranslationState(true)
+      const res = cancelling
+        ? await api.cancelTranslation(paper.id)
+        : await api.startTranslation(paper.id, translationInfo.exists)
+      if (signal.aborted) return
+      updateTranslationState(res.state)
+      if (cancelling) {
+        if (res.state.state === 'running') toast('已请求取消，正在收尾…')
+      } else if (res.reason === 'cached') {
         switchLang('trans')
-        return
-      }
-      toast('已开始翻译：完成后会自动切到译文（关掉页面任务也会在后台继续）')
-      if (!translationPoll) {
-        translationPoll = setInterval(async () => {
-          await refreshTranslationState(true)
-          if (!translationInfo.translating) {
-            clearInterval(translationPoll)
-            translationPoll = null
-            if (translationInfo.state === 'done') {
-              const preserved = translationInfo.preservedOriginal
-              if (preserved) toast(`译文已生成，${preserved} 个文本块仍显示原文`, 'warn')
-              else toast('译文已生成')
-              switchLang('trans')
-            } else if (translationInfo.state === 'failed') {
-              toast('翻译失败：' + (translationInfo.error || '未知原因'), 'error')
-            }
-          }
-        }, 2500)
+      } else if (res.started) {
+        toast('已开始翻译：完成后会自动切到译文（关掉页面任务也会在后台继续）')
       }
     } catch (err) {
-      translationInfo.translating = false
-      paintLangSwitch()
-      toast(err.message, 'error')
+      if (!signal.aborted) toast(err.message, 'error')
+    } finally {
+      translationAction = false
+      if (!signal.aborted) {
+        paintLangSwitch()
+        scheduleTranslationPoll()
+      }
     }
   }
 
   signal.addEventListener('abort', () => {
-    if (translationPoll) { clearInterval(translationPoll); translationPoll = null }
+    clearTimeout(translationPoll)
   }, { once: true })
 
   function paintPdfTabs () {
@@ -509,7 +511,7 @@ export function buildPdfAndAttachments ({
   )
   loadAttachments()
 
-  refreshTranslationState(true)
+  if (pdfOk) refreshTranslationState().then(scheduleTranslationPoll)
 
   return {
     pdfPanel,
