@@ -30,3 +30,7 @@ update-signing-key*.json
 /tools/updater/helper.json
 /tools/updater/*.g.cs
 ReadBeforeCoding.md
+
+# 本地临时测试产物
+.tmp-*/
+tmp_*.py

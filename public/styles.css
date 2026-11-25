@@ -1058,7 +1058,7 @@ a.external-title:hover { color: var(--accent-text); }
 .pdf-viewer-host.pdf-fallback { background: transparent; }
 .pdf-viewer-host .pdf-frame { height: 100%; border-radius: 0; }
 .read-grid .pdf-frame { height: var(--read-h, clamp(560px, 84vh, 1500px)); }
-.pdf-doc-tabs { display: flex; flex: 1 1 12rem; min-width: 0; gap: 5px; overflow-x: auto; padding: 2px; }
+.pdf-doc-tabs { display: flex; flex: 0 0 auto; max-width: 60%; min-width: 48px; gap: 5px; overflow-x: auto; padding: 2px; }
 .pdf-doc-tab {
   display: flex; flex: 0 0 auto; align-items: center; max-width: min(16rem, 100%);
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
@@ -1069,6 +1069,22 @@ a.external-title:hover { color: var(--accent-text); }
 .pdf-doc-tab-close { margin-right: 3px; padding: 0 4px; border-radius: 4px; }
 .pdf-doc-tab-close:hover { background: var(--surface-3); color: var(--danger); }
 .pdf-original-actions[hidden] { display: none; }
+
+/* 原文 / 译文切换：胶囊滑块（只在原文标签页可见，没有译文时「翻译」置灰） */
+.pdf-lang-switch {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2);
+  flex: 0 0 auto; margin-left: auto;
+}
+.pdf-lang-switch[hidden] { display: none; }
+.pdf-lang-btn {
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 12.5px;
+  padding: 3px 11px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  transition: background .18s ease, color .18s ease;
+}
+.pdf-lang-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.pdf-lang-btn:disabled { opacity: .45; cursor: not-allowed; }
+.pdf-lang-btn:not(:disabled):hover { color: var(--accent-text); }
 
 /* 合并模块：标题栏左上角切换「AI 总结 / 与文献对话」，内容区撑满剩余高度 */
 /* ---------- 贴图提问：待发送的缩略图 ---------- */

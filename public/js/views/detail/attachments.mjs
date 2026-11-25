@@ -121,12 +121,27 @@ export function buildPdfAndAttachments ({
     }
   })
 
-  const pdfTabs = new Map([['', { file: '', title: 'PDF 原文', url: pdfOk ? api.pdfUrl(paper.id) : '' }]])
+  const pdfTabs = new Map([['', { file: '', title: 'PDF', url: pdfOk ? api.pdfUrl(paper.id) : '' }]])
+  let translationMode = 'orig'
+  let translationInfo = { state: 'idle', exists: false }
+  let translationPoll = null
+  let translationAction = false
+  let translationRevision = 0
   let activePdfTab = ''
   let pdfMount = null
   const pdfTabBar = h('div.pdf-doc-tabs', { role: 'tablist', 'aria-label': 'PDF 文档' })
   const pdfBody = h('div', { id: 'pdf-document-panel', role: 'tabpanel' })
+  const translateBtn = h('button.btn.sm', {
+    type: 'button',
+    title: '把原文就地翻译成中文并保留原版式，可随时切回原文',
+    onclick: () => toggleTranslation()
+  }, '翻译')
+  const langSwitch = h('div.pdf-lang-switch', { role: 'group', 'aria-label': '原文 / 翻译', hidden: '' },
+    h('button.pdf-lang-btn', { type: 'button', 'data-mode': 'orig', 'aria-pressed': 'true', onclick: () => switchLang('orig') }, '原文'),
+    h('button.pdf-lang-btn', { type: 'button', 'data-mode': 'trans', 'aria-pressed': 'false', onclick: () => switchLang('trans') }, '翻译')
+  )
   const originalPdfActions = h('div.right.pdf-original-actions',
+    pdfOk ? translateBtn : null,
     pdfOk ? h('a.btn.sm', { href: api.pdfUrl(paper.id), target: '_blank', rel: 'noopener' }, '新标签页打开') : null,
     h('button.btn.sm', { type: 'button', onclick: () => uploadInput.click() }, paper.pdfFile ? '更换文件' : '上传 PDF'),
     paper.pdfFile ? h('button.btn.sm.danger', {
@@ -155,8 +170,114 @@ export function buildPdfAndAttachments ({
     h('button.btn.primary', { type: 'button', onclick: () => uploadInput.click() }, '选择 PDF 文件上传')
   )
   const pdfPanel = h('section.panel', { id: 'pdf-panel' },
-    h('div.panel-head', pdfTabBar, originalPdfActions), uploadInput, pdfBody
+    h('div.panel-head', pdfTabBar, langSwitch, originalPdfActions), uploadInput, pdfBody
   )
+
+  /* ---------- 原文 / 译文切换（保留原版式的原位翻译） ---------- */
+  function paintLangSwitch () {
+    const hasTrans = !!translationInfo.exists
+    const translating = translationInfo.state === 'running'
+    langSwitch.hidden = !pdfOk || activePdfTab !== ''
+    for (const btn of langSwitch.querySelectorAll('.pdf-lang-btn')) {
+      const on = btn.dataset.mode === translationMode
+      btn.setAttribute('aria-pressed', String(on))
+      btn.disabled = btn.dataset.mode === 'trans' && !hasTrans
+    }
+    translateBtn.disabled = translationAction
+    translateBtn.textContent = translating
+      ? '取消翻译 ' + (translationInfo.progress || 0) + (translationInfo.total ? '/' + translationInfo.total : '')
+      : (hasTrans ? '重新翻译' : '翻译')
+    translateBtn.title = translating
+      ? '正在翻译：点一下取消（已经花掉的模型调用不会退回）'
+      : (translationInfo.state === 'failed' && translationInfo.error
+          ? '上次失败：' + translationInfo.error
+          : '把原文就地翻译成中文并保留原版式，可随时切回原文')
+  }
+
+  function updateTranslationState (state) {
+    const wasRunning = translationInfo.state === 'running'
+    translationInfo = state
+    paintLangSwitch()
+    if (!wasRunning) return
+    if (state.state === 'done') {
+      if (state.preservedOriginal) toast(`译文已生成，${state.preservedOriginal} 个文本块仍显示原文`, 'warn')
+      else toast('译文已生成')
+      switchLang('trans')
+    } else if (state.state === 'failed') {
+      toast('翻译失败：' + (state.error || '未知原因'), 'error')
+    }
+  }
+
+  async function refreshTranslationState () {
+    const revision = translationRevision
+    try {
+      const { translation } = await api.translationStatus(paper.id, signal)
+      if (!signal.aborted && !translationAction && revision === translationRevision) {
+        updateTranslationState(translation)
+      }
+    } catch {
+      // 保留上一次状态，后台任务仍在运行时会继续轮询。
+    }
+  }
+
+  function scheduleTranslationPoll () {
+    if (signal.aborted || translationPoll !== null || translationInfo.state !== 'running') return
+    translationPoll = setTimeout(async () => {
+      await refreshTranslationState()
+      translationPoll = null
+      scheduleTranslationPoll()
+    }, 2500)
+  }
+
+  function switchLang (mode) {
+    if (mode === 'trans' && !translationInfo.exists) return
+    translationMode = mode
+    const tab = pdfTabs.get('')
+    if (!tab) return
+    if (activePdfTab === '' && activePdfViewer) tab.view = activePdfViewer.getViewState()
+    tab.url = mode === 'trans' ? api.translationUrl(paper.id) : api.pdfUrl(paper.id)
+    tab.title = mode === 'trans' ? 'PDF（译文）' : 'PDF'
+    paintPdfTabs()
+    if (activePdfTab === '') {
+      abortViewer()
+      pdfTabController = new AbortController()
+      pdfMount = openPdfDocument(pdfTabs.get(''), pdfTabController.signal)
+    }
+  }
+
+  async function toggleTranslation () {
+    if (!pdfOk || translationAction) return
+    const cancelling = translationInfo.state === 'running'
+    translationAction = true
+    translationRevision++
+    paintLangSwitch()
+    try {
+      const res = cancelling
+        ? await api.cancelTranslation(paper.id)
+        : await api.startTranslation(paper.id, translationInfo.exists)
+      if (signal.aborted) return
+      updateTranslationState(res.state)
+      if (cancelling) {
+        if (res.state.state === 'running') toast('已请求取消，正在收尾…')
+      } else if (res.reason === 'cached') {
+        switchLang('trans')
+      } else if (res.started) {
+        toast('已开始翻译：完成后会自动切到译文（关掉页面任务也会在后台继续）')
+      }
+    } catch (err) {
+      if (!signal.aborted) toast(err.message, 'error')
+    } finally {
+      translationAction = false
+      if (!signal.aborted) {
+        paintLangSwitch()
+        scheduleTranslationPoll()
+      }
+    }
+  }
+
+  signal.addEventListener('abort', () => {
+    clearTimeout(translationPoll)
+  }, { once: true })
 
   function paintPdfTabs () {
     const files = [...pdfTabs.keys()]
@@ -184,6 +305,7 @@ export function buildPdfAndAttachments ({
         }, '×') : null)
     }))
     originalPdfActions.hidden = activePdfTab !== ''
+    paintLangSwitch()
   }
 
   function selectPdfTab (file, focus = false) {
@@ -388,6 +510,8 @@ export function buildPdfAndAttachments ({
     )
   )
   loadAttachments()
+
+  if (pdfOk) refreshTranslationState().then(scheduleTranslationPoll)
 
   return {
     pdfPanel,

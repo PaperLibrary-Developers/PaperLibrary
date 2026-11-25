@@ -164,6 +164,8 @@ import { createRequestId, isWebViewHost, requestWebView } from './webview-reques
     webSearch: (q, options) => request('GET', '/api/websearch/search' + qs(Object.assign({ q: q }, options || {}))),
 
     /** 学术检索来源（OpenAlex）的凭据与配额状态 */
+    mineruSettings: () => request('GET', '/api/mineru/settings'),
+    mineruSaveSettings: patch => request('PUT', '/api/mineru/settings', { body: patch }),
     sourceSettings: () => request('GET', '/api/sources/settings'),
     sourceSaveSettings: patch => request('PUT', '/api/sources/settings', { body: patch }),
     sourceTestOpenAlex: () => request('POST', '/api/sources/openalex/test', { body: {} }),
@@ -323,6 +325,14 @@ import { createRequestId, isWebViewHost, requestWebView } from './webview-reques
     tidyPdfNames: () => request('POST', '/api/papers/tidy-pdf-names'),
     cite: (id, format, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/cite' + qs({ format }), { signal }),
     pdfUrl: id => '/api/papers/' + encodeURIComponent(id) + '/pdf',
+
+    /* ---------- 原文 / 译文切换（保留原版式的原位翻译） ---------- */
+    translationUrl: id => '/api/papers/' + encodeURIComponent(id) + '/translation.pdf',
+    translationStatus: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/translation', { signal }),
+    startTranslation: (id, force) => request('POST', '/api/papers/' + encodeURIComponent(id) + '/translation',
+      { body: force ? { force: true } : {} }),
+    cancelTranslation: id => request('POST', '/api/papers/' + encodeURIComponent(id) + '/translation/cancel', {}),
+    removeTranslation: id => request('DELETE', '/api/papers/' + encodeURIComponent(id) + '/translation'),
 
     fetchDoi: doi => request('POST', '/api/fetch/doi', { body: { doi } }),
     fetchTitle: (title, limit) => request('POST', '/api/fetch/title', { body: { title, limit: limit || 6 } }),

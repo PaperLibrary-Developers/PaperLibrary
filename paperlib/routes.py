@@ -29,6 +29,7 @@ from paperlib.api import (
     system,
     tags,
     terms,
+    translate,
     update,
 )
 
@@ -64,6 +65,7 @@ ROUTES = [
     {"name": "ai-settings", "methods": ("*",), "pattern": "/api/ai/settings", "handler": settings.ai_settings},
     {"name": "sources-settings", "methods": ("*",), "pattern": "/api/sources/settings", "handler": settings.sources_settings},
     {"name": "websearch-settings", "methods": ("*",), "pattern": "/api/websearch/settings", "handler": settings.websearch_settings},
+    {"name": "mineru-settings", "methods": ("*",), "pattern": "/api/mineru/settings", "handler": settings.mineru_settings},
 
     # ---------------- 标签 ----------------
     {"name": "tags-list", "methods": ("GET",), "pattern": "/api/tags", "handler": tags.list_tags},
@@ -81,6 +83,13 @@ ROUTES = [
     {"name": "papers-cleanup-duplicates", "methods": ("POST",), "pattern": "/api/papers/cleanup-duplicates", "handler": papers.cleanup_duplicates},
     {"name": "papers-tidy-pdf-names", "methods": ("POST",), "pattern": "/api/papers/tidy-pdf-names", "handler": papers.tidy_pdf_names},
     {"name": "facets", "methods": ("GET",), "pattern": "/api/facets", "handler": papers.facets},
+
+    # 原文 / 译文切换（保留原版式的原位翻译）
+    {"name": "translation-status", "methods": ("GET",), "pattern": "/api/papers/:id/translation", "handler": translate.status},
+    {"name": "translation-start", "methods": ("POST",), "pattern": "/api/papers/:id/translation", "handler": translate.start},
+    {"name": "translation-remove", "methods": ("DELETE",), "pattern": "/api/papers/:id/translation", "handler": translate.remove},
+    {"name": "translation-cancel", "methods": ("POST",), "pattern": "/api/papers/:id/translation/cancel", "handler": translate.cancel},
+    {"name": "translation-pdf", "methods": ("GET", "HEAD"), "pattern": "/api/papers/:id/translation.pdf", "handler": translate.pdf},
 
     # ---------------- 图表（合并后新增） ----------------
     {"name": "figures-list", "methods": ("GET",), "pattern": "/api/figures", "handler": figures.list_figures},
