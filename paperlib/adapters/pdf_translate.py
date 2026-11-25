@@ -587,6 +587,24 @@ def _font_size_of(page, rect):
     return None
 
 
+def _measure_height(html_text, font_size, width, css, archive):
+    """用 fitz.Story 真实排版，量出这段中文在 width 宽下占多高（pt）；失败返回 None。"""
+    try:
+        story = fitz.Story(
+            html="<body>" + (html_text or "") + "</body>",
+            user_css="*{font-size:%.2fpt;}" % font_size + css,
+            archive=archive,
+        )
+        rect = fitz.Rect(0, 0, width, 8000)
+        more, filled = story.place(rect)
+        height = filled.y1 - filled.y0
+        if height > 1:
+            return height, bool(more)
+    except Exception:  # noqa: BLE001 - 退回流式估算
+        pass
+    return None, False
+
+
 def _estimate_height(html_text, font_size, width):
     """估算这段中文排进 width 宽需要多高（pt）。"""
     plain = re.sub(r"<[^>]+>", "", html_text or "")
@@ -654,7 +672,7 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
     archive = fitz.Archive(str(font_dir)) if font_dir else None
     css = ("@font-face { font-family: han; src: url(%s); }\n" % font_name
            if font_name else "")
-    css += ("* { font-family: han; margin:0; padding:0; line-height:1.18; color:#111; }\n"
+    css += ("* { font-family: han; margin:0; padding:0; line-height:1.23; color:#111; }\n"
             "sub, sup { font-size: 68%; }")
     pages_report = []
     for page_no in range(1, len(doc) + 1):
@@ -679,10 +697,11 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                 continue
             measured = _font_size_of(page, rect)
             font_size = measured * 0.96 if measured else float(block.get("font_size") or 9.0)
+            item_measured = measured
             plan.append({
                 "id": block["id"], "rect": rect, "source": block["source"],
                 "html": build_html(zh), "color": _sample_color(pix, page.rect, rect),
-                "fs": font_size, "ratio": round(ratio, 3),
+                "fs": font_size, "ratio": round(ratio, 3), "measured_fs": item_measured,
             })
         # 同页仍重叠的块：合并成一块（bbox 并集 + 译文按阅读顺序拼接），不再丢弃
         kept = []
@@ -713,7 +732,11 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
         obstacles = [it["rect"] for it in plan] + list(image_rects)
         for item in plan:
             item["fill_rect"] = item["rect"]
-            needed = _estimate_height(item["html"], item["fs"], item["rect"].width)
+            measured, _more = _measure_height(item["html"], item["fs"],
+                                              item["rect"].width, css, archive)
+            needed = measured if measured else _estimate_height(item["html"], item["fs"],
+                                                                item["rect"].width)
+            item["need"] = round(needed, 1)
             if needed > item["rect"].height * 0.95:
                 extra = _free_space_below(item["rect"], obstacles, page.rect)
                 if extra > 6:
@@ -745,8 +768,11 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                 spare, scale = page.insert_htmlbox(item["fill_rect"], item["html"],
                                                    css="*{font-size:%.2fpt;}" % item["fs"] + css,
                                                    archive=archive, scale_low=0.55)
-                if (isinstance(scale, (int, float)) and scale < 0.6) or \
-                        (isinstance(spare, (int, float)) and spare < 0):
+                # 只把「原文本来就是正常字号（≥8pt）却被迫缩小」算作拥挤；页脚小字不算
+                shrunk = isinstance(scale, (int, float)) and scale < 0.62
+                overflow = isinstance(spare, (int, float)) and spare < 0
+                if (shrunk or overflow) and (item.get("measured_fs") is None
+                                             or item.get("measured_fs") >= 8.0):
                     crowded += 1
             except Exception as exc:  # noqa: BLE001 - 单块失败不影响整页
                 errors += 1
