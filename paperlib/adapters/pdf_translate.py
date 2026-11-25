@@ -18,7 +18,7 @@ from unicodedata import east_asian_width, normalize
 
 import pymupdf as fitz
 
-TRANSLATABLE = ("text", "title")
+TRANSLATABLE = ("text", "title", "abstract")
 PLACEHOLDER = re.compile(r"⟦.*?⟧", re.S)
 PROTECTED_TOKEN = re.compile(r"(?:⟦[^⟦⟧]*⟧|<sup>[^<>]*</sup>|<sub>[^<>]*</sub>)+")
 TAG_RE = re.compile(r"(</?(?:sup|sub|i|b|em|strong)>)")
@@ -795,7 +795,7 @@ def _story(item, size, leading, css, archive):
 
 def _fit_run(run, obstacles, page_rect, css, archive):
     last = run[-1]
-    run_bottom = min(page_rect.y1, last["rect"].y1 + last["fs"] * 0.85)
+    original_bottom = last["rect"].y1
     limits = [_frame_limits(item, item["rect"].x1, obstacles, page_rect) for item in run]
     original_leading = median(item["leading"] for item in run)
     gaps = []
@@ -803,14 +803,22 @@ def _fit_run(run, obstacles, page_rect, css, archive):
         before_title = b["type"] == "title" and a["type"] != "title"
         gap = b["rect"].y0 - a["rect"].y1
         gaps.append(min(11.0, max(6.0, gap)) if before_title else min(7.0, max(3.0, gap + 3.0)))
-    # Prefer the original type size. Try a tighter but readable line grid before
-    # reducing the font, and apply the same reduction across the whole text run.
-    styles = (
-        (1.00, original_leading), (1.00, max(1.15, original_leading - 0.08)),
-        (0.96, original_leading), (0.92, max(1.15, original_leading - 0.04)),
-        (0.88, max(1.14, original_leading - 0.08)),
-    )
-    for scale, leading in styles:
+    # Try more even spacing at the original size and within the original frame.
+    # Only the normal fitting passes can use the small spare area below the run.
+    styles = []
+    if gaps or last["rect"].height >= 2 * last["fs"]:
+        styles.extend((
+            (1.00, min(1.43, original_leading + 0.08), 1.4),
+            (1.00, min(1.40, original_leading + 0.04), 0.7),
+        ))
+    styles.extend((
+        (1.00, original_leading, 0.0), (1.00, max(1.15, original_leading - 0.08), 0.0),
+        (0.96, original_leading, 0.0), (0.92, max(1.15, original_leading - 0.04), 0.0),
+        (0.88, max(1.14, original_leading - 0.08), 0.0),
+    ))
+    for scale, leading, extra_gap in styles:
+        run_bottom = original_bottom if extra_gap else original_bottom + last["fs"] * 0.85
+        run_bottom = min(page_rect.y1, run_bottom)
         ready = []
         y = run[0]["rect"].y0
         for index, item in enumerate(run):
@@ -845,7 +853,7 @@ def _fit_run(run, obstacles, page_rect, css, archive):
             ready.append((item, fitz.Rect(left, y, right, y + height), story))
             y += height
             if index < len(gaps):
-                y += gaps[index]
+                y += gaps[index] + extra_gap
         if len(ready) == len(run):
             return ready
     return []
@@ -871,15 +879,15 @@ def _fit_page(items, forbidden, page_rect, css, archive):
     return ready
 
 
-def _protected_boxes(page_info, images, lines, items):
-    forbidden = list(images) + _caption_rects(page_info)
+def _protected_boxes(page_info, images, lines, items, blocked):
+    forbidden = list(images) + _caption_rects(page_info) + blocked
     for block in (page_info.get("para_blocks") or []) + (page_info.get("discarded_blocks") or []):
         if block.get("bbox") and block.get("type") not in (*TRANSLATABLE, "image", "chart", "table"):
             forbidden.append(fitz.Rect(block["bbox"]))
-    forbidden.extend(
-        box for box, _ in lines
-        if not any(_line_in_frame(box, item["rect"]) for item in items)
-    )
+    # A known frame is more precise than a PDF line box for a decorative glyph
+    # with oversized font metrics, such as a square before a section heading.
+    known = [item["rect"] for item in items] + forbidden
+    forbidden.extend(box for box, _ in lines if not any(_line_in_frame(box, frame) for frame in known))
     return forbidden
 
 
@@ -993,7 +1001,7 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                         conflicts.update((item["id"], other["id"]))
             blocked.extend(item["rect"] for item in items if item["id"] in conflicts)
             items = [item for item in items if item["id"] not in conflicts]
-            forbidden = _protected_boxes(page_info, images, lines, items) + blocked
+            forbidden = _protected_boxes(page_info, images, lines, items, blocked)
             ready = _fit_page(items, forbidden, page_rect, css, archive)
             errors = covered = 0
             if ready:

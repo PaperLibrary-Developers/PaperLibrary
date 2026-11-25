@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pymupdf as fitz
 
 from paperlib.adapters.pdf_translate import (
-    _font_dir, apply_text_budgets, blocks_from_content_list_v2, blocks_from_layout,
+    _font_dir, _protected_boxes, apply_text_budgets, blocks_from_content_list_v2, blocks_from_layout,
     render_translated, translate_blocks,
 )
 from paperlib.domain.translate import Translator
@@ -124,6 +124,12 @@ class TranslationRenderTest(unittest.TestCase):
                 self.assertIn("这是用于验收的科学段落。", doc[0].get_text())
             self.assertFalse(list(translator.article_dir.glob(".translate-*")))
 
+    def test_protected_heading_does_not_inherit_oversized_marker_metrics(self):
+        heading = fitz.Rect(25, 80, 125, 93)
+        extracted_line = fitz.Rect(26, 65, 124, 103)
+        blocked = _protected_boxes({}, [], [(extracted_line, [])], [], [heading])
+        self.assertEqual(blocked, [heading])
+
     def test_wider_reflowed_paragraph_stays_below_adjacent_figure_caption(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.pdf"
@@ -159,6 +165,39 @@ class TranslationRenderTest(unittest.TestCase):
                 page = doc[0]
                 self.assertEqual(page.get_pixmap(clip=caption, dpi=144).samples, before)
                 self.assertGreaterEqual(page.search_for("这是原图注下方的正文")[0].y0, caption.y1)
+
+    def test_spare_room_increases_spacing_at_original_size(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.pdf"
+            output = Path(folder) / "translation.pdf"
+            with fitz.open() as doc:
+                page = doc.new_page(width=400, height=450)
+                for y in (99, 111, 123, 135, 147, 168, 180, 192, 204):
+                    page.insert_text((42, y), "Original paragraph on a 12-point line grid.", fontsize=10)
+                doc.save(source)
+            blocks = [
+                {"id": "1", "page": 1, "bbox": [40, 89, 242, 155], "source": "First.",
+                 "translation": "第一段" + "这里验证有余量时行距可以适当放宽" * 4},
+                {"id": "2", "page": 1, "bbox": [40, 155, 242, 216], "source": "Second.",
+                 "translation": "第二段" + "段前距离应该均匀" * 5},
+            ]
+            font_dir, font_name = _font_dir()
+            layout = {"pdf_info": [{"page_idx": 0, "para_blocks": [
+                {"type": "abstract", "bbox": [40, 90, 242, 155]},
+            ]}]}
+            report = render_translated(pdf_path=source, layout=layout, translations=blocks,
+                                       out_pdf=output, font_dir=font_dir, font_name=font_name)
+            self.assertEqual(report[0]["replaced"], 2)
+            with fitz.open(output) as doc:
+                lines = [span for block in doc[0].get_text("dict")["blocks"] for line in block.get("lines", [])
+                         for span in line["spans"]]
+                self.assertTrue(all(abs(span["size"] - 10) < 0.05 for span in lines))
+                positions = sorted({round(span["origin"][1], 2) for span in lines})
+                self.assertGreater(positions[1] - positions[0], 12.6)
+                second = next(span["origin"][1] for span in lines if span["text"].startswith("第二段"))
+                prev = max(pos for pos in positions if pos < second - 0.05)
+                self.assertGreater(second - prev, 16.5)
+                self.assertLess(positions[-1], blocks[-1]["bbox"][3])
 
     def test_same_column_compacts_and_overflow_keeps_original(self):
         with tempfile.TemporaryDirectory() as folder:
