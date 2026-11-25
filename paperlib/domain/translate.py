@@ -15,9 +15,11 @@ import json
 import re
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Lock, Thread
 
 from paperlib.adapters.pdf_translate import (
+    apply_text_budgets,
     blocks_from_content_list_v2,
     blocks_from_layout,
     blocks_from_pdf,
@@ -171,7 +173,7 @@ class Translator:
             if content_v2:
                 page_sizes = [page.get("page_size") or [595.0, 841.0]
                               for page in (layout or {}).get("pdf_info") or []]
-                blocks = blocks_from_content_list_v2(content_v2, page_sizes)
+                blocks = blocks_from_content_list_v2(content_v2, page_sizes, layout)
                 if blocks:
                     blocks = fill_empty_sources(blocks, pdf_path)
                     blocks = dedupe_hierarchy(blocks, pdf_path)
@@ -189,6 +191,7 @@ class Translator:
 
             # 2) 逐块翻译
             self._write_state(paper_id, stage="translate", total=len(blocks), progress=0)
+            apply_text_budgets(pdf_path, blocks, layout)
             translate_blocks(
                 self.services.llm, blocks,
                 should_cancel=lambda: self._should_cancel(paper_id),
@@ -203,21 +206,26 @@ class Translator:
             self._write_state(paper_id, stage="render")
             out_pdf = self.pdf_path(paper)
             font_dir, font_name = _pick_font()
-            pages_report = render_translated(
-                pdf_path=pdf_path, layout=layout, translations=blocks,
-                out_pdf=out_pdf, font_dir=font_dir, font_name=font_name,
-                on_page=lambda done, total: self._write_state(
-                    paper_id, stage="render", pagesDone=done, pages=total),
-            )
-            if self._should_cancel(paper_id):
-                self._write_state(paper_id, state="cancelled", stage="cancelled")
-                return
+            with TemporaryDirectory(prefix=".translate-", dir=out_pdf.parent) as work_dir:
+                staged_pdf = Path(work_dir) / "translated.pdf"
+                pages_report = render_translated(
+                    pdf_path=pdf_path, layout=layout, translations=blocks,
+                    out_pdf=staged_pdf, font_dir=font_dir, font_name=font_name,
+                    on_page=lambda done, total: self._write_state(
+                        paper_id, stage="render", pagesDone=done, pages=total),
+                )
+                if self._should_cancel(paper_id):
+                    self._write_state(paper_id, state="cancelled", stage="cancelled")
+                    return
+                staged_pdf.replace(out_pdf)
 
+            preserved = sum(page["preserved_original"] for page in pages_report)
             report = {
                 "blocks": len(blocks),
                 "translated": sum(1 for b in blocks if b.get("translation")),
                 "pages": pages_report,
                 "mineru": bool(layout),
+                "preservedOriginal": preserved,
                 "warning": mineru_warning,
                 "seconds": round(time.time() - started, 1),
             }
@@ -232,7 +240,7 @@ class Translator:
                 paper_id, state="done", stage="done", error="",
                 progress=len(blocks), total=len(blocks),
                 pages=len(pages_report), pagesDone=len(pages_report),
-                translated=report["translated"], warning=mineru_warning,
+                translated=report["translated"], preservedOriginal=preserved, warning=mineru_warning,
                 seconds=report["seconds"],
             )
         except Exception as exc:  # noqa: BLE001 - 失败写进状态，前端可读

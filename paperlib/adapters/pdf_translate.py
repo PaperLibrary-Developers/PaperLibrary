@@ -1,27 +1,26 @@
 """保留原版式的原位翻译管线（PyMuPDF 回填）。
 
-思路（与实验结论一致）：
-  1. 版面：MinerU 的 layout.json 给块类型 + PDF 点坐标；没有 MinerU 时用 PyMuPDF 自己切块。
-  2. 文本：行合并、连字符折行还原、行内公式包成 ⟦...⟧ 占位符。
-  3. 翻译：交给调用方传进来的 LLM（设置页那套），逐块调用并校验占位符数量。
-  4. 回填：底采样 → redaction 擦除 → XObject 残留遮盖兜底 → insert_htmlbox 排中文 → 字体子集化。
-
-只处理 text / title；ref_text、image、table、chart、页眉页脚一律不动
-（页眉页脚在 MinerU 里本来就在 discarded_blocks 里）。
+MinerU 提供物理段框和类型，PyMuPDF 提供原始字号、基线与备用分块。
+翻译前按栏框估算容量，使用编号占位保护公式及引用。回填前用 Story
+实排同栏正文，再擦除能完整替换的文字。
 """
 from __future__ import annotations
 
 import json
 import math
 import re
-import time
 import zipfile
+from collections import Counter
+from html import unescape
 from pathlib import Path
+from statistics import median
+from unicodedata import east_asian_width, normalize
 
-import fitz  # PyMuPDF
+import pymupdf as fitz
 
 TRANSLATABLE = ("text", "title")
 PLACEHOLDER = re.compile(r"⟦.*?⟧", re.S)
+PROTECTED_TOKEN = re.compile(r"(?:⟦[^⟦⟧]*⟧|<sup>[^<>]*</sup>|<sub>[^<>]*</sub>)+")
 TAG_RE = re.compile(r"(</?(?:sup|sub|i|b|em|strong)>)")
 GREEK = {
     r"\Delta": "Δ", r"\delta": "δ", r"\gamma": "γ", r"\alpha": "α", r"\beta": "β",
@@ -31,18 +30,13 @@ GREEK = {
     r"\chi": "χ", r"\psi": "ψ", r"\Lambda": "Λ", r"\Sigma": "Σ",
 }
 SYSTEM_PROMPT = (
-    "你是学术论文英译中专家。把【本段】译成规范学术中文。\n"
-    "硬性规则：\n"
-    "0) 译文里不得出现英文单词或英文短语（专有名词、化学式、单位、软件/仪器名除外）；\n"
-    "1) 只输出译文正文，不要解释、前缀或引号；\n"
-    "2) 原文中 ⟦...⟧ 包裹的是数学公式，属于不可变 token：必须逐字复制、数量与原文完全一致、位置对应；\n"
-    "3) 保留 <sup>..</sup> 等 HTML 标签与文献引用标号；\n"
-    "4) 化学领域通行译名，术语准确；\n"
-    "5) 不增删信息。【前文】【后文】只用于理解语境，不要翻译；\n"
-    "6) 不得保留英文单词（专有名词、化学式、单位、仪器/软件名除外）；\n"
-    "7) 译文长度尽量与原文相当，不要扩写或解释，避免比原文长很多。"
+    "把【本块】译成简洁、自然的学术中文，供固定栏宽的论文 PDF 排版。只输出一段译文。"
+    "用短句和通行术语，省去可压缩的套话和赘词，保留所有结论、条件、数值、专名、单位和引文，"
+    "不要扩写、概括、解释或附英文原句。网址、邮箱和标识符保持原样。"
+    "⟦T1⟧ 之类的编号占位对应公式或引文，必须逐字复制，每个只出现一次，并放在对应的术语或结论旁。"
+    "【前文】【后文】只用于理解语境。本块如果从句中开始或在句中结束，只翻译实际给出的片段，"
+    "不要把相邻栏或页的文字补进来。"
 )
-
 
 # --------------------------------------------------------------------------- 文本工具
 
@@ -65,8 +59,7 @@ def merge_lines(lines):
         if parts:
             prev = parts[-1]
             if prev.endswith("-") and re.match(r"^[a-z]", cur):
-                parts[-1] = prev[:-1]
-                parts.append(cur)
+                parts[-1] = prev[:-1] + cur
                 continue
             if prev.endswith("⟧") or cur.startswith("⟦"):
                 parts.append(cur)
@@ -75,18 +68,6 @@ def merge_lines(lines):
         else:
             parts.append(cur)
     return re.sub(r"\s+", " ", " ".join(parts)).strip()
-
-
-_SMALL_EN = re.compile(r"\b[a-z]{4,}\b")
-
-
-def _english_words(text):
-    """译文里残留的小写英文单词（大写缩写/化学式/专名不算）。"""
-    return sorted({w for w in _SMALL_EN.findall(text or "")})
-
-
-def placeholder_count(text):
-    return len(PLACEHOLDER.findall(text or ""))
 
 
 def clean_source(text):
@@ -138,7 +119,12 @@ def build_html(zh):
     def replace(match):
         return "<span>" + _escape_keep_tags(latex_to_html(match.group(0))) + "</span>"
 
-    return PLACEHOLDER.sub(replace, zh or "")
+    parts = PLACEHOLDER.split(zh or "")
+    formulas = PLACEHOLDER.finditer(zh or "")
+    html = [_escape_keep_tags(parts[0])]
+    for formula, tail in zip(formulas, parts[1:]):
+        html.extend((replace(formula), _escape_keep_tags(tail)))
+    return "".join(html)
 
 
 def _escape_keep_tags(text):
@@ -157,16 +143,19 @@ def _escape_keep_tags(text):
 V2_SKIP_TYPES = {
     "image", "chart", "table", "page_header", "page_footer", "page_number",
     "header", "footer", "footnote", "aside_text", "list", "index", "ref_text",
+    "page_footnote", "page_aside_text", "equation_interline",
 }
 
 
-def blocks_from_content_list_v2(pages, page_sizes):
+def blocks_from_content_list_v2(pages, page_sizes, layout=None):
     """MinerU content_list_v2（按页的段落级块）→ 统一块结构。
 
     v2 比 layout.json 更干净：块是段落级（没有「整页父块」），bbox 是 0-1000 归一化坐标，
     行内公式以 equation_inline span 给出（包 ⟦⟧）。文本层损坏的页面也只有 v2 里还有字。
     """
     blocks = []
+    geometry = {page["page_idx"]: page for page in (layout or {}).get("pdf_info", [])
+                if "page_idx" in page}
     for page_index, items in enumerate(pages or []):
         page_no = page_index + 1
         size = page_sizes[page_index] if page_index < len(page_sizes) else (595.0, 841.0)
@@ -194,6 +183,14 @@ def blocks_from_content_list_v2(pages, page_sizes):
             x1, y1 = bbox[2] / 1000.0 * width, bbox[3] / 1000.0 * height
             if x1 - x0 < 20 or y1 - y0 < 6:
                 continue
+            rect = fitz.Rect(x0, y0, x1, y1)
+            page_layout = geometry.get(page_index, {})
+            physical = _matching_layout_block(rect, page_layout.get("preproc_blocks", []))
+            paragraph = _matching_layout_block(rect, page_layout.get("para_blocks", []))
+            if physical and _redistributed_paragraph(paragraph, rect, bool(text)):
+                # MinerU 把后续栏/页的行接到首块，同时清空续块。
+                # preproc_blocks 仍保留每个物理框原有的行（包含公式及引用）。
+                text = merge_lines(physical.get("lines")) or text
             blocks.append({
                 "id": "p%dv%d" % (page_no, item_index),
                 "page": page_no,
@@ -217,6 +214,31 @@ def extract_content_list_v2(work_dir):
     return None
 
 
+def _matching_layout_block(rect, blocks):
+    best_ratio = 0.70
+    best = None
+    for block in blocks:
+        if block.get("type") not in TRANSLATABLE or not block.get("bbox"):
+            continue
+        box = fitz.Rect(block["bbox"])
+        ratio = (box & rect).get_area() / ((box | rect).get_area() or 1)
+        if ratio >= best_ratio:
+            best_ratio, best = ratio, block
+    return best
+
+
+def _redistributed_paragraph(paragraph, rect, has_text):
+    if not has_text or (paragraph and paragraph.get("lines_deleted")):
+        return True
+    if not paragraph:
+        return False
+    return any(
+        any(span.get("cross_page") for span in line.get("spans", []))
+        or (line.get("bbox") and not _line_in_frame(fitz.Rect(line["bbox"]), rect + (-3, -3, 3, 3)))
+        for line in paragraph.get("lines", [])
+    )
+
+
 def blocks_from_layout(layout):
     """MinerU layout.json → [{page,index,type,bbox,source,prev,next}]（坐标是 PDF 点）。"""
     blocks = []
@@ -226,8 +248,13 @@ def blocks_from_layout(layout):
         for index, block in enumerate(page.get("para_blocks") or []):
             if block.get("type") not in TRANSLATABLE:
                 continue
-            text = merge_lines(block.get("lines") or [])
-            rects = [fitz.Rect(line["bbox"]) for line in block.get("lines") or [] if line.get("bbox")]
+            box = fitz.Rect(block["bbox"])
+            lines = block.get("lines") or []
+            physical = _matching_layout_block(box, page.get("preproc_blocks", []))
+            if physical and _redistributed_paragraph(block, box, bool(lines)):
+                lines = physical.get("lines") or lines
+            text = merge_lines(lines)
+            rects = [fitz.Rect(line["bbox"]) for line in lines if line.get("bbox")]
             if rects:
                 box = rects[0]
                 for extra in rects[1:]:
@@ -248,16 +275,12 @@ def blocks_from_layout(layout):
 
 
 def relink(blocks):
-    """按页、按阅读顺序（y 再 x）重算前后文，供翻译时给上下文。"""
-    by_page = {}
-    for block in blocks:
-        by_page.setdefault(block["page"], []).append(block)
-    for items in by_page.values():
-        items.sort(key=lambda b: (round(b["bbox"][1], 1), round(b["bbox"][0], 1)))
-        for index, block in enumerate(items):
-            block["prev"] = items[index - 1]["source"][-160:] if index > 0 else ""
-            block["next"] = items[index + 1]["source"][:160] if index + 1 < len(items) else ""
+    """Use the parser's reading order, including continuations into the next column or page."""
+    for index, block in enumerate(blocks):
+        block["prev"] = blocks[index - 1]["source"][-160:] if index else ""
+        block["next"] = blocks[index + 1]["source"][:160] if index + 1 < len(blocks) else ""
     return blocks
+
 
 
 def fill_empty_sources(blocks, pdf_path):
@@ -278,25 +301,8 @@ def fill_empty_sources(blocks, pdf_path):
     return [b for b in blocks if b.get("source")]
 
 
-_PAGE_CACHE = {}
-
-
-def _page_of(blocks, page_no):
-    """按页取 fitz 页面对象（块里带 _pdf_path 时）。"""
-    doc = _PAGE_CACHE.get("doc")
-    if doc is None:
-        return None
-    try:
-        return doc[page_no - 1]
-    except Exception:
-        return None
-
-
-def _locate_by_text(blocks, parent, original):
+def _locate_by_text(page, parent, original):
     """用父块文本在页面上搜索真实行位置；找不到返回 None。"""
-    page = _page_of(blocks, parent["page"])
-    if page is None:
-        return None
     probe = clean_source(parent.get("source") or "")[:70]
     for attempt in (probe, " ".join(re.findall(r"[A-Za-z]{3,}", probe)[:6])):
         if not attempt or len(attempt) < 8:
@@ -420,11 +426,16 @@ def dedupe_hierarchy(blocks, pdf_path=None):
     减去后没有可用区域才丢弃。
     """
     if pdf_path:
-        _PAGE_CACHE["doc"] = fitz.open(str(pdf_path))
+        with fitz.open(str(pdf_path)) as doc:
+            return _dedupe_hierarchy(blocks, doc)
+    return _dedupe_hierarchy(blocks, None)
+
+
+def _dedupe_hierarchy(blocks, doc):
     by_page = {}
     for block in blocks:
         by_page.setdefault(block["page"], []).append(block)
-    for items in by_page.values():
+    for page_no, items in by_page.items():
         for parent in items:
             outer = fitz.Rect(parent["bbox"]) + (-3, -3, 3, 3)
             children = [b for b in items if b is not parent and _covers(outer, fitz.Rect(b["bbox"]))]
@@ -444,7 +455,7 @@ def dedupe_hierarchy(blocks, pdf_path=None):
                 continue
             original = fitz.Rect(parent["bbox"])
             # 优先用文字定位：父块的文本常只占其中一段，搜索到真实行位置最可靠
-            located = _locate_by_text(blocks, parent, original)
+            located = _locate_by_text(doc[page_no - 1], parent, original) if doc is not None else None
             if located is not None:
                 parent["bbox"] = [located.x0, located.y0, located.x1, located.y1]
                 continue
@@ -465,12 +476,6 @@ def dedupe_hierarchy(blocks, pdf_path=None):
                 parent["drop"] = True
                 continue
             parent["bbox"] = [best.x0, best.y0, best.x1, best.y1]
-    doc = _PAGE_CACHE.pop("doc", None)
-    if doc is not None:
-        try:
-            doc.close()
-        except Exception:  # noqa: BLE001
-            pass
     return [b for b in blocks if not b.get("drop")]
 
 
@@ -569,227 +574,405 @@ def _sample_color(pix, page_rect, rect, inset=2.0, band=5.0):
     return pixels[len(pixels) // 2]
 
 
-def _font_size_of(page, rect):
-    """取该矩形内原文的真实字号（span size 中位数）；取不到返回 None。"""
-    try:
-        sizes = []
-        for block in page.get_text("dict", clip=rect).get("blocks", []):
-            for line in block.get("lines", []):
-                for span in line.get("spans", []):
-                    if (span.get("text") or "").strip():
-                        sizes.append(float(span.get("size") or 0))
-        sizes = [s for s in sizes if 4 < s < 60]
-        if sizes:
-            sizes.sort()
-            return sizes[len(sizes) // 2]
-    except Exception:  # noqa: BLE001
-        pass
-    return None
+def _page_text_lines(page):
+    lines = []
+    for block in page.get_text("dict", flags=fitz.TEXTFLAGS_TEXT)["blocks"]:
+        for line in block.get("lines", []):
+            if line.get("dir", (1, 0))[0] < 0.99:
+                continue
+            lines.append((fitz.Rect(line["bbox"]), line["spans"]))
+    return lines
 
 
-def _measure_height(html_text, font_size, width, css, archive):
-    """用 fitz.Story 真实排版，量出这段中文在 width 宽下占多高（pt）；失败返回 None。"""
-    try:
-        story = fitz.Story(
-            html="<body>" + (html_text or "") + "</body>",
-            user_css="*{font-size:%.2fpt;}" % font_size + css,
-            archive=archive,
-        )
-        rect = fitz.Rect(0, 0, width, 8000)
-        more, filled = story.place(rect)
-        height = filled.y1 - filled.y0
-        if height > 1:
-            return height, bool(more)
-    except Exception:  # noqa: BLE001 - 退回流式估算
-        pass
-    return None, False
+def _line_in_frame(line, rect):
+    center_y = (line.y0 + line.y1) / 2
+    overlap = min(line.x1, rect.x1) - max(line.x0, rect.x0)
+    return rect.y0 <= center_y <= rect.y1 and overlap >= 0.55 * line.width > 0
 
 
-def _estimate_height(html_text, font_size, width):
-    """估算这段中文排进 width 宽需要多高（pt）。"""
-    plain = re.sub(r"<[^>]+>", "", html_text or "")
-    if not plain:
-        return 0.0
-    # 中文按 1 个字宽、其余按 0.5 字宽折算，比「一律按 0.95」准得多
-    units = 0.0
-    for char in plain:
-        units += 1.0 if "\u4e00" <= char <= "\u9fff" else 0.5
-    per_line = max(1.0, width / max(font_size, 4.0))
-    lines = math.ceil(units / per_line)
-    return lines * font_size * 1.18
+def _typography(lines, rect):
+    """Measure body size by character count, so math, citations and superscripts cannot dominate."""
+    sizes = Counter()
+    for line, spans in lines:
+        if _line_in_frame(line, rect):
+            for span in spans:
+                size = round(span["size"], 1)
+                text = span["text"].strip()
+                if text and 4 <= size <= 60:
+                    sizes[size] += len(text)
+    size = sizes.most_common(1)[0][0] if sizes else 9.0
+    baselines = sorted({
+        round(span["origin"][1], 1)
+        for line, spans in lines if _line_in_frame(line, rect)
+        for span in spans if abs(span["size"] - size) < 0.25 and span["text"].strip()
+    })
+    strides = [y2 - y1 for y1, y2 in zip(baselines, baselines[1:])
+               if size * 0.95 < y2 - y1 < size * 1.65]
+    leading = min(1.36, max(1.17, median(strides) / size)) if strides else 1.23
+    return size, leading
 
 
-def _free_space_below(rect, obstacles, page_rect, margin=3.0):
-    """rect 下方到最近障碍物（块/图/页脚区）之间的空白高度。"""
-    limit = page_rect.y1 - 42.0      # 留出页脚/页码区，别把正文压到页脚上
+def _title_color(lines, frame):
+    colors = Counter()
+    for line, spans in lines:
+        if _line_in_frame(line, frame):
+            for span in spans:
+                colors[span["color"]] += len(span["text"].strip())
+    return colors.most_common(1)[0][0] if colors else 0x111111
+
+
+def _text_units(html):
+    plain = unescape(re.sub(r"<[^>]+>", "", html))
+    return sum(1.0 if east_asian_width(ch) in ("W", "F") else 0.54 for ch in plain)
+
+
+def apply_text_budgets(pdf_path, blocks, layout=None):
+    """Give the translator a soft length target in full-width glyphs for each physical frame."""
+    by_page = {}
+    for block in blocks:
+        by_page.setdefault(block["page"], []).append(block)
+    geometry = _layout_pages(layout)
+    with fitz.open(str(pdf_path)) as doc:
+        for page_no, items in by_page.items():
+            lines = _page_text_lines(doc[page_no - 1])
+            images = _page_images(doc[page_no - 1], geometry.get(page_no - 1, {}))
+            for block in items:
+                rect = fitz.Rect(block["bbox"])
+                # A parser may classify text printed inside one graphic as a paragraph.
+                if _overlaps_image(rect, images):
+                    block["protected_layout"] = True
+                    continue
+                size, leading = _typography(lines, rect)
+                rows = max(1, round(rect.height / (size * leading)))
+                block["text_budget"] = max(6, math.floor(rect.width / size * rows * 0.94))
+
+
+def _layout_pages(layout):
+    return {p.get("page_idx", index): p
+            for index, p in enumerate((layout or {}).get("pdf_info") or [])}
+
+
+def _page_images(page, page_info):
+    # MinerU can provide only a partial box for a raster illustration.
+    return _image_rects(page_info) + [fitz.Rect(info["bbox"]) for info in page.get_image_info()]
+
+
+def _overlaps_image(rect, images):
+    # Also preserve graphic labels such as publication buttons with a small inline icon.
+    ratio = 0.08 if rect.height < 24 else 0.10
+    return any((rect & image).get_area() > ratio * rect.get_area() for image in images)
+
+
+def _fit_right(item, obstacles, page_rect):
+    """Allow a short title or byline to use adjacent free width on the same line."""
+    rect = item["rect"]
+    size = item["fs"]
+    if rect.height > size * 1.55:
+        return rect.x1
+    right = min(rect.x1 + size * 8, page_rect.x1 - min(rect.x0, page_rect.width * 0.08))
     for obstacle in obstacles:
-        if obstacle is rect:
-            continue
-        if obstacle.y0 >= rect.y1 - 0.5 and obstacle.y0 < limit \
-                and obstacle.x1 > rect.x0 + 1 and obstacle.x0 < rect.x1 - 1:
-            limit = obstacle.y0 - margin
-    return max(0.0, limit - rect.y1)
+        if obstacle.x0 >= rect.x1 - 1 and obstacle.y0 < rect.y0 + size * 1.35 and obstacle.y1 > rect.y0:
+            right = min(right, obstacle.x0 - 2.0)
+    return max(rect.x1, right)
 
 
-def _shrink_against_images(rect, image_rects):
-    """文字块与图片相交时，收缩到不相交的最大子矩形；实在不行就跳过。"""
-    hit = 0.0
-    for image in image_rects:
-        if rect.intersects(image):
-            hit += (rect & image).get_area()
-    ratio = hit / max(1.0, rect.get_area())
-    if ratio <= 0.02:
-        return rect, ratio
-    candidates = []
-    for image in image_rects:
-        if not rect.intersects(image):
+def _column_runs(items, obstacles):
+    """Join close frames in a column across small subheadings and their body text."""
+    runs = []
+    for item in sorted(items, key=lambda it: (it["rect"].y0, it["rect"].x0)):
+        rect = item["rect"]
+        candidates = []
+        for run in runs:
+            prev = run[-1]
+            box = prev["rect"]
+            size = item["fs"]
+            prev_size = prev["fs"]
+            overlap = min(rect.x1, box.x1) - max(rect.x0, box.x0)
+            gap = rect.y0 - box.y1
+            short_frame = (rect.height <= size * 1.65 or box.height <= prev_size * 1.65
+                           or item["type"] == "title" or prev["type"] == "title")
+            if short_frame:
+                # Section titles, correspondence labels and indented first lines may be narrower.
+                aligned = (max(size, prev_size) <= 15 and 0.72 <= size / prev_size <= 1.38
+                           and abs(rect.x0 - box.x0) <= size * 2.8
+                           and overlap >= 0.50 * min(rect.width, box.width))
+            else:
+                width = max(rect.width, box.width)
+                indent = abs(rect.x0 - box.x0)
+                aligned = (0.90 <= size / prev_size <= 1.12
+                           and ((indent <= size * 1.6 and overlap >= 0.70 * width)
+                                or (indent <= size * 3.0 and overlap >= 0.83 * width)))
+            if not aligned or not -2.5 <= gap <= size * 1.55 or rect.y0 - box.y0 < min(size, prev_size) * 0.75:
+                continue
+            boundaries = obstacles + [other["rect"] for other in items if other is not item and other is not prev]
+            if gap > 0 and any(rect.x0 < ob.x1 and ob.x0 < rect.x1
+                               and ob.y0 < rect.y0 - 1 and ob.y1 > box.y1 + 1
+                               for ob in boundaries):
+                continue
+            candidates.append(run)
+        if candidates:
+            max(candidates, key=lambda run: run[-1]["rect"].y1).append(item)
+        else:
+            runs.append([item])
+    return runs
+
+
+def _run_bottom(run, obstacles, page_rect):
+    rect = run[-1]["rect"]
+    bottom = min(page_rect.y1, rect.y1 + run[-1]["fs"] * 0.85)
+    for boundary in obstacles:
+        # Only borrow existing space within this column, stopping at the nearest fixed object.
+        overlap = min(rect.x1, boundary.x1) - max(rect.x0, boundary.x0)
+        if boundary.y0 > rect.y0 + 1 and overlap > 1:
+            bottom = min(bottom, boundary.y0 - 1.2)
+    return bottom
+
+
+def _story(item, size, leading, css, archive):
+    # Set margins on named elements. MuPDF's HTML engine retains its default 1em
+    # body margins when the reset is written as a universal selector.
+    style = css + (
+        "html, body, div { margin:0; padding:0; font-size:%.3fpt; "
+        "line-height:%.3f; color:#%06x; } sub, sup { font-size:68%%; }"
+        % (size, leading, item["color"])
+    )
+    body = "<div>" + item["html"] + "</div>"
+    return fitz.Story(html=body, user_css=style, archive=archive)
+
+
+def _fit_run(run, bottom, css, archive):
+    original_leading = median(item["leading"] for item in run)
+    gaps = []
+    for a, b in zip(run, run[1:]):
+        before_title = b["type"] == "title" and a["type"] != "title"
+        gap = b["rect"].y0 - a["rect"].y1
+        gaps.append(min(11.0, max(6.0, gap)) if before_title else min(7.0, max(3.0, gap + 3.0)))
+    # Prefer the original type size. Try a tighter but readable line grid before
+    # reducing the font, and apply the same reduction across the whole text run.
+    styles = (
+        (1.00, original_leading), (1.00, max(1.15, original_leading - 0.08)),
+        (0.96, original_leading), (0.92, max(1.15, original_leading - 0.04)),
+        (0.88, max(1.14, original_leading - 0.08)),
+    )
+    for scale, leading in styles:
+        ready = []
+        y = run[0]["rect"].y0
+        for index, item in enumerate(run):
+            box = item["rect"]
+            y = max(y, item["graphic_floor"])
+            if bottom <= y:
+                break
+            floor = min(8.0, item["fs"])
+            size = max(floor, item["fs"] * scale)
+            story = _story(item, size, leading, css, archive)
+            left = item["left"]
+            probe = fitz.Rect(0, 0, box.x1 - left, bottom - y)
+            more, filled = story.place(probe, flags=fitz.mupdf.FZ_PLACE_STORY_FLAG_NO_OVERFLOW)
+            right = box.x1
+            if item.get("right", right) > right and (more or filled[3] > size * leading * 1.1):
+                expanded = item["right"]
+                story.reset()
+                wide_more, wide_filled = story.place(
+                    fitz.Rect(0, 0, expanded - left, bottom - y),
+                    flags=fitz.mupdf.FZ_PLACE_STORY_FLAG_NO_OVERFLOW,
+                )
+                if not wide_more and wide_filled[3] <= size * leading * 1.1:
+                    more, filled, right = wide_more, wide_filled, expanded
+            height = filled[3] + 0.15
+            if more or height <= 0.15 or y + height > bottom + 0.05:
+                break
+            ready.append((item, fitz.Rect(left, y, right, y + height), story))
+            y += height
+            if index < len(gaps):
+                y += gaps[index]
+        if len(ready) == len(run):
+            return ready
+    return []
+
+
+def _fit_page(items, forbidden, page_rect, css, archive):
+    ready = []
+    runs = _column_runs(items, forbidden)
+    for run in runs:
+        if len(run) == 1:
+            item = run[0]
+            item["right"] = _fit_right(item, forbidden + [it["rect"] for it in items if it is not item], page_rect)
+        obstacles = forbidden + [item["rect"] for other in runs if other is not run for item in other]
+        fitted = _fit_run(run, _run_bottom(run, obstacles, page_rect), css, archive)
+        if fitted or len(run) == 1:
+            ready.extend(fitted)
             continue
-        inter = rect & image
-        if inter.y0 > rect.y0:
-            candidates.append(fitz.Rect(rect.x0, rect.y0, rect.x1, inter.y0))
-        if inter.y1 < rect.y1:
-            candidates.append(fitz.Rect(rect.x0, inter.y1, rect.x1, rect.y1))
-        if inter.x0 > rect.x0:
-            candidates.append(fitz.Rect(rect.x0, rect.y0, inter.x0, rect.y1))
-        if inter.x1 < rect.x1:
-            candidates.append(fitz.Rect(inter.x1, rect.y0, rect.x1, rect.y1))
-    best = None
-    for candidate in candidates:
-        if candidate.is_empty or candidate.get_area() < 100:
+        # If the run cannot fit together, keep each paragraph on its own anchor.
+        # This also keeps the position of any original text left on the page.
+        for item in run:
+            boundaries = obstacles + [other["rect"] for other in run if other is not item]
+            bottom = _run_bottom([item], boundaries, page_rect)
+            ready.extend(_fit_run([item], bottom, css, archive))
+    return ready
+
+
+def _protected_boxes(page_info, images, lines, items):
+    forbidden = list(images)
+    for block in (page_info.get("para_blocks") or []) + (page_info.get("discarded_blocks") or []):
+        if block.get("bbox") and block.get("type") not in (*TRANSLATABLE, "image", "chart", "table"):
+            forbidden.append(fitz.Rect(block["bbox"]))
+    forbidden.extend(
+        box for box, _ in lines
+        if not any(_line_in_frame(box, item["rect"]) for item in items)
+    )
+    return forbidden
+
+
+def _erase_original(page, lines, ready):
+    """Erase text only; mask residual text in a form XObject one line at a time."""
+    original = []
+    # The inline ORCID badge is vector artwork, separate from the author's text.
+    # The translated line includes the ID, so mask only the old badge inside its link.
+    orcids = [
+        link["from"] for link in page.get_links()
+        if (link.get("uri") or "").startswith(("https://orcid.org/", "http://orcid.org/"))
+        and any(item["rect"].intersects(link["from"]) for item, _, _ in ready)
+    ]
+    badges = []
+    if orcids:
+        for path in page.get_drawings():
+            box = path["rect"]
+            if (path.get("fill") and 4 < box.width < 9 and 4 < box.height < 9
+                    and any(link.contains(box) for link in orcids)):
+                badges.append(box)
+    for item, _, _ in ready:
+        frame = item["rect"]
+        for box, spans in lines:
+            if not _line_in_frame(box, frame):
+                continue
+            # Use each span's center band: subscripts and superscripts may lie
+            # entirely outside the median glyph band of the parent text line.
+            for span in spans:
+                glyph_box = fitz.Rect(span["bbox"])
+                left = max(glyph_box.x0, frame.x0)
+                right = min(glyph_box.x1, frame.x1)
+                if left >= right or not span["text"].strip():
+                    continue
+                center = (glyph_box.y0 + glyph_box.y1) / 2
+                band = min(span["size"] * 0.16, glyph_box.height / 4)
+                page.add_redact_annot(
+                    fitz.Rect(left, center - band, right, center + band),
+                    fill=False, cross_out=False,
+                )
+            original.append((item["id"], box, "".join(span["text"] for span in spans).strip()))
+    if not original:
+        return 0
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
+
+    remaining = _page_text_lines(page)
+    residual = []
+    for box, spans in remaining:
+        text = "".join(span["text"] for span in spans).strip()
+        if not text:
             continue
-        if any(candidate.intersects(image) for image in image_rects):
-            continue
-        if best is None or candidate.get_area() > best.get_area():
-            best = candidate
-    if best is None or best.get_area() < rect.get_area() * 0.3:
-        return None, ratio
-    return best, ratio
+        for key, old_box, old_text in original:
+            if text == old_text and (box & old_box).get_area() > 0.8 * box.get_area():
+                residual.append((key, box))
+                break
+    if not (residual or badges):
+        return 0
+    unrotated = page.rect * page.derotation_matrix
+    pix = page.get_pixmap(matrix=fitz.Matrix(96 / 72, 96 / 72).prerotate(-page.rotation))
+    for box in badges + [box for _, box in residual]:
+        fill = tuple(c / 255 for c in _sample_color(pix, unrotated, box))
+        page.draw_rect(box + (-0.3, -0.3, 0.3, 0.3), color=None, fill=fill, width=0)
+    return len({key for key, _ in residual})
 
 
 def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font_name, on_page=None):
-    """把译文写回 PDF；返回每页统计。"""
-    doc = fitz.open(str(pdf_path))
+    """Fit complete translated paragraphs before modifying the original page."""
     archive = fitz.Archive(str(font_dir)) if font_dir else None
-    css = ("@font-face { font-family: han; src: url(%s); }\n" % font_name
-           if font_name else "")
-    css += ("* { font-family: han; margin:0; padding:0; line-height:1.23; color:#111; }\n"
-            "sub, sup { font-size: 68%; }")
+    css = ("@font-face { font-family: han; src: url(%s); }" % font_name if font_name else "")
+    css += "body { font-family: han, sans-serif; color:#111; }"
+    geometry = _layout_pages(layout)
+    by_page = {}
+    for translation in translations:
+        by_page.setdefault(translation["page"], []).append(translation)
     pages_report = []
-    for page_no in range(1, len(doc) + 1):
-        page = doc[page_no - 1]
-        page_info = layout["pdf_info"][page_no - 1] if layout and page_no - 1 < len(layout.get("pdf_info") or []) else {}
-        image_rects = _image_rects(page_info)
-        pix = page.get_pixmap(dpi=150)
-        plan = []
-        skipped_notr = 0
-        for block in translations:
-            if block.get("page") != page_no:
-                continue
-            zh = block.get("translation")
-            if not zh:
-                skipped_notr += 1
-                continue
-            rect = fitz.Rect(block["bbox"])
-            if rect.width < 20 or rect.height < 6:
-                continue
-            rect, ratio = _shrink_against_images(rect, image_rects)
-            if rect is None:
-                continue
-            measured = _font_size_of(page, rect)
-            font_size = measured * 0.96 if measured else float(block.get("font_size") or 9.0)
-            item_measured = measured
-            plan.append({
-                "id": block["id"], "rect": rect, "source": block["source"],
-                "html": build_html(zh), "color": _sample_color(pix, page.rect, rect),
-                "fs": font_size, "ratio": round(ratio, 3), "measured_fs": item_measured,
+    with fitz.open(str(pdf_path)) as doc:
+        for page_no, page in enumerate(doc, 1):
+            page_rect = page.rect * page.derotation_matrix
+            lines = _page_text_lines(page)
+            page_info = geometry.get(page_no - 1, {})
+            images = _page_images(page, page_info)
+            items = []
+            skipped_notr = protected = 0
+            blocked = []
+            for block in by_page.get(page_no, []):
+                rect = fitz.Rect(block["bbox"]) & page_rect
+                zh = block.get("translation")
+                if (block.get("protected_layout") or _overlaps_image(rect, images)
+                        or zh == block.get("source")):
+                    protected += 1
+                elif not zh:
+                    skipped_notr += 1
+                elif (rect.width >= 20 and rect.height >= 6
+                      and any(_line_in_frame(line, rect) for line, _ in lines)):
+                    size, leading = _typography(lines, rect)
+                    kind = block.get("type", "text")
+                    color = _title_color(lines, rect) if kind == "title" else 0x111111
+                    left = min((line.x0 for line, _ in lines
+                                if line.width > rect.width * 0.5 and _line_in_frame(line, rect)),
+                               default=rect.x0)
+                    left = min(rect.x0 + 3, max(rect.x0, left))
+                    # Captions can have a parser box starting just inside the graphic.
+                    below_graphics = (
+                        image.y1 + 1.5 for image in images
+                        if image.y0 < rect.y0 < image.y1
+                        and (image & rect).width >= 0.55 * rect.width
+                    )
+                    items.append({"id": block["id"], "rect": rect, "type": kind, "left": left,
+                                  "graphic_floor": max(below_graphics, default=page_rect.y0),
+                                  "fs": size, "leading": leading, "color": color, "html": build_html(zh)})
+                    continue
+                blocked.append(rect)
+            # A conflicting parser frame cannot be safely erased or painted as a rectangle.
+            conflicts = set()
+            for i, item in enumerate(items):
+                for other in items[:i]:
+                    box, previous = item["rect"], other["rect"]
+                    if (box & previous).get_area() > 0.30 * min(box.get_area(), previous.get_area()):
+                        conflicts.update((item["id"], other["id"]))
+            blocked.extend(item["rect"] for item in items if item["id"] in conflicts)
+            items = [item for item in items if item["id"] not in conflicts]
+            forbidden = _protected_boxes(page_info, images, lines, items) + blocked
+            ready = _fit_page(items, forbidden, page_rect, css, archive)
+            errors = covered = 0
+            if ready:
+                # A staging page ensures the source survives even if the actual paint fails.
+                with fitz.open() as layer:
+                    overlay = layer.new_page(width=page_rect.width, height=page_rect.height)
+                    for item, target, story in ready:
+                        try:
+                            spare, _ = overlay.insert_htmlbox(target, story, scale_low=1)
+                            if spare < 0:
+                                errors += 1
+                        except Exception as exc:  # noqa: BLE001 - preserve the entire page on draw failure
+                            errors += 1
+                            print("[translate] 回填失败 %s：%s" % (item["id"], exc))
+                    if errors:
+                        ready = []
+                    else:
+                        covered = _erase_original(page, lines, ready)
+                        page.show_pdf_page(page_rect, layer, 0)
+            failed_fit = len(items) - len(ready) if not errors else 0
+            skipped = len(by_page.get(page_no, [])) - protected - len(ready)
+            pages_report.append({
+                "page": page_no, "replaced": len(ready), "covered_xobject": covered,
+                "no_translation": skipped_notr, "dropped_overlap": len(conflicts),
+                "errors": errors, "crowded": failed_fit, "preserved_original": skipped,
+                "protected_layout": protected,
             })
-        # 同页仍重叠的块：合并成一块（bbox 并集 + 译文按阅读顺序拼接），不再丢弃
-        kept = []
-        merged_count = 0
-        for item in sorted(plan, key=lambda it: (round(it["rect"].y0, 1), round(it["rect"].x0, 1))):
-            merged = False
-            for other in kept:
-                small = min(item["rect"].get_area(), other["rect"].get_area())
-                if not small:
-                    continue
-                if (item["rect"] & other["rect"]).get_area() / small <= 0.30:
-                    continue
-                if item["rect"].y0 < other["rect"].y0:
-                    other["html"] = item["html"] + other["html"]
-                else:
-                    other["html"] = other["html"] + item["html"]
-                other["rect"] |= item["rect"]
-                other["fs"] = min(other["fs"], item["fs"])
-                merged = True
-                merged_count += 1
-                break
-            if not merged:
-                kept.append(item)
-        dropped = merged_count
-        plan = kept
+            if on_page:
+                on_page(page_no, len(doc))
 
-        # 译文可能比原文长：先估算，需要的空间比原块多就向下借空白（不越过相邻块/图）
-        obstacles = [it["rect"] for it in plan] + list(image_rects)
-        for item in plan:
-            item["fill_rect"] = item["rect"]
-            measured, _more = _measure_height(item["html"], item["fs"],
-                                              item["rect"].width, css, archive)
-            needed = measured if measured else _estimate_height(item["html"], item["fs"],
-                                                                item["rect"].width)
-            item["need"] = round(needed, 1)
-            if needed > item["rect"].height * 0.95:
-                extra = _free_space_below(item["rect"], obstacles, page.rect)
-                if extra > 6:
-                    grow = min(needed - item["rect"].height, extra)
-                    item["fill_rect"] = fitz.Rect(item["rect"].x0, item["rect"].y0,
-                                                  item["rect"].x1, item["rect"].y1 + grow)
-
-        for item in plan:
-            page.add_redact_annot(item["rect"], fill=tuple(c / 255 for c in item["color"]))
-        if plan:
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
-                                  graphics=fitz.PDF_REDACT_LINE_ART_NONE)
-
-        # XObject 里的文字 redaction 不生效：回读文本，残留就改遮盖
-        flat = re.sub(r"\s+", "", page.get_text("text"))
-        covered = 0
-        for item in plan:
-            probe = re.sub(r"\s+", "", clean_source(item["source"]))[:24]
-            item["residual"] = bool(probe) and probe in flat
-            if item["residual"]:
-                page.draw_rect(item["rect"], color=None,
-                               fill=tuple(c / 255 for c in item["color"]), width=0, overlay=True)
-                covered += 1
-
-        errors = 0
-        crowded = 0
-        for item in plan:
-            try:
-                spare, scale = page.insert_htmlbox(item["fill_rect"], item["html"],
-                                                   css="*{font-size:%.2fpt;}" % item["fs"] + css,
-                                                   archive=archive, scale_low=0.55)
-                # 只把「原文本来就是正常字号（≥8pt）却被迫缩小」算作拥挤；页脚小字不算
-                shrunk = isinstance(scale, (int, float)) and scale < 0.62
-                overflow = isinstance(spare, (int, float)) and spare < 0
-                if (shrunk or overflow) and (item.get("measured_fs") is None
-                                             or item.get("measured_fs") >= 8.0):
-                    crowded += 1
-            except Exception as exc:  # noqa: BLE001 - 单块失败不影响整页
-                errors += 1
-                print("[translate] 回填失败 %s：%s" % (item["id"], exc))
-            item.pop("html", None)
-
-        pages_report.append({
-            "page": page_no, "replaced": len(plan), "covered_xobject": covered,
-            "no_translation": skipped_notr, "dropped_overlap": dropped,
-            "errors": errors, "crowded": crowded,
-        })
-        if on_page:
-            on_page(page_no, len(doc))
-
-    doc.subset_fonts()
-    doc.save(str(out_pdf), garbage=4, deflate=True, clean=True)
-    doc.close()
+        doc.subset_fonts()
+        doc.save(str(out_pdf), garbage=4, deflate=True, clean=True)
     return pages_report
 
 
@@ -802,16 +985,30 @@ def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_bl
     for index, block in enumerate(blocks):
         if should_cancel and should_cancel():
             break
-        text = block["source"]
-        expected = placeholder_count(text)
-        prompt = ("【前文（仅供理解，不要翻译）】\n%s\n\n【本段（请翻译）】\n%s\n\n"
+        if block.get("protected_layout"):
+            if on_block:
+                on_block(index + 1, total)
+            continue
+        # OCR may mark the accent of an accented Latin letter as superscript.
+        source = normalize("NFC", re.sub(r"<sup>([\u0300-\u036f]+)</sup>", r"\1", block["source"]))
+        tokens = {"⟦T%d⟧" % number: match.group(0)
+                  for number, match in enumerate(PROTECTED_TOKEN.finditer(source), 1)}
+        token_ids = iter(tokens)
+        text = PROTECTED_TOKEN.sub(lambda _: next(token_ids), source)
+        prompt = ("【前文（仅供理解，不要翻译）】\n%s\n\n【本块（请翻译）】\n%s\n\n"
                   "【后文（仅供理解，不要翻译）】\n%s") % (
-            block.get("prev") or "(无)", text, block.get("next") or "(无)")
-        if expected:
-            prompt += "\n\n注意：本段含 %d 个 ⟦...⟧ 公式 token，译文必须包含同样多个。" % expected
+            build_html(block.get("prev")) or "(无)", text, build_html(block.get("next")) or "(无)")
+        if tokens:
+            meanings = ["%s = %s" % (key, re.sub(r"<[^>]+>", "", build_html(value)))
+                        for key, value in tokens.items()]
+            prompt += "\n\n以下占位值仅供理解。译文只保留【本块】中的编号，各出现一次。\n" + "\n".join(meanings)
+        budget = block.get("text_budget")
+        if budget:
+            prompt += "\n\n版面约容纳 %d 个全角字宽，请尽量贴近该长度，并保留全部原文信息。" % budget
         best = ""
-        nudged = False
-        for attempt in range(2):
+        best_width = float("inf")
+        expected = Counter(tokens.keys())
+        for attempt in range(3):
             try:
                 result = llm.chat(
                     [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
@@ -821,19 +1018,24 @@ def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_bl
             except Exception as exc:  # noqa: BLE001 - 单块失败留空，最后统一报告
                 print("[translate] 块 %s 翻译失败：%s" % (block["id"], exc))
                 candidate = ""
-            if candidate and placeholder_count(candidate) == expected:
-                # 残留小写英文单词（expediently、presumed 这类）：带点名指令再试一次
-                leftovers = _english_words(candidate)
-                if leftovers and not nudged:
-                    prompt += ("\n\n注意：你的译文中出现了英文单词 %s，必须全部译成中文后再输出，"
-                               "公式占位 ⟦...⟧ 仍保持原样。" % "、".join(leftovers[:6]))
-                    nudged = True
-                    best = candidate
-                    continue
-                best = candidate
+            found = Counter(PLACEHOLDER.findall(candidate))
+            if not candidate or found != expected:
+                if candidate and tokens:
+                    missing = "、".join((expected - found).elements()) or "无"
+                    extra = "、".join((found - expected).elements()) or "无"
+                    prompt += "\n上次缺少占位 %s，多写占位 %s。请重新翻译，逐字复制所有指定占位。" % (missing, extra)
+                continue
+            candidate = PLACEHOLDER.sub(lambda m: tokens[m.group(0)], candidate)
+            candidate = re.sub(r"\s+", " ", candidate).strip()
+            width = _text_units(build_html(candidate))
+            if width < best_width:
+                best, best_width = candidate, width
+            if not budget or width <= budget * 1.08 or attempt:
                 break
-            if candidate and not best:
-                best = candidate
+            prompt += (
+                "\n上次译文约占 %d 个全角字宽，排版目标为 %d。请以更紧凑的学术中文重新翻译，"
+                "保持全部事实、数据、限定条件和引文。"
+            ) % (math.ceil(width), budget)
         block["translation"] = best
         if on_block:
             on_block(index + 1, total)

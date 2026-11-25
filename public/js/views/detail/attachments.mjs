@@ -197,7 +197,8 @@ export function buildPdfAndAttachments ({
       const t = (res && res.translation) || {}
       translationInfo = {
         state: t.state || 'idle', exists: !!t.exists, translating: t.state === 'running',
-        progress: t.progress || 0, total: t.total || 0, stage: t.stage || '', error: t.error || ''
+        progress: t.progress || 0, total: t.total || 0, stage: t.stage || '', error: t.error || '',
+        preservedOriginal: t.preservedOriginal || 0
       }
     } catch (err) {
       if (!silent) toast(err.message, 'error')
@@ -255,7 +256,9 @@ export function buildPdfAndAttachments ({
             clearInterval(translationPoll)
             translationPoll = null
             if (translationInfo.state === 'done') {
-              toast('译文已生成')
+              const preserved = translationInfo.preservedOriginal
+              if (preserved) toast(`译文已生成，${preserved} 个文本块仍显示原文`, 'warn')
+              else toast('译文已生成')
               switchLang('trans')
             } else if (translationInfo.state === 'failed') {
               toast('翻译失败：' + (translationInfo.error || '未知原因'), 'error')
