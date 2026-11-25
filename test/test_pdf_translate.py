@@ -42,6 +42,35 @@ class TranslationFramesTest(unittest.TestCase):
             self.assertLess(fitz.Rect(blocks[0]["bbox"]).x1, fitz.Rect(blocks[1]["bbox"]).x0)
             self.assertEqual(blocks[0]["next"], blocks[1]["source"])
 
+    def test_transition_moves_with_verified_continuation_without_losing_content(self):
+        left_source = r"Values replace ⟦\gamma ;⟧ however, these"
+        right_source = "constants range from 200 to 500."
+        left_line = {"bbox": [21, 72, 108, 82], "spans": [
+            {"type": "text", "content": left_source},
+        ]}
+        right_line = {"bbox": [122, 22, 204, 32], "spans": [
+            {"type": "text", "content": right_source},
+        ]}
+        left = {"type": "text", "bbox": [20, 70, 110, 85], "lines": [left_line]}
+        right = {"type": "text", "bbox": [120, 20, 205, 35], "lines": [right_line]}
+        layout = {"pdf_info": [{
+            "page_idx": 0,
+            "preproc_blocks": [left, right],
+            "para_blocks": [dict(left, lines=[left_line, right_line]), dict(right, lines=[], lines_deleted=True)],
+        }]}
+        pages = [[
+            {"type": "paragraph", "bbox": [80, 280, 440, 340], "content": {
+                "paragraph_content": [{"type": "text", "content": left_source + " " + right_source}],
+            }},
+            {"type": "paragraph", "bbox": [480, 80, 820, 140], "content": {"paragraph_content": []}},
+        ]]
+        for frames in (blocks_from_content_list_v2(pages, [(250, 250)], layout), blocks_from_layout(layout)):
+            a, b = frames
+            self.assertEqual(a["source"], r"Values replace ⟦\gamma ;⟧")
+            self.assertEqual(b["source"], "however, these " + right_source)
+            self.assertEqual(a["source"] + " " + b["source"], left_source + " " + right_source)
+            self.assertEqual(a["next"], b["source"])
+
     def test_translation_retries_length_and_restores_protected_tokens(self):
         llm = Mock()
         llm.chat.side_effect = [

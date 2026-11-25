@@ -187,18 +187,20 @@ def blocks_from_content_list_v2(pages, page_sizes, layout=None):
             page_layout = geometry.get(page_index, {})
             physical = _matching_layout_block(rect, page_layout.get("preproc_blocks", []))
             paragraph = _matching_layout_block(rect, page_layout.get("para_blocks", []))
+            continuation = ""
             if physical and _redistributed_paragraph(paragraph, rect, bool(text)):
-                # MinerU 把后续栏/页的行接到首块，同时清空续块。
-                # preproc_blocks 仍保留每个物理框原有的行（包含公式及引用）。
+                # preproc_blocks retains the text at its physical location before MinerU joins frames.
                 text = merge_lines(physical.get("lines")) or text
+                continuation = _first_continuation_line(paragraph, rect)
             blocks.append({
                 "id": "p%dv%d" % (page_no, item_index),
                 "page": page_no,
                 "type": "title" if kind == "title" else "text",
                 "bbox": [x0, y0, x1, y1],
                 "source": text,
+                "_continuation": continuation,
             })
-    return relink(blocks)
+    return _join_frame_clauses(blocks)
 
 
 def extract_content_list_v2(work_dir):
@@ -227,16 +229,49 @@ def _matching_layout_block(rect, blocks):
     return best
 
 
-def _redistributed_paragraph(paragraph, rect, has_text):
-    if not has_text or (paragraph and paragraph.get("lines_deleted")):
-        return True
-    if not paragraph:
-        return False
-    return any(
+def _outside_frame(line, rect):
+    return (
         any(span.get("cross_page") for span in line.get("spans", []))
         or (line.get("bbox") and not _line_in_frame(fitz.Rect(line["bbox"]), rect + (-3, -3, 3, 3)))
-        for line in paragraph.get("lines", [])
     )
+
+
+def _redistributed_paragraph(paragraph, rect, has_text):
+    return (not has_text or (paragraph and paragraph.get("lines_deleted"))
+            or any(_outside_frame(line, rect) for line in (paragraph or {}).get("lines", [])))
+
+
+def _first_continuation_line(paragraph, rect):
+    for line in (paragraph or {}).get("lines", []):
+        if _outside_frame(line, rect):
+            return merge_lines([line])
+    return ""
+
+
+_FRAME_TAIL = re.compile(
+    r"(?<![A-Za-z])((?:however|nevertheless|nonetheless|therefore|consequently|accordingly|thus|"
+    r"in contrast|in particular|for example|for instance),?(?:\s+(?:this|these|those|the|such))?)$",
+    re.IGNORECASE,
+)
+
+
+def _join_frame_clauses(blocks):
+    """Keep a dangling transition with its clause across a verified physical break."""
+    for i, block in enumerate(blocks):
+        continuation = block.pop("_continuation", "")
+        if not continuation or i + 1 == len(blocks):
+            continue
+        following = blocks[i + 1]
+        # Match the actual opening words of the continuation. PDF block order alone
+        # cannot establish that two neighboring frames are part of the same paragraph.
+        opening = re.findall(r"[A-Za-z]+", clean_source(continuation))[:4]
+        next_words = re.findall(r"[A-Za-z]+", clean_source(following["source"]))[:len(opening)]
+        tail = _FRAME_TAIL.search(block["source"])
+        if (tail and len(opening) >= 2 and opening == next_words
+                and re.match(r"^[a-z]", following["source"])):
+            block["source"] = block["source"][:tail.start()].rstrip()
+            following["source"] = tail.group() + " " + following["source"]
+    return relink(blocks)
 
 
 def blocks_from_layout(layout):
@@ -251,8 +286,10 @@ def blocks_from_layout(layout):
             box = fitz.Rect(block["bbox"])
             lines = block.get("lines") or []
             physical = _matching_layout_block(box, page.get("preproc_blocks", []))
+            continuation = ""
             if physical and _redistributed_paragraph(block, box, bool(lines)):
                 lines = physical.get("lines") or lines
+                continuation = _first_continuation_line(block, box)
             text = merge_lines(lines)
             rects = [fitz.Rect(line["bbox"]) for line in lines if line.get("bbox")]
             if rects:
@@ -269,9 +306,10 @@ def blocks_from_layout(layout):
                 "type": block.get("type"),
                 "bbox": [box.x0, box.y0, box.x1, box.y1],
                 "source": text,
+                "_continuation": continuation,
             })
         blocks.extend(page_blocks)
-    return relink(blocks)
+    return _join_frame_clauses(blocks)
 
 
 def relink(blocks):
