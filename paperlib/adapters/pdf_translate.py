@@ -584,6 +584,17 @@ def _image_rects(page_info):
     return rects
 
 
+def _caption_rects(page_info):
+    """Captions and table notes remain fixed alongside their graphic bodies."""
+    return [
+        fitz.Rect(child["bbox"])
+        for block in page_info.get("para_blocks") or []
+        if block.get("type") in ("image", "table", "chart")
+        for child in block.get("blocks") or []
+        if child.get("bbox") and (child.get("type") or "").endswith(("_caption", "_footnote"))
+    ]
+
+
 def _sample_color(pix, page_rect, rect, inset=2.0, band=5.0):
     """块外环带中位色：彩条 / 灰底 / 照片旁都能贴合，不留下白块。"""
     samples = pix.samples
@@ -755,15 +766,19 @@ def _column_runs(items, obstacles):
     return runs
 
 
-def _run_bottom(run, obstacles, page_rect):
-    rect = run[-1]["rect"]
-    bottom = min(page_rect.y1, rect.y1 + run[-1]["fs"] * 0.85)
-    for boundary in obstacles:
-        # Only borrow existing space within this column, stopping at the nearest fixed object.
-        overlap = min(rect.x1, boundary.x1) - max(rect.x0, boundary.x0)
-        if boundary.y0 > rect.y0 + 1 and overlap > 1:
-            bottom = min(bottom, boundary.y0 - 1.2)
-    return bottom
+def _frame_limits(item, right, obstacles, page_rect):
+    """Keep a frame on its original side of every object crossing its own width."""
+    rect = item["rect"]
+    top = page_rect.y0
+    bottom = page_rect.y1
+    for obstacle in obstacles:
+        if min(right, obstacle.x1) - max(item["left"], obstacle.x0) <= 1:
+            continue
+        if obstacle.y0 <= rect.y0:
+            top = max(top, obstacle.y1 + 1.5)
+        else:
+            bottom = min(bottom, obstacle.y0 - 1.5)
+    return top, bottom
 
 
 def _story(item, size, leading, css, archive):
@@ -778,7 +793,10 @@ def _story(item, size, leading, css, archive):
     return fitz.Story(html=body, user_css=style, archive=archive)
 
 
-def _fit_run(run, bottom, css, archive):
+def _fit_run(run, obstacles, page_rect, css, archive):
+    last = run[-1]
+    run_bottom = min(page_rect.y1, last["rect"].y1 + last["fs"] * 0.85)
+    limits = [_frame_limits(item, item["rect"].x1, obstacles, page_rect) for item in run]
     original_leading = median(item["leading"] for item in run)
     gaps = []
     for a, b in zip(run, run[1:]):
@@ -797,7 +815,9 @@ def _fit_run(run, bottom, css, archive):
         y = run[0]["rect"].y0
         for index, item in enumerate(run):
             box = item["rect"]
-            y = max(y, item["graphic_floor"])
+            top, limit = limits[index]
+            y = max(y, top)
+            bottom = min(run_bottom, limit)
             if bottom <= y:
                 break
             floor = min(8.0, item["fs"])
@@ -809,13 +829,16 @@ def _fit_run(run, bottom, css, archive):
             right = box.x1
             if item.get("right", right) > right and (more or filled[3] > size * leading * 1.1):
                 expanded = item["right"]
-                story.reset()
-                wide_more, wide_filled = story.place(
-                    fitz.Rect(0, 0, expanded - left, bottom - y),
-                    flags=fitz.mupdf.FZ_PLACE_STORY_FLAG_NO_OVERFLOW,
-                )
-                if not wide_more and wide_filled[3] <= size * leading * 1.1:
-                    more, filled, right = wide_more, wide_filled, expanded
+                wide_top, wide_limit = _frame_limits(item, expanded, obstacles, page_rect)
+                wide_bottom = min(run_bottom, wide_limit)
+                if wide_top <= y < wide_bottom:
+                    story.reset()
+                    wide_more, wide_filled = story.place(
+                        fitz.Rect(0, 0, expanded - left, wide_bottom - y),
+                        flags=fitz.mupdf.FZ_PLACE_STORY_FLAG_NO_OVERFLOW,
+                    )
+                    if not wide_more and wide_filled[3] <= size * leading * 1.1:
+                        more, filled, right, bottom = wide_more, wide_filled, expanded, wide_bottom
             height = filled[3] + 0.15
             if more or height <= 0.15 or y + height > bottom + 0.05:
                 break
@@ -836,7 +859,7 @@ def _fit_page(items, forbidden, page_rect, css, archive):
             item = run[0]
             item["right"] = _fit_right(item, forbidden + [it["rect"] for it in items if it is not item], page_rect)
         obstacles = forbidden + [item["rect"] for other in runs if other is not run for item in other]
-        fitted = _fit_run(run, _run_bottom(run, obstacles, page_rect), css, archive)
+        fitted = _fit_run(run, obstacles, page_rect, css, archive)
         if fitted or len(run) == 1:
             ready.extend(fitted)
             continue
@@ -844,13 +867,12 @@ def _fit_page(items, forbidden, page_rect, css, archive):
         # This also keeps the position of any original text left on the page.
         for item in run:
             boundaries = obstacles + [other["rect"] for other in run if other is not item]
-            bottom = _run_bottom([item], boundaries, page_rect)
-            ready.extend(_fit_run([item], bottom, css, archive))
+            ready.extend(_fit_run([item], boundaries, page_rect, css, archive))
     return ready
 
 
 def _protected_boxes(page_info, images, lines, items):
-    forbidden = list(images)
+    forbidden = list(images) + _caption_rects(page_info)
     for block in (page_info.get("para_blocks") or []) + (page_info.get("discarded_blocks") or []):
         if block.get("bbox") and block.get("type") not in (*TRANSLATABLE, "image", "chart", "table"):
             forbidden.append(fitz.Rect(block["bbox"]))
@@ -958,14 +980,7 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                                 if line.width > rect.width * 0.5 and _line_in_frame(line, rect)),
                                default=rect.x0)
                     left = min(rect.x0 + 3, max(rect.x0, left))
-                    # Captions can have a parser box starting just inside the graphic.
-                    below_graphics = (
-                        image.y1 + 1.5 for image in images
-                        if image.y0 < rect.y0 < image.y1
-                        and (image & rect).width >= 0.55 * rect.width
-                    )
                     items.append({"id": block["id"], "rect": rect, "type": kind, "left": left,
-                                  "graphic_floor": max(below_graphics, default=page_rect.y0),
                                   "fs": size, "leading": leading, "color": color, "html": build_html(zh)})
                     continue
                 blocked.append(rect)

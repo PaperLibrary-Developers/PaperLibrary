@@ -124,6 +124,42 @@ class TranslationRenderTest(unittest.TestCase):
                 self.assertIn("这是用于验收的科学段落。", doc[0].get_text())
             self.assertFalse(list(translator.article_dir.glob(".translate-*")))
 
+    def test_wider_reflowed_paragraph_stays_below_adjacent_figure_caption(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.pdf"
+            output = Path(folder) / "translation.pdf"
+            caption = fitz.Rect(185, 116, 347, 146)
+            with fitz.open() as doc:
+                page = doc.new_page(width=400, height=450)
+                page.draw_rect(fitz.Rect(185, 79, 345, 112))
+                page.insert_text((190, 127), "Figure caption, kept in place.", fontsize=9)
+                page.insert_text((42, 92), "Narrow original paragraph.", fontsize=9)
+                page.insert_text((42, 170), "Wider original paragraph begins below the figure.", fontsize=9)
+                doc.save(source)
+                before = page.get_pixmap(clip=caption, dpi=144).samples
+            layout = {"pdf_info": [{"page_idx": 0, "para_blocks": [{
+                "type": "image",
+                "bbox": [185, 79, 345, 112],
+                "blocks": [
+                    {"type": "image_body", "bbox": [185, 79, 345, 112]},
+                    {"type": "image_caption", "bbox": list(caption)},
+                ],
+            }]}]}
+            blocks = [
+                {"id": "narrow", "page": 1, "bbox": [40, 80, 180, 154], "source": "Narrow original paragraph.",
+                 "translation": "这是窄段。"},
+                {"id": "wide", "page": 1, "bbox": [40, 154, 230, 207], "source": "Wider original paragraph.",
+                 "translation": "这是原图注下方的正文，宽段仍须完整回填。"},
+            ]
+            font_dir, font_name = _font_dir()
+            report = render_translated(pdf_path=source, layout=layout, translations=blocks,
+                                       out_pdf=output, font_dir=font_dir, font_name=font_name)
+            self.assertEqual(report[0]["replaced"], 2)
+            with fitz.open(output) as doc:
+                page = doc[0]
+                self.assertEqual(page.get_pixmap(clip=caption, dpi=144).samples, before)
+                self.assertGreaterEqual(page.search_for("这是原图注下方的正文")[0].y0, caption.y1)
+
     def test_same_column_compacts_and_overflow_keeps_original(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.pdf"
