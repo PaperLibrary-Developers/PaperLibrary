@@ -7,10 +7,18 @@ export const SCALE_STEP = 0.15
 export const DEP_HINT = '内置阅读器需要可选依赖 pdfjs-dist：请在项目目录执行 npm install'
 export const GENERIC_FAIL = '内置阅读器打不开这个 PDF'
 
-export const ANNOT_BUILTIN_COLORS = ['#f2c433', '#3f9e77', '#4f8fd6', '#dd7a9d']
+/* 取色条的内置颜色：前四个是历史内置色（黄/绿/蓝/粉），保留下来是为了让旧批注和
+   blue/green/pink 这些别名仍然算「内置色」；后四个是参考 GoodNotes 补的柔和色，
+   压成 38% 透明后彼此仍分得清。第一个仍是默认黄色。 */
+export const ANNOT_BUILTIN_COLORS = [
+  '#f2c433', '#3f9e77', '#4f8fd6', '#dd7a9d',
+  '#f2a65a', '#5bb8c9', '#b18ede', '#c9c4b8'
+]
 export const ANNOT_LEGACY_COLORS = { yellow: '#f2c433', green: '#3f9e77', blue: '#4f8fd6', pink: '#dd7a9d' }
 export const ANNOT_DEFAULT_COLOR = ANNOT_BUILTIN_COLORS[0]
 export const ANNOT_PALETTE_KEY = 'lv:annot-palette'
+/* 上次用的颜色：换页面/重开阅读器都延续，跟 GoodNotes 的「记住当前笔色」一致 */
+export const ANNOT_COLOR_KEY = 'lv:annot-color'
 export const ANNOT_CUSTOM_MAX = 12
 export const ANNOT_HEX_RE = /^#([0-9a-f]{6}|[0-9a-f]{3})$/i
 export const ANNOT_HL_ALPHA = 0.38
@@ -82,6 +90,21 @@ export function writeCustomColors (list, storage) {
   const store = resolveStorage(storage)
   if (!store) return
   try { store.setItem(ANNOT_PALETTE_KEY, JSON.stringify(list || [])) } catch (err) {}
+}
+
+export function readAnnotColor (storage) {
+  const store = resolveStorage(storage)
+  if (!store) return ''
+  let raw = null
+  try { raw = store.getItem(ANNOT_COLOR_KEY) } catch (err) { return '' }
+  return normalizeColor(raw)
+}
+
+export function writeAnnotColor (hex, storage) {
+  const store = resolveStorage(storage)
+  const value = normalizeColor(hex)
+  if (!store || !value) return
+  try { store.setItem(ANNOT_COLOR_KEY, value) } catch (err) {}
 }
 
 export function annotPalette (storage) {

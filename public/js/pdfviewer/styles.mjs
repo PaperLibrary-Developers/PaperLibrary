@@ -28,22 +28,16 @@ export const STYLE_TEXT = `
   flex: 0 0 auto;
   position: relative;
   display: flex;
+  /* 一行排完为默认目标：整体居中，放不下才折行（不再固定两排） */
   flex-wrap: wrap;
   align-items: center;
-  /* 列间距给到组与组之间（组内另有 4px），不再靠竖线分隔：换行时不会留下悬空的线 */
-  gap: 6px 12px;
-  padding: 6px 8px;
+  justify-content: center;
+  gap: 6px 7px;
+  padding: 5px 7px;
   background: var(--surface-2, #f8f7f3);
   border-bottom: 1px solid var(--border, #e2dfd5);
 }
 .lv-pdf-viewer .lv-pdf-group { display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: nowrap; }
-/* 搜索组不许被压到内容宽度以下：flex 默认允许把 nowrap 的组压扁，
-   里面的按钮就会顶出工具栏右边界（1180/1680 宽度实测溢出 43px）。
-   min-width: min-content 让浏览器改用换行，而不是溢出。 */
-.lv-pdf-viewer .lv-pdf-group.grow { flex: 1 1 200px; min-width: min-content; }
-/* 不再用 margin-left:auto：搜索组自己会撑满剩余宽度，右组本来就在最右。
-   去掉 auto 后，右组换行时会左对齐，不会孤零零挂在行尾。 */
-.lv-pdf-viewer .lv-pdf-group.right { flex-wrap: wrap; }
 
 .lv-pdf-viewer .lv-pdf-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
@@ -62,8 +56,58 @@ export const STYLE_TEXT = `
   font-weight: 600;
 }
 .lv-pdf-viewer .lv-pdf-btn:disabled { opacity: .45; cursor: default; transform: none; }
+/* 适宽 / 适页：共用一层描边和圆角，中间一道分隔线，点哪半边就是哪种 */
+.lv-pdf-viewer .lv-pdf-seg {
+  display: inline-flex; align-items: stretch; overflow: hidden;
+  background: var(--surface, #fffefb);
+  border: 1px solid var(--border, #e2dfd5);
+  border-radius: var(--radius-sm, 8px);
+}
+.lv-pdf-viewer .lv-pdf-seg-btn {
+  border: 0; background: transparent; color: var(--text, #26251f);
+  padding: 4px 10px; font-size: 12.5px; line-height: 1.6;
+  cursor: pointer; white-space: nowrap;
+  transition: background .15s, color .15s;
+}
+.lv-pdf-viewer .lv-pdf-seg-btn + .lv-pdf-seg-btn { border-left: 1px solid var(--border, #e2dfd5); }
+.lv-pdf-viewer .lv-pdf-seg-btn:hover { background: var(--surface-3, #efeee8); }
+.lv-pdf-viewer .lv-pdf-seg-btn.active {
+  background: var(--accent-soft, #e4efea); color: var(--accent-text, #235648); font-weight: 600;
+}
+.lv-pdf-viewer .lv-pdf-seg-btn:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: -2px; }
+
+/* 荧光笔 · 便签 · 批注：一个连体框，中间用分隔线断开（和「适宽/适页」同一套观感） */
+.lv-pdf-viewer .lv-pdf-toolseg {
+  display: inline-flex; align-items: stretch;
+  background: var(--surface, #fffefb);
+  border: 1px solid var(--border, #e2dfd5);
+  border-radius: var(--radius-sm, 8px);
+}
+.lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn {
+  border: 0; border-radius: 0; background: transparent;
+  height: 30px; padding: 6px 8px; gap: 0;
+}
+.lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn + .lv-pdf-btn { border-left: 1px solid var(--border, #e2dfd5); }
+/* 不做 overflow:hidden（批注条数角标要探出框外），改成首尾自己带圆角 */
+.lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn:first-child { border-radius: calc(var(--radius-sm, 8px) - 1px) 0 0 calc(var(--radius-sm, 8px) - 1px); }
+.lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn:last-child { border-radius: 0 calc(var(--radius-sm, 8px) - 1px) calc(var(--radius-sm, 8px) - 1px) 0; }
+.lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn:hover { background: var(--surface-3, #efeee8); }
+.lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn.active {
+  background: var(--accent-soft, #e4efea); color: var(--accent-text, #235648);
+}
+/* 带角标的按钮（批注条数） */
+.lv-pdf-viewer .lv-pdf-badged { position: relative; }
+.lv-pdf-viewer .lv-pdf-badge {
+  position: absolute; top: -4px; right: -4px;
+  min-width: 14px; height: 14px; padding: 0 3px;
+  font-size: 9.5px; line-height: 13px; font-weight: 700; text-align: center;
+  color: #fff; background: var(--accent, #2f6f5e);
+  border: 1px solid var(--surface, #fffefb); border-radius: 99px;
+  pointer-events: none;
+}
+.lv-pdf-viewer .lv-pdf-badge[hidden] { display: none; }
 /* 只有一个图标的按钮：左右内边距收窄、上下补足，高度与文字按钮一致 */
-.lv-pdf-viewer .lv-pdf-iconbtn { padding: 7px 8px; gap: 0; }
+.lv-pdf-viewer .lv-pdf-iconbtn { padding: 6px 7px; gap: 0; }
 
 .lv-pdf-viewer .lv-pdf-input {
   min-width: 0;
@@ -75,7 +119,7 @@ export const STYLE_TEXT = `
 .lv-pdf-viewer .lv-pdf-input:focus { border-color: var(--accent, #2f6f5e); }
 .lv-pdf-viewer .lv-pdf-input:focus-visible,
 .lv-pdf-viewer .lv-pdf-btn:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
-.lv-pdf-viewer .lv-pdf-page { flex: 0 0 auto; width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
+.lv-pdf-viewer .lv-pdf-page { flex: 0 0 auto; width: 33px; padding: 4px 2px; text-align: center; font-variant-numeric: tabular-nums; }
 /* width: 0 让输入框的固有宽度不参与最小宽度计算：搜索组因此能一路压到按钮的宽度，
    而不会被输入框默认的 20 字符宽度顶住（否则窄屏下按钮会溢出工具栏）。 */
 .lv-pdf-viewer .lv-pdf-search { flex: 1 1 110px; width: 0; min-width: 70px; max-width: 260px; }
@@ -93,7 +137,8 @@ export const STYLE_TEXT = `
 .lv-pdf-viewer .lv-pdf-zoom { min-width: 42px; text-align: center; }
 
 /* ---------- 阅读区 ---------- */
-.lv-pdf-viewer .lv-pdf-body { position: relative; flex: 1 1 auto; min-height: 0; }
+.lv-pdf-viewer .lv-pdf-body { position: relative; display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.lv-pdf-viewer .lv-pdf-main { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .lv-pdf-viewer .lv-pdf-scroll {
   position: absolute; inset: 0;
   overflow: auto;
@@ -186,6 +231,110 @@ export const STYLE_TEXT = `
   pointer-events: none;
 }
 
+/* ---------- 左侧导航抽屉（批注 / 搜索共用） ----------
+   宽度从 0 过渡到 320px：阅读区被同步挤窄，文档不会被侧栏盖住；
+   只在 width 上做过渡，内容宽度固定，所以是「拉开」而不是「压扁」。 */
+.lv-pdf-viewer .lv-pdf-drawer {
+  flex: 0 0 auto; width: 0; min-width: 0;
+  overflow: hidden;
+  background: var(--surface, #fffefb);
+  transition: width .26s cubic-bezier(.22, .61, .36, 1);
+}
+.lv-pdf-viewer .lv-pdf-drawer.is-open { width: 320px; }
+/* 手机宽度下 PDF 栏本身只有 300 多像素：侧栏改为整屏，避免只剩一条缝 */
+@media (max-width: 520px) {
+  .lv-pdf-viewer .lv-pdf-drawer.is-open { width: 100%; }
+  .lv-pdf-viewer .lv-pdf-drawer-inner { width: 100%; }
+}
+.lv-pdf-viewer .lv-pdf-drawer-inner {
+  width: 320px; height: 100%; min-height: 0;
+  display: flex; flex-direction: column;
+  /* 描边画在内层：外层收起时宽度正好是 0，不会留 1px */
+  border-right: 1px solid var(--border, #e2dfd5);
+}
+.lv-pdf-viewer .lv-pdf-drawer-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px 7px 8px;
+  border-bottom: 1px solid var(--border, #e2dfd5);
+}
+.lv-pdf-viewer .lv-pdf-drawer-close {
+  flex: 0 0 auto; width: 24px; height: 24px; padding: 0;
+  display: grid; place-items: center;
+  font-size: 16px; line-height: 1; color: var(--muted, #75726a);
+  background: transparent; border: 0; border-radius: 6px; cursor: pointer;
+}
+.lv-pdf-viewer .lv-pdf-drawer-close:hover { background: var(--surface-3, #efeee8); color: var(--text, #26251f); }
+.lv-pdf-viewer .lv-pdf-drawer-title {
+  font-size: 12.5px; font-weight: 600; color: var(--text, #26251f);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lv-pdf-viewer .lv-pdf-drawer-pane {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+}
+.lv-pdf-viewer .lv-pdf-drawer-pane[hidden] { display: none; }
+.lv-pdf-viewer .lv-pdf-drawer-searchrow {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 8px; border-bottom: 1px solid var(--border, #e2dfd5);
+}
+.lv-pdf-viewer .lv-pdf-search-input {
+  flex: 1 1 auto; min-width: 0;
+  padding: 5px 8px; font-size: 12.5px; line-height: 1.6;
+  color: var(--text, #26251f); background: var(--surface-2, #f8f7f3);
+  border: 1px solid var(--border, #e2dfd5); border-radius: 6px; outline: none;
+}
+.lv-pdf-viewer .lv-pdf-search-input:focus { border-color: var(--accent, #2f6f5e); background: var(--surface, #fffefb); }
+.lv-pdf-viewer .lv-pdf-search-go {
+  flex: 0 0 auto; width: 28px; height: 28px; padding: 0;
+  display: grid; place-items: center;
+  color: var(--accent-text, #235648); background: var(--accent-soft, #e4efea);
+  border: 1px solid rgba(47, 111, 94, .28); border-radius: 6px; cursor: pointer;
+}
+.lv-pdf-viewer .lv-pdf-search-go:hover { filter: brightness(.96); }
+.lv-pdf-viewer .lv-pdf-search-meta {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; font-size: 12px; color: var(--muted, #75726a);
+  border-bottom: 1px solid var(--border, #e2dfd5);
+}
+.lv-pdf-viewer .lv-pdf-search-count {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lv-pdf-viewer .lv-pdf-search-steps { display: flex; gap: 4px; }
+.lv-pdf-viewer .lv-pdf-search-step {
+  width: 24px; height: 22px; padding: 0; display: grid; place-items: center;
+  font-size: 12px; color: var(--text, #26251f); background: var(--surface, #fffefb);
+  border: 1px solid var(--border, #e2dfd5); border-radius: 5px; cursor: pointer;
+}
+.lv-pdf-viewer .lv-pdf-search-step:hover:not([disabled]) { background: var(--surface-3, #efeee8); }
+.lv-pdf-viewer .lv-pdf-search-step[disabled] { opacity: .4; cursor: default; }
+.lv-pdf-viewer .lv-pdf-search-list {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px;
+  display: flex; flex-direction: column; gap: 4px;
+  scrollbar-width: thin;
+}
+.lv-pdf-viewer .lv-pdf-hit {
+  display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left;
+  padding: 7px 8px; font: inherit; font-size: 12px; line-height: 1.55;
+  color: var(--text, #26251f); background: transparent;
+  border: 1px solid transparent; border-radius: 6px; cursor: pointer;
+}
+.lv-pdf-viewer .lv-pdf-hit:hover { background: var(--surface-2, #f8f7f3); border-color: var(--border, #e2dfd5); }
+.lv-pdf-viewer .lv-pdf-hit.is-active {
+  background: var(--accent-soft, #e4efea); border-color: var(--accent, #2f6f5e);
+  color: var(--accent-text, #235648);
+}
+.lv-pdf-viewer .lv-pdf-hit-page {
+  flex: 0 0 auto; padding-top: 1px;
+  font-size: 11px; color: var(--muted, #75726a); font-variant-numeric: tabular-nums;
+}
+.lv-pdf-viewer .lv-pdf-hit-text { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+.lv-pdf-viewer .lv-pdf-hit mark { padding: 0 1px; border-radius: 2px; background: #f7dd7d; color: #2a2410; }
+.lv-pdf-viewer .lv-pdf-search-empty {
+  padding: 20px 12px; text-align: center;
+  font-size: 12.5px; line-height: 1.7; color: var(--muted, #75726a);
+}
+
 /* ============================ 批注：荧光笔 / 便签 ============================ */
 .lv-pdf-viewer .lv-annot-layer {
   position: absolute; inset: 0; z-index: 2;
@@ -202,6 +351,7 @@ export const STYLE_TEXT = `
   100% { box-shadow: 0 0 0 2px rgba(47, 111, 94, 0); }
 }
 
+.lv-pdf-viewer .lv-annot-note svg { width: 13px; height: 13px; display: block; }
 .lv-pdf-viewer .lv-annot-note {
   position: absolute; width: 20px; height: 20px; margin: 0; padding: 0;
   display: flex; align-items: center; justify-content: center;
@@ -224,7 +374,8 @@ export const STYLE_TEXT = `
 .lv-pdf-viewer .lv-annot-note:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
 
 .lv-pdf-viewer .lv-annot-hint {
-  position: absolute; left: 50%; top: 8px; transform: translateX(-50%);
+  /* 放在底部：顶部区域要和取色条、工具栏错开 */
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   z-index: 3; max-width: calc(100% - 24px);
   padding: 4px 10px; font-size: 12px; line-height: 1.5;
   color: var(--accent-text, #235648); background: var(--accent-soft, #e4efea);
@@ -244,10 +395,10 @@ export const STYLE_TEXT = `
   display: inline-flex; align-items: center; justify-content: center;
   flex: 0 0 auto; line-height: 0;
 }
-.lv-pdf-viewer .lv-pdf-icon { width: 14px; height: 14px; }
+.lv-pdf-viewer .lv-pdf-icon { width: 18px; height: 18px; }
 .lv-pdf-viewer .lv-annot-kind { width: 14px; height: 14px; }
-.lv-pdf-viewer .lv-pdf-icon svg,
-.lv-pdf-viewer .lv-annot-kind svg { display: block; }
+.lv-pdf-viewer .lv-pdf-icon svg { display: block; width: 18px; height: 18px; }
+.lv-pdf-viewer .lv-annot-kind svg { display: block; width: 14px; height: 14px; }
 .lv-pdf-viewer .lv-pdf-color {
   width: 26px; height: 26px; padding: 0; flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
@@ -265,64 +416,56 @@ export const STYLE_TEXT = `
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .16);
 }
 
-.lv-pdf-viewer .lv-pdf-palette {
+/* ---------- 荧光笔取色条（GoodNotes 风格：一排圆点，选中的加一圈） ----------
+   挂在工具栏下方、跟着「荧光笔」按钮走；工具开着就一直显示，换色不用反复开关。 */
+.lv-pdf-viewer .lv-pdf-inkbar {
   position: absolute; z-index: 6;
-  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  width: 158px; padding: 9px;
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 9px;
   background: var(--surface, #fffefb);
-  border: 1px solid var(--border, #e2dfd5);
-  border-radius: 10px;
+  border: 1px solid var(--border-strong, #cfcabb);
+  border-radius: 999px;
   box-shadow: var(--shadow-2, 0 6px 22px rgba(35, 33, 25, .10), 0 2px 6px rgba(35, 33, 25, .06));
+  transform-origin: 20% 0;
+  animation: lv-inkbar-in .16s cubic-bezier(.22, .61, .36, 1);
 }
-.lv-pdf-viewer .lv-pdf-palette[hidden] { display: none; }
-.lv-pdf-viewer .lv-palette-dot {
+.lv-pdf-viewer .lv-pdf-inkbar[hidden] { display: none; }
+@keyframes lv-inkbar-in {
+  from { opacity: 0; transform: translateY(-4px) scale(.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.lv-pdf-viewer .lv-ink-dot {
   position: relative; width: 22px; height: 22px; padding: 0;
-  border: 2px solid transparent; border-radius: 50%; cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14);
-  transition: transform .12s ease, border-color .12s ease;
+  border: 0; border-radius: 50%; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
+  transition: transform .12s ease, box-shadow .12s ease;
 }
-.lv-pdf-viewer .lv-palette-dot:hover { transform: scale(1.12); }
-.lv-pdf-viewer .lv-palette-dot:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
-.lv-pdf-viewer .lv-palette-dot.active {
-  border-color: var(--accent, #2f6f5e);
-  box-shadow: inset 0 0 0 2px var(--surface, #fffefb);
+.lv-pdf-viewer .lv-ink-dot:hover { transform: scale(1.1); }
+.lv-pdf-viewer .lv-ink-dot:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 2px; }
+.lv-pdf-viewer .lv-ink-dot.active {
+  transform: scale(1.06);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12), 0 0 0 2px var(--surface, #fffefb), 0 0 0 4px var(--accent, #2f6f5e);
 }
-.lv-pdf-viewer .lv-palette-del {
+.lv-pdf-viewer .lv-ink-del {
   position: absolute; top: -5px; right: -5px;
   width: 13px; height: 13px; border-radius: 50%;
   display: none; align-items: center; justify-content: center;
   font-size: 9px; line-height: 1; color: #fff;
   background: var(--danger, #b4453a); border: 1px solid var(--surface, #fffefb);
 }
-.lv-pdf-viewer .lv-palette-dot.custom:hover .lv-palette-del { display: flex; }
-.lv-pdf-viewer .lv-palette-add {
+.lv-pdf-viewer .lv-ink-dot.custom:hover .lv-ink-del { display: flex; }
+
+.lv-pdf-viewer .lv-ink-add {
   width: 22px; height: 22px; padding: 0; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 14px; line-height: 1;
+  font-size: 13px; line-height: 1;
   color: var(--muted, #75726a); background: transparent;
   border: 1px dashed var(--border-strong, #cfcabb); cursor: pointer;
 }
-.lv-pdf-viewer .lv-palette-add:hover { color: var(--accent-text, #235648); border-color: var(--accent, #2f6f5e); }
-.lv-pdf-viewer .lv-palette-add[disabled] { opacity: .4; cursor: default; }
-.lv-pdf-viewer .lv-palette-hint {
-  flex: 0 0 100%; font-size: 11px; line-height: 1.4; color: var(--muted, #75726a);
-}
+.lv-pdf-viewer .lv-ink-add:hover { color: var(--accent-text, #235648); border-color: var(--accent, #2f6f5e); }
 
-.lv-pdf-viewer .lv-annot-panel {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 258px; z-index: 3;
-  display: flex; flex-direction: column; min-height: 0;
-  background: var(--surface, #fffefb);
-  border-left: 1px solid var(--border, #e2dfd5);
-  box-shadow: -8px 0 20px rgba(28, 25, 15, .10);
-}
-.lv-pdf-viewer .lv-annot-panel[hidden] { display: none; }
-.lv-pdf-viewer .lv-annot-panel-head {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
-  padding: 7px 8px 7px 10px;
-  font-size: 12.5px; font-weight: 600; color: var(--text, #26251f);
-  border-bottom: 1px solid var(--border, #e2dfd5);
-}
-.lv-pdf-viewer .lv-annot-panel-head .right { margin-left: auto; display: flex; gap: 4px; }
+.lv-pdf-viewer .lv-ink-add[disabled] { opacity: .4; cursor: default; }
+
 .lv-pdf-viewer .lv-annot-list {
   flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px;
   display: flex; flex-direction: column; gap: 4px;

@@ -1,4 +1,4 @@
-/* PDF 阅读器 DOM 与 SVG 图标工具 */
+/* PDF 阅读器 DOM、SVG 图标与本地反色偏好工具 */
 import { ANNOT_DEFAULT_COLOR, clamp01, normalizeColor } from './annot-model.mjs'
 
 const hasWindow = typeof window !== 'undefined'
@@ -52,32 +52,29 @@ export function svgNode (tag, attrs) {
 
 export function annotIcon (kind, color) {
   const hex = normalizeColor(color) || ANNOT_DEFAULT_COLOR
+  /* 24 视框、1.8 描边、全圆角端点：和 macOS / iOS 上那套线性图标同一路数。
+     颜色只用在「正在用的那支笔」上（笔头划过的一道 + 便签的折角），
+     其余线条跟随按钮文字色，深浅主题都不用改。 */
   const svg = svgNode('svg', {
-    width: '14', height: '14', viewBox: '0 0 16 16',
+    width: '18', height: '18', viewBox: '0 0 24 24', fill: 'none',
+    stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
     'aria-hidden': 'true', focusable: 'false'
   })
   if (kind === 'note') {
+    // 便签：带折角的便条 + 两行字
     svg.appendChild(svgNode('path', {
-      d: 'M3 2.5h10v8.2l-3.3 3.3H3z',
-      fill: hex, 'fill-opacity': '0.22', stroke: hex, 'stroke-width': '1.1', 'stroke-linejoin': 'round'
+      d: 'M15.4 3.4H6.2A2.8 2.8 0 0 0 3.4 6.2v11.6a2.8 2.8 0 0 0 2.8 2.8h11.6a2.8 2.8 0 0 0 2.8-2.8V9.4Z'
     }))
+    svg.appendChild(svgNode('path', { d: 'M7.8 12.4h8.4M7.8 16h5.2' }))
     svg.appendChild(svgNode('path', {
-      d: 'M9.7 14v-3.3h3.3', fill: 'none', stroke: hex, 'stroke-width': '1.1', 'stroke-linejoin': 'round'
-    }))
-    svg.appendChild(svgNode('path', {
-      d: 'M5.2 7.6h5.6', fill: 'none', stroke: hex, 'stroke-width': '1.4', 'stroke-linecap': 'round'
+      d: 'M15.4 3.4v6h6', fill: hex, 'fill-opacity': '0.22', stroke: hex
     }))
     return svg
   }
-  svg.appendChild(svgNode('path', {
-    d: 'M4.6 9.4 10.9 3.1a1.7 1.7 0 0 1 2.4 2.4L7 11.8z',
-    fill: 'currentColor', 'fill-opacity': '0.14',
-    stroke: 'currentColor', 'stroke-width': '1.1', 'stroke-linejoin': 'round'
-  }))
-  svg.appendChild(svgNode('path', {
-    d: 'M6.9 11.7 4.7 9.5 2.3 13.7z',
-    fill: hex, stroke: hex, 'stroke-width': '0.6', 'stroke-linejoin': 'round'
-  }))
+  // 荧光笔：斜握的笔身 + 笔头，底部一道当前颜色的划痕
+  svg.appendChild(svgNode('path', { d: 'm9.4 11.2-5.6 5.6v3.3h8.8l3-3' }))
+  svg.appendChild(svgNode('path', { d: 'M21.9 11.8 17.6 16.1a2.2 2.2 0 0 1-3.1 0l-5.2-5.2a2.2 2.2 0 0 1 0-3.1L13.6 3.5Z' }))
+  svg.appendChild(svgNode('path', { d: 'M3.8 21.3h16.4', stroke: hex, 'stroke-width': '2.6' }))
   return svg
 }
 

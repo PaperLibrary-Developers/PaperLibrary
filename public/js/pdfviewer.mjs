@@ -1,5 +1,5 @@
 /* 内置 PDF 阅读器门面入口（子模块拆分在 js/pdfviewer/ 下，对外导出保持 100% 兼容） */
-import { ANNOT_DEFAULT_COLOR, GENERIC_FAIL, MAX_SCALE, MIN_SCALE, clampScale } from './pdfviewer/annot-model.mjs'
+import { ANNOT_DEFAULT_COLOR, GENERIC_FAIL, MAX_SCALE, MIN_SCALE, clampScale, readAnnotColor } from './pdfviewer/annot-model.mjs'
 import { cancelRaf, isNightTheme, requestRaf, scrollPagePointIntoView, viewportAnchor } from './pdfviewer/dom.mjs'
 import { FALLBACK_FIND_STATE, MIN_CONTAINER_SIZE, getPdfjsBase, loadPdfDocument, pdfjsUrls, setPdfjsBase } from './pdfviewer/loader.mjs'
 import { injectStyle, injectViewerCss } from './pdfviewer/styles.mjs'
@@ -41,6 +41,9 @@ async function mount (container, options) {
     rafId: 0,
     presetScale: 'page-width',
     matchQuery: '',
+    drawer: null,
+    drawerAnimating: false,
+    drawerTimer: 0,
     findState: FALLBACK_FIND_STATE,
     pdfDocument: null,
     regionSelect: false,
@@ -48,7 +51,7 @@ async function mount (container, options) {
     regionListeners: [],
     annotations: [],
     annotMode: null,
-    annotColor: ANNOT_DEFAULT_COLOR,
+    annotColor: readAnnotColor() || ANNOT_DEFAULT_COLOR,
     annotPress: null,
     paletteOpen: false,
     paletteListeners: [],
@@ -65,11 +68,12 @@ async function mount (container, options) {
     root: null, toolbar: null, body: null, scroll: null, viewer: null, status: null, statusText: null,
     pageInput: null, total: null, btnPrevPage: null, btnNextPage: null,
     zoom: null, btnZoomOut: null, btnZoomIn: null, btnFitWidth: null, btnFitPage: null,
-    searchInput: null, count: null, btnPrevMatch: null, btnNextMatch: null,
+    btnSearch: null, searchPanel: null, searchInput: null, searchGo: null, searchClose: null,
+    searchCount: null, searchPrev: null, searchNext: null, searchList: null,
     linkDownload: null, linkOpen: null,
     btnRegion: null, regionLayer: null, regionBox: null, regionHint: null,
-    btnHighlight: null, btnNote: null, btnColor: null, btnAnnotList: null,
-    highlightIcon: null, noteIcon: null, colorDot: null,
+    btnHighlight: null, btnNote: null, btnAnnotList: null,
+    highlightIcon: null, noteIcon: null,
     palette: null, colorInput: null,
     annotPanel: null, annotList: null, annotHint: null
   }
@@ -166,6 +170,8 @@ async function mount (container, options) {
 
   function scheduleScaleRefresh () {
     if (state.destroyed || state.tornDown || state.rafId) return
+    // 侧栏正在展开/收起：宽度每帧都在变，这时候重排 PDF 会一卡一卡的
+    if (state.drawerAnimating) return
     state.rafId = requestRaf(function () {
       state.rafId = 0
       if (state.destroyed || state.tornDown || !state.pdfViewer) return
@@ -226,6 +232,75 @@ async function mount (container, options) {
   const search = createSearchController(ctx)
   Object.assign(ctx, search)
 
+  /* ------------------------------ 左侧导航栏（批注 / 搜索共用） ------------------------------
+     复用同一个抽屉：宽度从 0 过渡到 320px，阅读区被挤开，文档不会被侧栏遮住；
+     收起时宽度回 0。过渡期间先不重排 PDF（ResizeObserver 每帧都触发会很卡），
+     等动画结束再按当前缩放方式重新适配一次。 */
+  function syncDrawerUi () {
+    const mode = state.drawer
+    if (ui.drawer) {
+      ui.drawer.classList.toggle('is-open', !!mode)
+      ui.drawer.setAttribute('aria-hidden', mode ? 'false' : 'true')
+    }
+    if (ui.drawerTitle) ui.drawerTitle.textContent = mode === 'search' ? '搜索' : '批注'
+    if (ui.annotPane) ui.annotPane.hidden = mode !== 'annot'
+    if (ui.searchPane) ui.searchPane.hidden = mode !== 'search'
+    if (ui.btnAnnotList) {
+      const on = mode === 'annot'
+      ui.btnAnnotList.classList.toggle('active', on)
+      ui.btnAnnotList.setAttribute('aria-pressed', on ? 'true' : 'false')
+    }
+    if (ui.btnSearch) {
+      const on = mode === 'search'
+      ui.btnSearch.classList.toggle('active', on)
+      ui.btnSearch.setAttribute('aria-expanded', on ? 'true' : 'false')
+    }
+  }
+
+  function startDrawerAnim () {
+    state.drawerAnimating = true
+    if (state.drawerTimer) {
+      try { clearTimeout(state.drawerTimer) } catch (err) {}
+    }
+    state.drawerTimer = setTimeout(function () {
+      state.drawerTimer = 0
+      if (state.destroyed || state.tornDown) return
+      state.drawerAnimating = false
+      scheduleScaleRefresh()
+    }, 320)
+  }
+
+  function openDrawer (mode) {
+    if (state.destroyed || state.tornDown) return
+    const want = mode === 'search' ? 'search' : 'annot'
+    const first = !state.drawer
+    state.drawer = want
+    state.annotPanelOpen = want === 'annot'
+    syncDrawerUi()
+    if (first) startDrawerAnim()
+    if (want === 'annot') {
+      state.annotPanelOpen = true
+      try { annot.renderAnnotPanel() } catch (err) {}
+    }
+  }
+
+  function closeDrawer () {
+    if (!state.drawer) return
+    state.drawer = null
+    state.annotPanelOpen = false
+    syncDrawerUi()
+    startDrawerAnim()
+    try { ui.searchInput.blur() } catch (err) {}
+  }
+
+  function toggleDrawer (mode) {
+    const want = mode === 'search' ? 'search' : 'annot'
+    if (state.drawer === want) closeDrawer()
+    else openDrawer(want)
+  }
+
+  Object.assign(ctx, { openDrawer, closeDrawer, toggleDrawer })
+
   /* ------------------------------ 清理与销毁 ------------------------------ */
   function teardown () {
     if (state.tornDown) return
@@ -269,6 +344,12 @@ async function mount (container, options) {
     }
     try { annot.closeAnnotPop({ keepChanges: false }) } catch (err) {}
     try { annot.closePalette() } catch (err) {}
+    try { search.cancelJumpGuard() } catch (err) {}
+    if (state.drawerTimer) {
+      try { clearTimeout(state.drawerTimer) } catch (err) {}
+      state.drawerTimer = 0
+    }
+    state.drawerAnimating = false
     state.paletteListeners.length = 0
     state.paletteOpen = false
     state.annotMode = null
