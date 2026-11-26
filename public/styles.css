@@ -1048,11 +1048,8 @@ a.external-title:hover { color: var(--accent-text); }
   .read-side { height: auto; }
   .read-side > #read-panel { flex: 0 0 auto; }
   .ai-scroll, .chat-scroll { max-height: 46vh; }
-  /* 上下堆叠时右栏拿到整宽，但手机宽度下标题栏的 tab + 四个动作仍可能
-     超过一行：允许换行，并让两组各自保持完整宽度再换行，避免把面板撑出屏幕。
-     PDF 面板头不必等这个断点，它自己随时可换行（见下方 #pdf-panel > .pdf-head）。 */
-  #read-panel .panel-head { flex-wrap: wrap; row-gap: 8px; }
-  #read-panel .read-tabs, #read-actions-summary { flex: 0 0 auto; }
+  /* 上下堆叠时右栏拿到整宽，但手机宽度下标题栏的 tab + 动作仍可能超过一行。
+     换行与「两组各自保持完整宽度」已提到基础规则里（任何宽度都生效），这里不再重复。 */
 }
 /* PDF 阅读区给足高度（内置阅读器的挂载点与回退 iframe 都按这个高度，跟右列同一个变量） */
 .pdf-viewer-host { height: var(--read-h, clamp(560px, 84vh, 1500px)); background: var(--surface-3); overflow: hidden; border-radius: 0 0 var(--radius) var(--radius); }
@@ -1154,7 +1151,15 @@ html[data-theme="night"] .pdf-lang-btn[aria-pressed="true"] { color: #14161a; }
 .summary-views > *[hidden] { display: none !important; }
 #summary-panel .panel-head .right[hidden] { display: none !important; }
 #read-panel { display: flex; flex-direction: column; min-height: 0; }
-#read-panel .panel-head { gap: 8px; }
+/* 右侧「AI 总结 / 与文献对话」标题栏：和 PDF 栏同一套规则——两段（tab / 动作），
+   放不下就换行。以前只在 ≤1200px 才允许换行，两栏布局里右列只有 472–660px，
+   动作组会把 tab 挤成竖排（「AI 总结」四个字竖着叠）。 */
+#read-panel .panel-head { gap: 8px 10px; flex-wrap: wrap; align-items: center; }
+#read-panel .read-tabs { flex: 0 0 auto; }
+#read-actions-summary {
+  margin-left: auto; flex: 0 1 auto; min-width: 0;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px;
+}
 #read-panel .read-panel-body {
   flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px 15px 13px;
 }
@@ -1164,6 +1169,7 @@ html[data-theme="night"] .pdf-lang-btn[aria-pressed="true"] { color: #14161a; }
 .read-tab {
   border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.8px;
   padding: 3px 13px; border-radius: 99px; cursor: pointer; transition: background .15s, color .15s;
+  white-space: nowrap;
 }
 .read-tab:hover { color: var(--text); }
 .read-tab.active { background: var(--surface); color: var(--accent-text); font-weight: 650; box-shadow: var(--shadow-1); }
@@ -1387,6 +1393,12 @@ html[data-theme="night"] .pdf-lang-btn[aria-pressed="true"] { color: #14161a; }
 .more-item.danger { color: var(--danger); }
 .more-item.danger:hover { background: var(--danger-soft); }
 .more-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+/* 菜单里的一行状态说明（不可点） */
+.more-note { padding: 5px 11px 7px; font-size: 12px; line-height: 1.5; color: var(--faint); }
+/* .more-item 自带 display:block，会盖掉 [hidden] 的 UA 规则，必须显式声明 */
+.more-item[hidden] { display: none; }
+.more-item[disabled] { opacity: .45; cursor: default; background: transparent; color: var(--muted); }
+.more-item[disabled]:hover { background: transparent; color: var(--muted); }
 
 /* ---------- 分体按钮（主体 + ▾）：目前只有详情页的「图表」在用 ----------
    主体与 ▾ 是两个独立按钮，各自的点击区互不重叠：
@@ -1407,6 +1419,44 @@ html[data-theme="night"] .pdf-lang-btn[aria-pressed="true"] { color: #14161a; }
 .split-caret[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent-text); }
 .split-caret[disabled] { opacity: .5; cursor: default; }
 .split-menu { left: 0; right: auto; min-width: 168px; }
+/* 右列标题栏的「生成总结 ▾」：菜单从按钮右边缘对齐展开，宽度够放「识图识别全文」 */
+#summary-ft-menu { right: 0; left: auto; min-width: 208px; }
+/* 「生成总结」= 一个连续的胶囊：底色与描边画在 .split 上，左右两段按钮都是透明的。
+   之前把底色分别画在两段按钮上，中间的描边/圆角会露出一道缝，看上去像「绿按钮 + 绿方块」
+   两个控件。现在右段是同一个胶囊向右延长的部分，只用一道内阴影当分界；
+   点左段=生成总结，点右段=展开正文操作菜单。 */
+#read-actions-summary .split {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+}
+#read-actions-summary .split-main,
+#read-actions-summary .split-caret {
+  border: 0; background: transparent; color: #fff; border-radius: 0;
+}
+#read-actions-summary .split-main {
+  padding: 5px 13px 5px 14px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  font-weight: 600;
+}
+#read-actions-summary .split-caret {
+  min-width: 26px; padding: 0 8px; font-size: 11px;
+  /* 分界用内阴影而不是 border：不会再撑出 1px 的缝 */
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, .38);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+#read-actions-summary .split-main:hover,
+#read-actions-summary .split-caret:hover,
+#read-actions-summary .split-caret[aria-expanded="true"] { background: rgba(0, 0, 0, .10); color: #fff; }
+#read-actions-summary .split-main:active { transform: none; background: rgba(0, 0, 0, .16); }
+#read-actions-summary .split-caret[disabled] { opacity: .55; background: transparent; }
+#read-actions-summary .split-main[disabled] { opacity: .6; }
+/* 焦点环画在胶囊内侧，避免绿底上的绿描边看不见 */
+#read-actions-summary .split-main:focus-visible,
+#read-actions-summary .split-caret:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, .85); outline-offset: -3px;
+}
 /* 重拉中：▾ 位置换成转圈，两块按钮一起禁用（.btn[disabled] 已有半透明 + 不接收点击） */
 .split .spin {
   width: 11px; height: 11px; border-radius: 50%;

@@ -216,20 +216,88 @@ export function buildSummaryAndAi ({
     aiMeta.textContent = `生成于 ${util.formatDate(paper.aiSummaryAt)}${paper.aiSummaryModel ? ' · ' + paper.aiSummaryModel : ''}`
   }
 
-  const aiButton = h('button.btn.sm.primary', { type: 'button' }, paper.aiSummary ? '重新生成' : '生成总结')
-  const extractButton = h('button.btn.sm', { type: 'button', title: '从 PDF 里抽出文字，供搜索与总结使用' }, '提取全文')
-  const ocrButton = h('button.btn.sm', {
-    type: 'button',
-    title: '这是图片版 PDF（没有文字层）时用：逐页发给模型识别成文字，之后就能全文检索与总结',
-    hidden: true
-  }, '识图识别全文')
+  /* ---------- 头部动作：主按钮「生成总结」，正文相关的两个动作收进它的 ▾ 菜单 ----------
+     以前三个按钮平铺在标题栏里，右侧栏一窄就把「AI 总结 / 与文献对话」挤成竖排。
+     现在只留「模型设置 + 生成总结(▾)」，正文动作按需展开，逻辑与原按钮完全一致。 */
+  const aiButton = h('button.btn.sm.primary.split-main', { type: 'button' }, paper.aiSummary ? '重新生成' : '生成总结')
+  const extractItem = h('button.more-item', {
+    type: 'button', role: 'menuitem',
+    title: '从 PDF 里抽出文字，供搜索与总结使用'
+  }, '⟳ 提取全文')
+  const ocrItem = h('button.more-item', {
+    type: 'button', role: 'menuitem',
+    title: '这是图片版 PDF（没有文字层）时用：逐页发给模型识别成文字，之后就能全文检索与总结'
+  }, '🔍 识图识别全文')
+  const ftNote = h('div.more-note', '')
+  const ftMenu = h('div.more-menu.split-menu', {
+    id: 'summary-ft-menu', role: 'menu', 'aria-label': '正文操作', hidden: true
+  }, ftNote, h('div.more-sep'), extractItem, ocrItem)
+  const ftCaret = h('button.split-caret', {
+    type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-controls': 'summary-ft-menu',
+    title: '正文操作：重新提取全文 / 识图识别全文', 'aria-label': '正文操作',
+    onclick: ev => { ev.stopPropagation(); setFtMenu(ftMenu.hidden) },
+    onkeydown: ev => {
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); setFtMenu(true) }
+    }
+  }, '▾')
+  const ftSplit = h('div.split', aiButton, ftCaret, ftMenu)
+  let ftBusy = false
+  let ftOutside = null
+
+  function setFtMenu (open) {
+    const next = !!open
+    ftMenu.hidden = !next
+    ftCaret.setAttribute('aria-expanded', next ? 'true' : 'false')
+    ftSplit.classList.toggle('is-open', next)
+    if (ftOutside) {
+      document.removeEventListener('click', ftOutside)
+      document.removeEventListener('keydown', onFtEsc, true)
+      ftOutside = null
+    }
+    if (!next) return
+    ftOutside = ev => {
+      if (!ftSplit.isConnected) { setFtMenu(false); return }
+      if (!ftSplit.contains(ev.target)) setFtMenu(false)
+    }
+    document.addEventListener('click', ftOutside, { signal })
+    document.addEventListener('keydown', onFtEsc, { capture: true, signal })
+    const first = [extractItem, ocrItem].find(el => !el.hidden && !el.disabled)
+    if (first) {
+      try { first.focus({ preventScroll: true }) } catch (err) { /* 老浏览器忽略 */ }
+    }
+  }
+
+  function onFtEsc (ev) {
+    if (ev.key !== 'Escape') return
+    ev.stopImmediatePropagation()
+    setFtMenu(false)
+    try { ftCaret.focus({ preventScroll: true }) } catch (err) { /* 同上 */ }
+  }
+
+  function paintFtCaret () {
+    ftCaret.disabled = ftBusy || !paper.pdfFile
+    ftCaret.replaceChildren(ftBusy ? h('span.spin') : '▾')
+  }
+
+  // 提取 / 识图进行中：菜单收起、两项禁用、▾ 位置显示转圈，进度统一写在 ftStatus
+  function setFtBusy (busy) {
+    ftBusy = !!busy
+    extractItem.disabled = ftBusy
+    ocrItem.disabled = ftBusy
+    paintFtCaret()
+    if (ftBusy) setFtMenu(false)
+  }
+
   const ftStatus = h('div.hint', '')
 
   function renderFtState () {
-    extractButton.hidden = !paper.pdfFile
-    extractButton.textContent = ftReady ? '重新提取全文' : '提取全文'
-    ocrButton.hidden = !paper.pdfFile
-    if (!paper.pdfFile) {
+    const hasPdf = !!paper.pdfFile
+    extractItem.hidden = !hasPdf
+    ocrItem.hidden = !hasPdf
+    extractItem.textContent = ftReady ? '⟳ 重新提取全文' : '⟳ 提取全文'
+    ftNote.textContent = !hasPdf ? '还没有关联 PDF 原文' : (ftReady ? '正文已提取' : '正文尚未提取')
+    paintFtCaret()
+    if (!hasPdf) {
       ftStatus.textContent = '还没有 PDF 原文；上传后会自动提取正文。'
       ftStatus.style.color = 'var(--muted)'
     } else if (ftReady) {
@@ -247,7 +315,9 @@ export function buildSummaryAndAi ({
   }
 
   // 扫描件识图：逐页渲染 → 模型抄录 → 最后存成这篇的正文
-  ocrButton.addEventListener('click', async () => {
+  ocrItem.addEventListener('click', async () => {
+    if (ftBusy) return
+    setFtMenu(false)
     const viewer = await selectPdfTab('')
     if (!viewer || typeof viewer.capturePage !== 'function') {
       toast('内置阅读器还没就绪（或没装 pdfjs-dist），暂时无法逐页识图', 'warn')
@@ -264,13 +334,12 @@ export function buildSummaryAndAi ({
     })
     if (!ok || isStale() || viewer !== getActivePdfViewer() || isReadingOriginal()) return
     setReadingOriginal(true)
-    ocrButton.setAttribute('disabled', '')
+    setFtBusy(true)
     const parts = []
     try {
       for (let n = 1; n <= total; n++) {
         if (isStale()) return
-        ocrButton.textContent = '识别中 ' + n + '/' + total + '…'
-        ftStatus.textContent = '正在识别第 ' + n + ' / ' + total + ' 页…'
+        ftStatus.textContent = '正在识别第 ' + n + ' / ' + total + ' 页（识图很慢，可以去做别的）…'
         ftStatus.style.color = ''
         const dataUrl = await viewer.capturePage(n, { scale: 2, format: 'image/jpeg', quality: 0.85 })
         if (isStale()) return
@@ -295,14 +364,14 @@ export function buildSummaryAndAi ({
       toast('识图失败：' + err.message, 'error')
     } finally {
       setReadingOriginal(false)
-      ocrButton.removeAttribute('disabled')
-      ocrButton.textContent = '识图识别全文'
+      setFtBusy(false)
     }
   })
 
-  extractButton.addEventListener('click', async () => {
-    extractButton.setAttribute('disabled', '')
-    extractButton.textContent = '提取中…'
+  extractItem.addEventListener('click', async () => {
+    if (ftBusy) return
+    setFtMenu(false)
+    setFtBusy(true)
     ftStatus.textContent = '正在从 PDF 抽文字…'
     ftStatus.style.color = ''
     try {
@@ -318,8 +387,7 @@ export function buildSummaryAndAi ({
       ftStatus.style.color = 'var(--danger)'
       toast('提取失败：' + err.message, 'error')
     } finally {
-      extractButton.removeAttribute('disabled')
-      extractButton.textContent = ftReady ? '重新提取全文' : '提取全文'
+      setFtBusy(false)
     }
   })
   renderFtState()
@@ -384,10 +452,8 @@ export function buildSummaryAndAi ({
   })
 
   const aiPanelActions = h('div.right', { id: 'read-actions-summary' },
-    extractButton,
-    ocrButton,
-    h('a.btn.sm.ghost', { href: '#/settings' }, '模型设置'),
-    aiButton
+    h('a.btn.sm.ghost', { href: '#/settings', title: '模型与 API 设置' }, '模型设置'),
+    ftSplit
   )
 
   const readViewSummary = h('div.read-view', { id: 'read-view-summary' },
