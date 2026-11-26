@@ -540,6 +540,29 @@ class TranslationRenderTest(unittest.TestCase):
             self.assertIn("SourceHanSerifCNVF-Bold", fonts["研究标题"])
             self.assertIn("SourceHanSerifCNVF-Regular", fonts["译文段落"])
 
+    def test_light_text_remains_visible_on_a_dark_label(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.pdf"
+            output = Path(folder) / "translation.pdf"
+            box = fitz.Rect(44, 60, 153, 85)
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.draw_rect(box, color=None, fill=(0.13, 0.13, 0.13))
+                page.insert_text((48, 77), "Subject heading", fontsize=11, color=(1, 1, 1))
+                doc.save(source)
+
+            block = {"id": "label", "page": 1, "type": "text", "bbox": [47, 65, 141, 82],
+                     "source": "Subject heading", "translation": "主题栏目"}
+            font_dir, font_name = _font_dir()
+            report = render_translated(pdf_path=source, layout=None, translations=[block],
+                                       out_pdf=output, font_dir=font_dir, font_name=font_name)
+            self.assertEqual(report[0]["replaced"], 1)
+            with fitz.open(output) as doc:
+                page = doc[0]
+                span = page.get_text("dict")["blocks"][0]["lines"][0]["spans"][0]
+                self.assertEqual((span["text"], span["color"]), ("主题栏目", 0xFFFFFF))
+                self.assertTrue(any(draw["rect"] == box for draw in page.get_drawings()))
+
     def test_render_preserves_text_after_null_even_with_pretranslated_blocks(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.pdf"

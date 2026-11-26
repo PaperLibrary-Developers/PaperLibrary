@@ -833,7 +833,8 @@ def _typography(lines, rect):
     return size, leading
 
 
-def _title_color(lines, frame):
+def _text_color(lines, frame):
+    """Keep the dominant source text color, including white labels on dark backgrounds."""
     colors = Counter()
     for line, spans in lines:
         if _line_in_frame(line, frame):
@@ -1206,7 +1207,7 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                       and any(_line_in_frame(line, rect) for line, _ in lines)):
                     size, leading = _typography(lines, rect)
                     kind = block.get("type", "text")
-                    color = _title_color(lines, rect) if kind == "title" else 0x111111
+                    color = _text_color(lines, rect)
                     left = min((line.x0 for line, _ in lines
                                 if line.width > rect.width * 0.5 and _line_in_frame(line, rect)),
                                default=rect.x0)
