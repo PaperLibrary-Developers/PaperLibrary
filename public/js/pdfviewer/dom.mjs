@@ -137,6 +137,31 @@ export function scrollPagePointIntoView (viewer, scroll, pageNumber, y, viewport
   return true
 }
 
+/**
+ * scrollPagePointIntoView 的反向换算：把「视口里的锚点」还原成 { page, y }。
+ *
+ * 换源（原文 ↔ 译文）或换标签页时阅读器是重新挂载的，只记住页码会让人回到「这一页的顶部」，
+ * 所以要把页内位置一起记下来。锚点取视口高度的 viewportFraction 处——和恢复时用的是
+ * 同一个参考点，来回切换才不会一页一页地往下漂。
+ * 锚点可能落不在当前页里（页很短、缩放很小），向前/向后找到真正盖住它的那一页再算 y。
+ */
+export function viewportAnchor (viewer, scroll, viewportFraction) {
+  const box = clientRectOf(scroll)
+  if (!box || !box.height) return null
+  const total = Number(viewer && viewer.pagesCount) || 0
+  if (!total) return null
+  const anchor = box.top + box.height * (Number.isFinite(viewportFraction) ? viewportFraction : 0.6)
+  let pageNumber = Math.min(Math.max(Math.round(Number(viewer.currentPageNumber) || 1), 1), total)
+  for (let guard = 0; guard <= total; guard++) {
+    const page = pageInfoOf(viewer, pageNumber)
+    if (!page) return null
+    if (anchor < page.rect.top && pageNumber > 1) { pageNumber--; continue }
+    if (anchor > page.rect.top + page.rect.height && pageNumber < total) { pageNumber++; continue }
+    return { page: pageNumber, y: clamp01((anchor - page.rect.top) / page.rect.height) }
+  }
+  return null
+}
+
 export function eventPoint (ev) {
   if (!ev) return null
   const x = Number(ev.clientX)

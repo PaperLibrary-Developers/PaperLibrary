@@ -1,6 +1,6 @@
 /* 内置 PDF 阅读器门面入口（子模块拆分在 js/pdfviewer/ 下，对外导出保持 100% 兼容） */
 import { ANNOT_DEFAULT_COLOR, GENERIC_FAIL, MAX_SCALE, MIN_SCALE, clampScale } from './pdfviewer/annot-model.mjs'
-import { cancelRaf, isNightTheme, readInvertPref, requestRaf, scrollPagePointIntoView, writeInvertPref } from './pdfviewer/dom.mjs'
+import { cancelRaf, isNightTheme, readInvertPref, requestRaf, scrollPagePointIntoView, viewportAnchor, writeInvertPref } from './pdfviewer/dom.mjs'
 import { FALLBACK_FIND_STATE, MIN_CONTAINER_SIZE, getPdfjsBase, loadPdfDocument, pdfjsUrls, setPdfjsBase } from './pdfviewer/loader.mjs'
 import { injectStyle, injectViewerCss } from './pdfviewer/styles.mjs'
 import { createSearchController } from './pdfviewer/search.mjs'
@@ -9,6 +9,11 @@ import { createAnnotationController } from './pdfviewer/annotations.mjs'
 import { buildViewerUi } from './pdfviewer/toolbar.mjs'
 
 export { setPdfjsBase, getPdfjsBase }
+
+/* 阅读锚点在视口里的纵向位置（0 = 顶部，1 = 底部）。
+   存视图状态和恢复视图状态都用这一个数：记录时取这一点的页内位置，
+   恢复时再把这一点放回同一个高度，换源/换标签页才能停在原处。 */
+const VIEW_ANCHOR = 0.6
 
 async function mount (container, options) {
   const opts = options || {}
@@ -349,7 +354,7 @@ async function mount (container, options) {
     else applyFit(prior?.preset === 'page-fit' ? 'page-fit' : 'page-width')
     if (prior && prior.page > 1) jumpToPage(prior.page)
     if (prior?.page <= total && Number.isFinite(prior.y)) {
-      scrollPagePointIntoView(viewer, ui.scroll, prior.page, prior.y, 0.6, 'instant')
+      scrollPagePointIntoView(viewer, ui.scroll, prior.page, prior.y, VIEW_ANCHOR, 'instant')
     }
     hideStatus()
     annot.paintAllAnnotations()
@@ -422,11 +427,19 @@ async function mount (container, options) {
       startRegionSelect: capture.startRegionSelect,
       cancelRegionSelect: capture.cancelRegionSelect,
       goToPage: goToPage,
-      getViewState: () => ({
-        page: state.pdfViewer?.currentPageNumber || 1,
-        scale: state.pdfViewer?.currentScale,
-        preset: state.presetScale
-      }),
+      /* 记住「页码 + 页内位置」：只存页码的话，换源或换标签页后只会回到那一页的顶部。
+         锚点与 onPagesInit 的恢复用同一个 viewportFraction，来回切换不会漂。 */
+      getViewState: () => {
+        const viewer = state.pdfViewer
+        const anchor = viewportAnchor(viewer, ui.scroll, VIEW_ANCHOR)
+        const view = {
+          page: (anchor && anchor.page) || viewer?.currentPageNumber || 1,
+          scale: viewer?.currentScale,
+          preset: state.presetScale
+        }
+        if (anchor) view.y = anchor.y
+        return view
+      },
       isInverted: () => state.invert,
       closeAnnotationEditor: () => annot.closeAnnotPop(),
       getAnnotations: annot.getAnnotations,
