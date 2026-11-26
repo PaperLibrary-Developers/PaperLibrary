@@ -51,7 +51,11 @@ async function mount (container, options) {
     regionListeners: [],
     annotations: [],
     annotMode: null,
-    annotColor: readAnnotColor() || ANNOT_DEFAULT_COLOR,
+    annotColors: {
+      highlight: readAnnotColor('highlight') || ANNOT_DEFAULT_COLOR,
+      note: readAnnotColor('note') || ANNOT_DEFAULT_COLOR
+    },
+    paletteFor: 'highlight',
     annotPress: null,
     paletteOpen: false,
     paletteListeners: [],
@@ -344,6 +348,7 @@ async function mount (container, options) {
     }
     try { annot.closeAnnotPop({ keepChanges: false }) } catch (err) {}
     try { annot.closePalette() } catch (err) {}
+    try { annot.destroyPicker() } catch (err) {}
     try { search.cancelJumpGuard() } catch (err) {}
     if (state.drawerTimer) {
       try { clearTimeout(state.drawerTimer) } catch (err) {}

@@ -454,7 +454,12 @@ export const STYLE_TEXT = `
   background: var(--danger, #b4453a); border: 1px solid var(--surface, #fffefb);
 }
 .lv-pdf-viewer .lv-ink-dot.custom:hover .lv-ink-del { display: flex; }
-
+/* 临时色点（当前色还没存进预设）：多一圈虚线，提示「还没保存」 */
+.lv-pdf-viewer .lv-ink-dot.lv-ink-temp { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12), 0 0 0 2px transparent; }
+.lv-pdf-viewer .lv-ink-dot.lv-ink-temp::after {
+  content: ''; position: absolute; inset: -3px; border-radius: 50%;
+  border: 1px dashed rgba(0, 0, 0, .30); pointer-events: none;
+}
 .lv-pdf-viewer .lv-ink-add {
   width: 22px; height: 22px; padding: 0; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
@@ -463,8 +468,114 @@ export const STYLE_TEXT = `
   border: 1px dashed var(--border-strong, #cfcabb); cursor: pointer;
 }
 .lv-pdf-viewer .lv-ink-add:hover { color: var(--accent-text, #235648); border-color: var(--accent, #2f6f5e); }
-
+/* 自己调的颜色不在预设里：＋ 的虚线换成当前色，表示「你现在用的是这个」 */
+.lv-pdf-viewer .lv-pdf-inkbar.is-custom .lv-ink-add {
+  border-style: solid; border-color: var(--inkbar-current, var(--accent, #2f6f5e));
+}
 .lv-pdf-viewer .lv-ink-add[disabled] { opacity: .4; cursor: default; }
+
+/* ---------- 自定义取色盘（GoodNotes 风格：色相环 + 饱和度/明度面板） ----------
+   挂在 body 上做 fixed 浮层，不参与工具栏布局；开关只过渡 opacity / transform，
+   拖动时用 .is-dragging 关掉 knob 的过渡，跟手不延迟。 */
+.lv-inkp {
+  position: fixed; z-index: 9998;
+  width: 236px; box-sizing: border-box;
+  padding: 10px 14px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  font-family: var(--font-sans, sans-serif); font-size: 12.5px; line-height: 1.6;
+  color: var(--text, #26251f); background: var(--surface, #fffefb);
+  border: 1px solid var(--border-strong, #cfcabb); border-radius: 18px;
+  box-shadow: 0 18px 42px rgba(28, 25, 15, .18), 0 3px 10px rgba(28, 25, 15, .07);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(-6px) scale(.96); transform-origin: 50% 0;
+  transition: opacity .16s ease, transform .22s cubic-bezier(.22, .61, .36, 1), visibility .22s;
+}
+.lv-inkp.is-open { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+.lv-inkp-head { display: flex; align-items: center; gap: 6px; }
+.lv-inkp-title { flex: 1 1 auto; font-size: 12px; font-weight: 600; color: var(--text, #26251f); }
+.lv-inkp-back,
+.lv-inkp-drop {
+  flex: 0 0 auto; width: 24px; height: 24px; padding: 0;
+  display: grid; place-items: center;
+  color: var(--muted, #75726a); background: transparent;
+  border: 0; border-radius: 7px; cursor: pointer;
+}
+.lv-inkp-back:hover,
+.lv-inkp-drop:hover { background: var(--surface-3, #efeee8); color: var(--text, #26251f); }
+.lv-inkp-back:focus-visible,
+.lv-inkp-drop:focus-visible,
+.lv-inkp-add:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
+.lv-inkp-wheel {
+  position: relative; width: 176px; height: 176px; margin: 2px auto 0;
+  border-radius: 50%; cursor: crosshair; touch-action: none;
+  -webkit-user-select: none; user-select: none;
+  background: conic-gradient(from 0deg,
+    #ff0000, #ff8000, #ffff00, #80ff00, #00ff00, #00ff80,
+    #00ffff, #0080ff, #0000ff, #8000ff, #ff00ff, #ff0080, #ff0000);
+  box-shadow: 0 1px 4px rgba(28, 25, 15, .16);
+}
+.lv-inkp-sv {
+  position: absolute; inset: 46px; border-radius: 12px; overflow: hidden;
+  background-image:
+    linear-gradient(to top, #000, rgba(0, 0, 0, 0)),
+    linear-gradient(to right, #fff, var(--inkp-hue, #f00));
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14), 0 0 0 4px var(--surface, #fffefb);
+}
+.lv-inkp-knob {
+  position: absolute; width: 15px; height: 15px; margin: -7.5px 0 0 -7.5px;
+  border-radius: 50%; background: transparent;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .28), 0 2px 6px rgba(0, 0, 0, .28);
+  pointer-events: none; z-index: 2;
+  transition: left .13s cubic-bezier(.22, .61, .36, 1), top .13s cubic-bezier(.22, .61, .36, 1);
+}
+.lv-inkp.is-dragging .lv-inkp-knob { transition: none; }
+.lv-inkp-knob-sv { z-index: 3; }
+.lv-inkp-foot { display: flex; align-items: center; gap: 8px; }
+.lv-inkp-add {
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  padding: 3px 7px 3px 3px; margin-left: -3px;
+  font: inherit; font-size: 11.5px; color: var(--muted, #75726a);
+  background: transparent; border: 0; border-radius: 999px; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.lv-inkp-add:hover { background: var(--surface-3, #efeee8); color: var(--text, #26251f); }
+.lv-inkp-blob {
+  position: relative; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--inkp-current, #f2c433);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .16);
+  transition: transform .16s cubic-bezier(.22, .61, .36, 1);
+}
+.lv-inkp-blob::after {
+  content: '+'; position: absolute; right: -5px; top: -5px;
+  width: 12px; height: 12px; border-radius: 50%;
+  font-size: 9px; line-height: 12px; text-align: center; font-weight: 700;
+  color: #fff; background: var(--accent, #2f6f5e);
+  box-shadow: 0 0 0 1.5px var(--surface, #fffefb);
+}
+.lv-inkp-add.is-pulse .lv-inkp-blob { transform: scale(1.18); }
+.lv-inkp-add.is-done { color: var(--accent-text, #235648); }
+.lv-inkp-add.is-done .lv-inkp-blob { transform: scale(1.06); }
+.lv-inkp-add.is-done .lv-inkp-blob::after { content: '✓'; }
+.lv-inkp-hex {
+  flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; gap: 3px;
+  padding: 2px 8px 2px 6px;
+  background: var(--surface-2, #f8f7f3);
+  border: 1px solid var(--border, #e2dfd5); border-radius: 999px;
+  transition: border-color .15s, background .15s;
+}
+.lv-inkp-hex:focus-within { border-color: var(--accent, #2f6f5e); background: var(--surface, #fffefb); }
+.lv-inkp-hex-tag {
+  font-size: 9.5px; letter-spacing: .06em; color: var(--faint, #9c988e); font-weight: 600;
+}
+.lv-inkp-hex-input {
+  width: 54px; padding: 0; border: 0; outline: none;
+  font: inherit; font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--text, #26251f); background: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lv-inkp, .lv-inkp-knob, .lv-inkp-blob { transition-duration: .01ms; }
+}
 
 .lv-pdf-viewer .lv-annot-list {
   flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px;

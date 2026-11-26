@@ -29,6 +29,7 @@ import {
   writeCustomColors
 } from './annot-model.mjs'
 import { annotIcon, clientRectOf, el, eventPoint, pageInfoOf, scrollPagePointIntoView } from './dom.mjs'
+import { createInkPicker } from './inkpicker.mjs'
 
 export function createAnnotationController (ctx) {
   const { state, ui, opts } = ctx
@@ -228,7 +229,7 @@ export function createAnnotationController (ctx) {
         id: annotId(),
         type: 'highlight',
         page: page,
-        color: state.annotColor,
+        color: colorFor('highlight'),
         rects: rects,
         point: null,
         quote: snap.text,
@@ -631,12 +632,36 @@ export function createAnnotationController (ctx) {
     }
   }
 
-/* ---- 标注模式与调色盘 ---- */
+  /* ---- 标注模式与调色盘 ----
+     荧光笔 / 便签各自记自己的颜色（含各自的预设色），互不影响：
+     拿起哪支笔，工具栏下面就弹出那支笔的色条，选色只改这一支。 */
+  function kindOf (value) {
+    return value === 'note' ? 'note' : 'highlight'
+  }
+
+  function colorFor (kind) {
+    return state.annotColors[kindOf(kind)] || ANNOT_DEFAULT_COLOR
+  }
+
+  const picker = createInkPicker({
+    ui: ui,
+    onPreview: hex => setAnnotColor(hex, state.paletteFor),
+    onCommit: hex => setAnnotColor(hex, state.paletteFor),
+    onAddPreset: (hex, full) => {
+      if (full) return false
+      const added = addCustomColor(hex, state.paletteFor)
+      renderPalette()
+      return added
+    },
+    presetCount: () => readCustomColors(state.paletteFor).length
+  })
+
   function syncAnnotIcon (host, kind) {
     if (!host) return
-    if (host.getAttribute('data-color') === state.annotColor && host.firstChild) return
-    host.setAttribute('data-color', state.annotColor)
-    try { host.replaceChildren(annotIcon(kind, state.annotColor)) } catch (err) {}
+    const color = colorFor(kind)
+    if (host.getAttribute('data-color') === color && host.firstChild) return
+    host.setAttribute('data-color', color)
+    try { host.replaceChildren(annotIcon(kind, color)) } catch (err) {}
   }
 
   function syncAnnotButtons () {
@@ -669,34 +694,59 @@ export function createAnnotationController (ctx) {
       else if (state.annotMode === 'note') ui.annotHint.textContent = '便签：在 PDF 上点一下放便签（Esc 退出）'
     }
     syncAnnotButtons()
-    if (state.annotMode) togglePalette(true)
+    if (state.annotMode) togglePalette(true, state.annotMode)
     else togglePalette(false)
     if (!state.annotMode) closeAnnotPop()
   }
 
-  function setAnnotColor (hex) {
+  function setAnnotColor (hex, kind) {
+    const target = kindOf(kind || state.paletteFor || state.annotMode)
     const next = normalizeColor(hex) || ANNOT_DEFAULT_COLOR
-    state.annotColor = next
-    writeAnnotColor(next)          // 取色记忆：下次打开阅读器还用这个颜色
+    if (colorFor(target) === next) return
+    state.annotColors[target] = next
+    writeAnnotColor(next, target)   // 取色记忆：两支笔各记各的
     syncAnnotButtons()
-    if (state.paletteOpen) renderPalette()
+    paintPaletteActive()
   }
 
-  function addCustomColor (hex) {
+  function paintPaletteActive () {
+    if (!ui.palette) return
+    const current = colorFor(state.paletteFor)
+    const dots = ui.palette.querySelectorAll('.lv-ink-dot')
+    let matched = false
+    for (let i = 0; i < dots.length; i++) {
+      const on = normalizeColor(dots[i].getAttribute('data-color')) === current
+      if (on) matched = true
+      dots[i].classList.toggle('active', on)
+      dots[i].setAttribute('aria-pressed', on ? 'true' : 'false')
+    }
+    // 自己调出来的颜色还没进预设：＋ 号描边成这个颜色，和末尾的临时点呼应
+    ui.palette.classList.toggle('is-custom', !matched)
+    ui.palette.style.setProperty('--inkbar-current', current)
+  }
+
+  function addCustomColor (hex, kind) {
     const value = normalizeColor(hex)
     if (!value) return false
-    const list = readCustomColors()
-    if (list.indexOf(value) >= 0) return true
+    const target = kindOf(kind)
+    const list = readCustomColors(target)
+    if (list.indexOf(value) >= 0) {
+      // 已经在预设里：顺手切过去，避免「点了没反应」的错觉
+      setAnnotColor(value, target)
+      return false
+    }
     if (list.length >= ANNOT_CUSTOM_MAX) list.shift()
     list.push(value)
-    writeCustomColors(list)
+    writeCustomColors(list, target)
+    setAnnotColor(value, target)
     return true
   }
 
-  function removeCustomColor (hex) {
+  function removeCustomColor (hex, kind) {
+    const target = kindOf(kind)
     const value = normalizeColor(hex)
-    writeCustomColors(readCustomColors().filter(item => item !== value))
-    if (state.annotColor === value) setAnnotColor(ANNOT_DEFAULT_COLOR)
+    writeCustomColors(readCustomColors(target).filter(item => item !== value), target)
+    if (colorFor(target) === value) setAnnotColor(ANNOT_DEFAULT_COLOR, target)
     renderPalette()
   }
 
@@ -704,8 +754,10 @@ export function createAnnotationController (ctx) {
      继续换色是常态（GoodNotes 同样是「工具常驻、颜色随手换」）。 */
   function renderPalette () {
     if (!ui.palette) return
-    const colors = annotPalette()
-    const customCount = readCustomColors().length
+    const kind = state.paletteFor
+    const current = colorFor(kind)
+    const colors = annotPalette(kind)
+    const customCount = readCustomColors(kind).length
     const nodes = colors.map(function (hex) {
       const custom = !isBuiltinColor(hex)
       const dot = el('button.lv-ink-dot', {
@@ -713,45 +765,59 @@ export function createAnnotationController (ctx) {
         'data-color': hex,
         title: custom ? hex + '（自定义，点右上角 × 可删除）' : hex,
         'aria-label': '颜色 ' + hex,
-        'aria-pressed': hex === state.annotColor ? 'true' : 'false'
+        'aria-pressed': hex === current ? 'true' : 'false'
       })
       dot.style.background = hex
-      if (hex === state.annotColor) dot.classList.add('active')
+      if (hex === current) dot.classList.add('active')
       if (custom) {
         dot.classList.add('custom')
         const remove = el('span.lv-ink-del', { text: '×', 'aria-hidden': 'true' })
         remove.onclick = ev => {
           if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation()
-          removeCustomColor(hex)
+          removeCustomColor(hex, kind)
         }
         dot.appendChild(remove)
       }
-      dot.onclick = () => setAnnotColor(hex)
+      dot.onclick = () => setAnnotColor(hex, kind)
       return dot
     })
+    /* 当前色还不在预设里（刚从取色盘调出来）：在末尾补一个临时色点，
+       这样「正在用哪个颜色」永远看得见，但它不会写进预设。 */
+    if (colors.indexOf(current) < 0) {
+      const temp = el('button.lv-ink-dot.lv-ink-temp', {
+        type: 'button', 'data-color': current, title: current + '（当前颜色，未存进预设）',
+        'aria-label': '当前颜色 ' + current, 'aria-pressed': 'true'
+      })
+      temp.style.background = current
+      temp.classList.add('active')
+      temp.onclick = () => picker.open(current)
+      nodes.push(temp)
+    }
     const full = customCount >= ANNOT_CUSTOM_MAX
     const add = el('button.lv-ink-add', {
       type: 'button', text: '＋',
-      title: full ? ('自定义颜色最多 ' + ANNOT_CUSTOM_MAX + ' 个，先删一个再加') : '加一个自己的颜色',
+      title: full ? ('自定义颜色最多 ' + ANNOT_CUSTOM_MAX + ' 个，先删一个再加') : '打开取色盘，调一个自己的颜色',
       disabled: full ? true : null,
       'aria-label': '添加自定义颜色'
     })
     add.onclick = () => {
       if (full) return
-      try { ui.colorInput.value = state.annotColor } catch (err) {}
-      try { ui.colorInput.click() } catch (err) {}
+      picker.open(current)
     }
     nodes.push(add)
     ui.palette.replaceChildren.apply(ui.palette, nodes)
+    ui.palette.setAttribute('aria-label', kind === 'note' ? '便签颜色' : '荧光笔颜色')
+    paintPaletteActive()
   }
 
   function placePalette () {
     if (!ui.palette) return
-    const rect = clientRectOf(ui.btnHighlight)
+    const anchor = state.paletteFor === 'note' ? ui.btnNote : ui.btnHighlight
+    const rect = clientRectOf(anchor || ui.btnHighlight)
     const base = clientRectOf(ui.toolbar)
     if (!rect || !base) return
     // 贴着整个工具栏的下沿浮在正文上（工具栏可能换行，按它的实际高度算），
-    // 横向和「荧光笔」按钮对齐再夹进可视范围
+    // 横向和当前这支笔的按钮对齐再夹进可视范围
     const width = ui.palette.offsetWidth || 274
     const maxLeft = Math.max(4, base.width - width - 4)
     const left = Math.min(Math.max(4, rect.left - base.left - 10), maxLeft)
@@ -765,12 +831,21 @@ export function createAnnotationController (ctx) {
       const target = ev && ev.target
       if (!target) return
       if (ui.palette && ui.palette.contains(target)) return
-      if (ui.btnHighlight && ui.btnHighlight.contains(target)) return
-      if (ui.btnNote && ui.btnNote.contains(target)) return
+      if (typeof target.closest === 'function' && target.closest('.lv-inkp')) return
+      // 点外部先只收取色盘，色条和工具还留着——要收工具得再点一次按钮或按 Esc
+      if (picker.isOpen()) { picker.close(); return }
       closePalette()
     }
     const onKey = ev => {
-      if (ev && (ev.key === 'Escape' || ev.key === 'Esc')) closePalette()
+      if (!ev || (ev.key !== 'Escape' && ev.key !== 'Esc')) return
+      // 取色盘先收：一次 Esc 退一层，不会连工具一起关掉
+      if (picker.isOpen()) {
+        if (typeof ev.preventDefault === 'function') ev.preventDefault()
+        if (typeof ev.stopPropagation === 'function') ev.stopPropagation()
+        picker.close()
+        return
+      }
+      closePalette()
     }
     document.addEventListener('mousedown', onDown, true)
     document.addEventListener('keydown', onKey, true)
@@ -794,11 +869,23 @@ export function createAnnotationController (ctx) {
     state.paletteListeners.length = 0
   }
 
-  function togglePalette (force) {
+  function togglePalette (force, kind) {
     if (state.destroyed || state.tornDown) return
+    const target = kindOf(kind || state.paletteFor)
     const open = force === undefined ? !state.paletteOpen : !!force
     if (!open) { closePalette(); return }
-    if (state.paletteOpen) return
+    const changed = state.paletteFor !== target
+    state.paletteFor = target
+    if (state.paletteOpen) {
+      // 已经开着、只是换了一支笔：换内容与锚点，不动画也不收起
+      if (changed) {
+        // 换了一支笔：自定义取色盘先收起，色条换成这支笔自己的预设
+        if (picker.isOpen()) picker.close()
+        renderPalette()
+        placePalette()
+      }
+      return
+    }
     state.paletteOpen = true
     renderPalette()
     if (ui.palette) {
@@ -806,12 +893,13 @@ export function createAnnotationController (ctx) {
       ui.palette.classList.add('is-open')
     }
     placePalette()
-    if (ui.btnHighlight) ui.btnHighlight.setAttribute('aria-expanded', 'true')
-    if (ui.btnNote) ui.btnNote.setAttribute('aria-expanded', 'true')
+    const btn = target === 'note' ? ui.btnNote : ui.btnHighlight
+    if (btn) btn.setAttribute('aria-expanded', 'true')
     bindPaletteDoc()
   }
 
   function closePalette () {
+    picker.close()
     if (!state.paletteOpen) return
     state.paletteOpen = false
     if (ui.palette) {
@@ -821,7 +909,9 @@ export function createAnnotationController (ctx) {
     if (ui.btnHighlight) ui.btnHighlight.setAttribute('aria-expanded', 'false')
     if (ui.btnNote) ui.btnNote.setAttribute('aria-expanded', 'false')
     unbindPaletteDoc()
-  }  function onAnnotDown (ev) {
+  }
+
+  function onAnnotDown (ev) {
     if (state.destroyed || !state.annotMode) return
     if (ev.button !== undefined && ev.button !== 0) return
     if (state.annotMode !== 'note') { state.annotPress = null; return }
@@ -854,7 +944,7 @@ export function createAnnotationController (ctx) {
       id: annotId(),
       type: 'note',
       page: page.pageNumber,
-      color: state.annotColor,
+      color: colorFor('note'),
       rects: [],
       point: point,
       quote: press && press.snap ? press.snap.text : '',
@@ -871,7 +961,12 @@ export function createAnnotationController (ctx) {
     paintPageAnnotations(pageNumber)
   }
 
+  function destroyPicker () {
+    picker.destroy()
+  }
+
   return {
+    destroyPicker,
     paintPageAnnotations,
     paintAllAnnotations,
     setAnnotations,

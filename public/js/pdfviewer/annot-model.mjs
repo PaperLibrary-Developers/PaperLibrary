@@ -17,8 +17,10 @@ export const ANNOT_BUILTIN_COLORS = [
 export const ANNOT_LEGACY_COLORS = { yellow: '#f2c433', green: '#3f9e77', blue: '#4f8fd6', pink: '#dd7a9d' }
 export const ANNOT_DEFAULT_COLOR = ANNOT_BUILTIN_COLORS[0]
 export const ANNOT_PALETTE_KEY = 'lv:annot-palette'
-/* 上次用的颜色：换页面/重开阅读器都延续，跟 GoodNotes 的「记住当前笔色」一致 */
+/* 上次用的颜色：换页面/重开阅读器都延续，跟 GoodNotes 的「记住当前笔色」一致。
+   荧光笔沿用旧键（老用户的颜色不会丢），便签用自己的键，两支笔各记各的。 */
 export const ANNOT_COLOR_KEY = 'lv:annot-color'
+export const ANNOT_NOTE_SUFFIX = ':note'
 export const ANNOT_CUSTOM_MAX = 12
 export const ANNOT_HEX_RE = /^#([0-9a-f]{6}|[0-9a-f]{3})$/i
 export const ANNOT_HL_ALPHA = 0.38
@@ -66,11 +68,26 @@ function resolveStorage (storage) {
   }
 }
 
-export function readCustomColors (storage) {
-  const store = resolveStorage(storage)
+/* 颜色按工具分开存：第一个参数可以只给工具名（'highlight' / 'note'），
+   也可以直接给 storage（兼容老调用 readCustomColors(storage)）。 */
+function scopeOf (kindOrStorage, storage) {
+  if (kindOrStorage && typeof kindOrStorage.getItem === 'function') {
+    return { kind: 'highlight', storage: kindOrStorage }
+  }
+  const kind = kindOrStorage === 'note' ? 'note' : 'highlight'
+  return { kind: kind, storage: storage }
+}
+
+function scopedKey (base, kind) {
+  return kind === 'note' ? base + ANNOT_NOTE_SUFFIX : base
+}
+
+export function readCustomColors (kindOrStorage, storage) {
+  const scope = scopeOf(kindOrStorage, storage)
+  const store = resolveStorage(scope.storage)
   if (!store) return []
   let raw = null
-  try { raw = store.getItem(ANNOT_PALETTE_KEY) } catch (err) { return [] }
+  try { raw = store.getItem(scopedKey(ANNOT_PALETTE_KEY, scope.kind)) } catch (err) { return [] }
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw)
@@ -86,30 +103,34 @@ export function readCustomColors (storage) {
   }
 }
 
-export function writeCustomColors (list, storage) {
-  const store = resolveStorage(storage)
+export function writeCustomColors (list, kindOrStorage, storage) {
+  const scope = scopeOf(kindOrStorage, storage)
+  const store = resolveStorage(scope.storage)
   if (!store) return
-  try { store.setItem(ANNOT_PALETTE_KEY, JSON.stringify(list || [])) } catch (err) {}
+  try { store.setItem(scopedKey(ANNOT_PALETTE_KEY, scope.kind), JSON.stringify(list || [])) } catch (err) {}
 }
 
-export function readAnnotColor (storage) {
-  const store = resolveStorage(storage)
+export function readAnnotColor (kindOrStorage, storage) {
+  const scope = scopeOf(kindOrStorage, storage)
+  const store = resolveStorage(scope.storage)
   if (!store) return ''
   let raw = null
-  try { raw = store.getItem(ANNOT_COLOR_KEY) } catch (err) { return '' }
+  try { raw = store.getItem(scopedKey(ANNOT_COLOR_KEY, scope.kind)) } catch (err) { return '' }
   return normalizeColor(raw)
 }
 
-export function writeAnnotColor (hex, storage) {
-  const store = resolveStorage(storage)
+export function writeAnnotColor (hex, kindOrStorage, storage) {
+  const scope = scopeOf(kindOrStorage, storage)
+  const store = resolveStorage(scope.storage)
   const value = normalizeColor(hex)
   if (!store || !value) return
-  try { store.setItem(ANNOT_COLOR_KEY, value) } catch (err) {}
+  try { store.setItem(scopedKey(ANNOT_COLOR_KEY, scope.kind), value) } catch (err) {}
 }
 
-export function annotPalette (storage) {
+export function annotPalette (kindOrStorage, storage) {
+  const scope = scopeOf(kindOrStorage, storage)
   const out = ANNOT_BUILTIN_COLORS.slice()
-  const custom = readCustomColors(storage)
+  const custom = readCustomColors(scope.kind, scope.storage)
   for (let i = 0; i < custom.length; i++) {
     if (out.indexOf(custom[i]) < 0) out.push(custom[i])
   }
@@ -118,6 +139,50 @@ export function annotPalette (storage) {
 
 export function isBuiltinColor (hex) {
   return ANNOT_BUILTIN_COLORS.indexOf(normalizeColor(hex)) >= 0
+}
+
+/* ------------------------------ HSV（自定义取色盘用） ------------------------------ */
+
+export function hexToHsv (hex) {
+  const value = normalizeColor(hex)
+  if (!value) return null
+  const r = parseInt(value.slice(1, 3), 16) / 255
+  const g = parseInt(value.slice(3, 5), 16) / 255
+  const b = parseInt(value.slice(5, 7), 16) / 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const d = max - min
+  let h = 0
+  if (d) {
+    if (max === r) h = ((g - b) / d) % 6
+    else if (max === g) h = (b - r) / d + 2
+    else h = (r - g) / d + 4
+    h *= 60
+    if (h < 0) h += 360
+  }
+  return { h: h, s: max ? d / max : 0, v: max }
+}
+
+export function hsvToHex (h, s, v) {
+  const hue = ((Number(h) % 360) + 360) % 360 || 0
+  const sat = Math.min(1, Math.max(0, Number(s) || 0))
+  const val = Math.min(1, Math.max(0, Number(v) || 0))
+  const c = val * sat
+  const x = c * (1 - Math.abs((hue / 60) % 2 - 1))
+  const m = val - c
+  let rgb
+  if (hue < 60) rgb = [c, x, 0]
+  else if (hue < 120) rgb = [x, c, 0]
+  else if (hue < 180) rgb = [0, c, x]
+  else if (hue < 240) rgb = [0, x, c]
+  else if (hue < 300) rgb = [x, 0, c]
+  else rgb = [c, 0, x]
+  let out = '#'
+  for (let i = 0; i < 3; i++) {
+    const n = Math.round((rgb[i] + m) * 255)
+    out += (n < 16 ? '0' : '') + n.toString(16)
+  }
+  return out
 }
 
 /* ------------------------------ 数值与几何 ------------------------------ */

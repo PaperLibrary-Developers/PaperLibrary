@@ -24,7 +24,9 @@ import {
   describeError,
   downloadName,
   errText,
+  hexToHsv,
   hexToRgba,
+  hsvToHex,
   inkOnColor,
   isBuiltinColor,
   isSameHighlight,
@@ -36,9 +38,11 @@ import {
   pageAtPoint,
   pageAtRectCenter,
   pct,
+  readAnnotColor,
   readCustomColors,
   rectDistance,
   sanitizeAnnot,
+  writeAnnotColor,
   writeCustomColors
 } from '../../public/js/pdfviewer/annot-model.mjs'
 
@@ -94,6 +98,36 @@ test('color normalization, rgba conversion, contrast ink, and custom palette sto
   assert.deepEqual(palette.slice(0, ANNOT_BUILTIN_COLORS.length), ANNOT_BUILTIN_COLORS)
   // Builtin color is not duplicated in palette even if present in custom list
   assert.equal(palette.filter(c => c === ANNOT_BUILTIN_COLORS[0]).length, 1)
+})
+
+test('highlighter and note keep their own color, palette, and HSV round-trip', () => {
+  const storage = memoryStorage()
+
+  // 两支笔的当前颜色互不影响（荧光笔沿用旧键，便签用自己的键）
+  writeAnnotColor('#f2c433', 'highlight', storage)
+  writeAnnotColor('#4f8fd6', 'note', storage)
+  assert.equal(readAnnotColor('highlight', storage), '#f2c433')
+  assert.equal(readAnnotColor('note', storage), '#4f8fd6')
+  // 只给 storage 时按荧光笔处理，老调用（和旧数据）继续可用
+  assert.equal(readAnnotColor(storage), '#f2c433')
+
+  // 自定义预设也分工具保存
+  writeCustomColors(['#123456'], 'note', storage)
+  assert.deepEqual(readCustomColors('note', storage), ['#123456'])
+  assert.deepEqual(readCustomColors('highlight', storage), [])
+  assert.deepEqual(annotPalette('note', storage).slice(-1), ['#123456'])
+  assert.equal(annotPalette('highlight', storage).length, ANNOT_BUILTIN_COLORS.length)
+
+  // HSV：色相环/明度面板靠它换算
+  assert.equal(hsvToHex(0, 0, 0), '#000000')
+  assert.equal(hsvToHex(0, 1, 1), '#ff0000')
+  assert.equal(hsvToHex(120, 1, 1), '#00ff00')
+  assert.equal(hsvToHex(240, 1, 1), '#0000ff')
+  const hsv = hexToHsv('#5f5e99')
+  assert.equal(hsvToHex(hsv.h, hsv.s, hsv.v), '#5f5e99')
+  assert.equal(hexToHsv('nope'), null)
+  // 超出范围的角度/饱和度会绕回并夹紧，不会算出非法颜色
+  assert.equal(hsvToHex(370, 2, 2), hsvToHex(10, 1, 1))
 })
 
 test('numeric clamping and rectangle/coordinate geometry helpers', () => {

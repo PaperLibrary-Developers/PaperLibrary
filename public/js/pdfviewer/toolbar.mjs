@@ -1,5 +1,5 @@
 /* PDF 阅读器子模块：工具栏与阅读区 DOM 骨架搭建 */
-import { ANNOT_DEFAULT_COLOR, SCALE_STEP, downloadName, normalizeColor } from './annot-model.mjs'
+import { SCALE_STEP, downloadName } from './annot-model.mjs'
 import { annotIcon, el, svgNode } from './dom.mjs'
 
 /* ---------------- 工具栏图标（统一 24 视框、描边圆角，贴近 SF Symbols 的观感） ---------------- */
@@ -120,8 +120,8 @@ export function buildViewerUi (ctx) {
 
   /* 荧光笔 / 便签：只留两个图标（参考 GoodNotes 的工具栏）。
      点哪个就等于「拿起哪支笔」，并在工具栏下方弹出那支笔自己的取色条。 */
-  ui.highlightIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('highlight', state.annotColor)])
-  ui.noteIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('note', state.annotColor)])
+  ui.highlightIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('highlight', state.annotColors.highlight)])
+  ui.noteIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('note', state.annotColors.note)])
   ui.btnHighlight = el('button.lv-pdf-btn.lv-pdf-iconbtn.lv-pdf-inkbtn', {
     type: 'button', 'aria-pressed': 'false', 'aria-expanded': 'false', 'aria-label': '荧光笔',
     title: '荧光笔（H）：选中文字即可高亮；再点一下关闭，颜色在下方选'
@@ -130,12 +130,7 @@ export function buildViewerUi (ctx) {
     type: 'button', 'aria-pressed': 'false', 'aria-expanded': 'false', 'aria-label': '便签',
     title: '便签（N）：在页面上点一下放一张便签'
   }, ui.noteIcon)
-  ui.palette = el('div.lv-pdf-inkbar', { hidden: true, role: 'toolbar', 'aria-label': '批注颜色' })
-  ui.colorInput = el('input', {
-    type: 'color', value: ANNOT_DEFAULT_COLOR,
-    style: 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-10px;top:-10px',
-    'aria-hidden': 'true', tabindex: '-1'
-  })
+  ui.palette = el('div.lv-pdf-inkbar', { hidden: true, role: 'toolbar', 'aria-label': '荧光笔颜色' })
   /* 批注列表：图标 + 数量角标（0 条时不显示角标） */
   ui.annotBadge = el('span.lv-pdf-badge', { hidden: true })
   ui.btnAnnotList = el('button.lv-pdf-btn.lv-pdf-iconbtn.lv-pdf-badged', {
@@ -167,8 +162,7 @@ export function buildViewerUi (ctx) {
     el('div.lv-pdf-group', null, [ui.toolSeg]),
     el('div.lv-pdf-group', null, [ui.btnRegion]),
     el('div.lv-pdf-group', null, [ui.btnSearch, ui.linkDownload, ui.linkOpen]),
-    ui.palette,
-    ui.colorInput
+    ui.palette
   ])
 
   /* ---------------- 右侧搜索栏（只建一次，打开靠 class 控制位移，不重建 DOM） ---------------- */
@@ -260,17 +254,9 @@ export function buildViewerUi (ctx) {
 
   ui.btnHighlight.onclick = function () { ctx.setAnnotMode('highlight') }
   ui.btnNote.onclick = function () { ctx.setAnnotMode('note') }
-  ui.colorInput.onchange = function () {
-    const hex = normalizeColor(ui.colorInput.value)
-    if (!hex) return
-    ctx.addCustomColor(hex)
-    ctx.setAnnotColor(hex)
-    ctx.renderPalette()
-  }
   ui.btnAnnotList.onclick = function () { ctx.toggleDrawer('annot') }
   ctx.onGlobal(ui.scroll, 'mousedown', ctx.onAnnotDown)
   ctx.onGlobal(ui.scroll, 'mouseup', ctx.onAnnotUp)
-  ctx.setAnnotColor(state.annotColor)
   ctx.renderAnnotPanel()
   ctx.syncAnnotButtons()
 
