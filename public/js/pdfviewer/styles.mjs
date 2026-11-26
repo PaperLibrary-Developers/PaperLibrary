@@ -62,6 +62,8 @@ export const STYLE_TEXT = `
   font-weight: 600;
 }
 .lv-pdf-viewer .lv-pdf-btn:disabled { opacity: .45; cursor: default; transform: none; }
+/* 只有一个图标的按钮：左右内边距收窄、上下补足，高度与文字按钮一致 */
+.lv-pdf-viewer .lv-pdf-iconbtn { padding: 7px 8px; gap: 0; }
 
 .lv-pdf-viewer .lv-pdf-input {
   min-width: 0;

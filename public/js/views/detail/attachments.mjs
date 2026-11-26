@@ -145,7 +145,6 @@ export function buildPdfAndAttachments ({
   )
   const originalPdfActions = h('div.pdf-head-actions',
     pdfOk ? translateBtn : null,
-    pdfOk ? h('a.btn.sm', { href: api.pdfUrl(paper.id), target: '_blank', rel: 'noopener' }, '新标签页打开') : null,
     h('button.btn.sm', { type: 'button', onclick: () => uploadInput.click() }, paper.pdfFile ? '更换文件' : '上传 PDF'),
     paper.pdfFile ? h('button.btn.sm.danger', {
       type: 'button',

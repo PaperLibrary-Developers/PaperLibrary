@@ -1,6 +1,20 @@
 /* PDF 阅读器子模块：工具栏与阅读区 DOM 骨架搭建 */
 import { ANNOT_DEFAULT_COLOR, SCALE_STEP, downloadName, normalizeColor } from './annot-model.mjs'
-import { annotIcon, el } from './dom.mjs'
+import { annotIcon, el, svgNode } from './dom.mjs'
+
+/* 「新窗口 / 新标签页」图标：左上是一张纸的轮廓，右下叠一张带加号的方块。
+   与工具栏其它图标同为 14px 描边风格，颜色跟随按钮文字。 */
+function frameAddIcon () {
+  const svg = svgNode('svg', {
+    width: '14', height: '14', viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor',
+    'stroke-width': '1.3', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+    'aria-hidden': 'true', focusable: 'false'
+  })
+  svg.appendChild(svgNode('path', { d: 'M10.4 3.4H4.2A1.6 1.6 0 0 0 2.6 5v6.6a1.6 1.6 0 0 0 1.6 1.6h2.2' }))
+  svg.appendChild(svgNode('rect', { x: '5.6', y: '5.6', width: '7.8', height: '7.8', rx: '1.8' }))
+  svg.appendChild(svgNode('path', { d: 'M9.5 7.7v3.6M7.7 9.5h3.6' }))
+  return svg
+}
 
 export function buildViewerUi (ctx) {
   const { state, ui, opts, url } = ctx
@@ -63,10 +77,11 @@ export function buildViewerUi (ctx) {
     href: downloadHref, title: '下载这个 PDF 文件', text: '下载',
     download: downloadName(opts.title)
   })
-  ui.linkOpen = el('a.lv-pdf-btn', {
+  /* 新标签页打开：图标按钮（叠放的方框 + 加号），含义见 title / aria-label */
+  ui.linkOpen = el('a.lv-pdf-btn.lv-pdf-iconbtn', {
     href: url, target: '_blank', rel: 'noopener noreferrer',
-    title: '在新标签页里用浏览器自带查看器打开', text: '新标签页打开'
-  })
+    title: '在新标签页里用浏览器自带查看器打开', 'aria-label': '在新标签页打开'
+  }, frameAddIcon())
 
   ui.toolbar = el('div.lv-pdf-toolbar', {
     role: 'toolbar', 'aria-label': 'PDF 工具栏'
