@@ -15,7 +15,7 @@ import re
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import RLock, Thread
+from threading import BoundedSemaphore, RLock, Thread
 
 from paperlib.adapters.pdf_translate import (
     _font_dir,
@@ -35,6 +35,8 @@ from paperlib.adapters.pdf_translate import (
 )
 from paperlib.assets import asset_path
 from paperlib.util import read_json, sanitize_file_name, write_json_atomic
+
+TRANSLATION_WORKERS = 8
 
 
 class TranslateError(RuntimeError):
@@ -57,6 +59,7 @@ class Translator:
         self._lock = RLock()
         self._running = set()
         self._cancel = set()
+        self._translation_slots = BoundedSemaphore(TRANSLATION_WORKERS)
 
     # ---------------- 路径与状态 ----------------
 
@@ -241,7 +244,7 @@ class Translator:
                 raise TranslateError("没有可翻译的文本块（可能是扫描件或图片版 PDF）")
 
             parse_seconds = round(time.monotonic() - phase_started, 2)
-            # 2) 逐块翻译
+            # 2) 并发翻译文本块，所有文献共享 LLM 请求上限
             phase_started = time.monotonic()
             self._write_state(paper_id, stage="translate", total=len(blocks), progress=0)
             apply_text_budgets(pdf_path, blocks, layout)
@@ -250,6 +253,7 @@ class Translator:
                 should_cancel=lambda: self._should_cancel(paper_id),
                 on_block=lambda done, total: self._write_state(
                     paper_id, stage="translate", progress=done, total=total),
+                workers=TRANSLATION_WORKERS, slots=self._translation_slots,
             )
             if self._should_cancel(paper_id):
                 self._write_state(paper_id, state="cancelled", stage="cancelled")

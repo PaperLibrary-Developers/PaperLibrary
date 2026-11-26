@@ -1,8 +1,10 @@
 """Regression coverage for physical text frames and PDF translation fitting."""
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from zipfile import ZipFile
@@ -206,6 +208,31 @@ class TranslationFramesTest(unittest.TestCase):
         self.assertGreater(llm.chat.call_args_list[1].args[1]["maxTokens"],
                            llm.chat.call_args_list[0].args[1]["maxTokens"])
 
+    def test_out_of_order_responses_keep_block_order_and_monotonic_progress(self):
+        later_done = Event()
+        progress = []
+        blocks = [{"id": "first", "source": "First source."}, {"id": "second", "source": "Second source."},
+                  {"id": "diagram", "source": "Diagram label.", "protected_layout": True}]
+
+        def chat(messages, _):
+            if "First source." in messages[1]["content"]:
+                if not later_done.wait(3):
+                    raise RuntimeError("second block did not finish")
+                return {"text": "第一段。"}
+            return {"text": "第二段。"}
+
+        def on_block(done, total):
+            progress.append((done, total))
+            if blocks[1].get("translation"):
+                later_done.set()
+
+        llm = Mock()
+        llm.chat.side_effect = chat
+        self.assertIs(translate_blocks(llm, blocks, workers=2, on_block=on_block), blocks)
+        self.assertEqual([block.get("translation") for block in blocks], ["第一段。", "第二段。", None])
+        self.assertEqual(progress, [(1, 3), (2, 3), (3, 3)])
+        self.assertEqual(llm.chat.call_count, 2)
+
     def test_explicit_tex_spacing_in_ocr_formula_is_displayed_as_space(self):
         html = build_html(r"范围为⟦(n = 1, \ 2, \ 3)⟧")
         self.assertNotIn("\\", html)
@@ -244,6 +271,87 @@ class TranslationFramesTest(unittest.TestCase):
 
 
 class TranslationRenderTest(unittest.TestCase):
+    def test_production_jobs_share_eight_slots_and_cancel_without_more_calls(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            for filename, marker, pages in (("first.pdf", "Alpha", 12), ("second.pdf", "Beta", 2)):
+                with fitz.open() as doc:
+                    for _ in range(pages):
+                        page = doc.new_page()
+                        page.insert_text((48, 80), f"{marker} paragraph with enough text for translation.", fontsize=10)
+                    doc.save(directory / filename)
+
+            release = Event()
+            saturated = Event()
+            second_called = Event()
+            lock = Lock()
+            active = peak = first_calls = second_calls = 0
+
+            def chat(messages, _):
+                nonlocal active, peak, first_calls, second_calls
+                is_first = "Alpha paragraph" in messages[1]["content"]
+                with lock:
+                    active += 1
+                    peak = max(peak, active)
+                    if is_first:
+                        first_calls += 1
+                    else:
+                        second_calls += 1
+                        second_called.set()
+                    if active == 8:
+                        saturated.set()
+                try:
+                    if is_first:
+                        release.wait(8)
+                        return {"text": ""}
+                    return {"text": "这是第二份的译文。"}
+                finally:
+                    with lock:
+                        active -= 1
+
+            def wait_for(predicate):
+                deadline = time.monotonic() + 6
+                while not predicate():
+                    if time.monotonic() >= deadline:
+                        return False
+                    time.sleep(0.02)
+                return True
+
+            services = SimpleNamespace(
+                runtime=SimpleNamespace(data_dir=directory),
+                db=SimpleNamespace(path_for_paper_file=lambda name: directory / name),
+                llm=SimpleNamespace(chat=chat),
+            )
+            translator = Translator(services)
+            first = {"id": "first", "pdfFile": "first.pdf"}
+            second = {"id": "second", "pdfFile": "second.pdf"}
+            runners = []
+
+            def start_job(*args, **kwargs):
+                thread = Thread(*args, **kwargs)
+                runners.append(thread)
+                return thread
+
+            with patch("paperlib.domain.translate.Thread", side_effect=start_job):
+                try:
+                    self.assertTrue(translator.start(first)["started"])
+                    self.assertTrue(saturated.wait(5))
+                    self.assertTrue(translator.start(second)["started"])
+                    self.assertTrue(wait_for(lambda: translator.state(second)["stage"] == "translate"))
+                    self.assertFalse(second_called.wait(0.2))
+                    self.assertEqual(translator.cancel(first)["state"]["stage"], "cancelling")
+                finally:
+                    release.set()
+                    for runner in runners:
+                        runner.join(10)
+            self.assertFalse(any(runner.is_alive() for runner in runners))
+            self.assertEqual((peak, first_calls, second_calls), (8, 8, 2))
+            self.assertEqual(translator.state(first)["state"], "cancelled")
+            self.assertFalse(translator.state(first)["exists"])
+            state = translator.state(second)
+            self.assertEqual((state["state"], state["progress"], state["total"]), ("done", 2, 2))
+            self.assertTrue(state["exists"])
+
     def test_matching_pdf_names_are_isolated_and_unique_legacy_still_loads(self):
         with tempfile.TemporaryDirectory() as folder:
             first = {"id": "first", "pdfFile": "left/same.pdf"}

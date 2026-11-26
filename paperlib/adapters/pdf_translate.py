@@ -20,6 +20,7 @@ from io import BytesIO
 from pathlib import Path
 from statistics import median
 from tempfile import TemporaryDirectory
+from threading import Event, Lock, Thread
 from unicodedata import east_asian_width, normalize
 
 import pymupdf as fitz
@@ -1285,81 +1286,143 @@ def _translation_problem(source, candidate):
     return ""
 
 
-def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_block=None):
-    """逐块翻译；返回带 translation 的块列表（原地补充）。"""
-    total = len(blocks)
-    for index, block in enumerate(blocks):
-        if should_cancel and should_cancel():
-            break
-        if block.get("protected_layout"):
-            if on_block:
-                on_block(index + 1, total)
+def _translate_block(llm, block, timeout_ms, cancelled):
+    # OCR may mark the accent of an accented Latin letter as superscript.
+    source = _normalize_pdf_symbols(block["source"])
+    source = normalize("NFC", re.sub(r"<sup>([\u0300-\u036f]+)</sup>", r"\1", source))
+    tokens = {"⟦T%d⟧" % number: match.group(0)
+              for number, match in enumerate(PROTECTED_TOKEN.finditer(source), 1)}
+    token_ids = iter(tokens)
+    text = PROTECTED_TOKEN.sub(lambda _: next(token_ids), source)
+    prompt = ("【前文（仅供理解，不要翻译）】\n%s\n\n【本块（请翻译）】\n%s\n\n"
+              "【后文（仅供理解，不要翻译）】\n%s") % (
+        build_html(block.get("prev")) or "(无)", text, build_html(block.get("next")) or "(无)")
+    if tokens:
+        meanings = ["%s = %s" % (key, re.sub(r"<[^>]+>", "", build_html(value)))
+                    for key, value in tokens.items()]
+        prompt += "\n\n以下占位值仅供理解。译文只保留【本块】中的编号，各出现一次。\n" + "\n".join(meanings)
+    budget = block.get("text_budget")
+    if budget:
+        prompt += "\n\n版面约容纳 %d 个全角字宽，请尽量贴近该长度，并保留全部原文信息。" % budget
+    best = ""
+    best_width = float("inf")
+    expected = Counter(tokens.keys())
+    issue = "missing_translation"
+    max_tokens = 4096
+    for attempt in range(3):
+        if cancelled():
+            return None
+        try:
+            result = llm.chat(
+                [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+                {"timeoutMs": timeout_ms, "maxTokens": max_tokens},
+            )
+            if cancelled():
+                return None
+            if result.get("finish_reason") == "length":
+                issue = "truncated_response"
+                max_tokens = 8192
+                continue
+            candidate = str(result.get("text") or "").strip()
+        except Exception as exc:  # noqa: BLE001 - 单块失败留空，最后统一报告
+            if cancelled():
+                return None
+            print("[translate] 块 %s 翻译失败：%s" % (block["id"], exc))
+            candidate = ""
+        found = Counter(PLACEHOLDER.findall(candidate))
+        if not candidate or found != expected:
+            if candidate and tokens:
+                issue = "invalid_placeholders"
+                missing = "、".join((expected - found).elements()) or "无"
+                extra = "、".join((found - expected).elements()) or "无"
+                prompt += "\n上次缺少占位 %s，多写占位 %s。请重新翻译，逐字复制所有指定占位。" % (missing, extra)
             continue
-        # OCR may mark the accent of an accented Latin letter as superscript.
-        source = _normalize_pdf_symbols(block["source"])
-        source = normalize("NFC", re.sub(r"<sup>([\u0300-\u036f]+)</sup>", r"\1", source))
-        tokens = {"⟦T%d⟧" % number: match.group(0)
-                  for number, match in enumerate(PROTECTED_TOKEN.finditer(source), 1)}
-        token_ids = iter(tokens)
-        text = PROTECTED_TOKEN.sub(lambda _: next(token_ids), source)
-        prompt = ("【前文（仅供理解，不要翻译）】\n%s\n\n【本块（请翻译）】\n%s\n\n"
-                  "【后文（仅供理解，不要翻译）】\n%s") % (
-            build_html(block.get("prev")) or "(无)", text, build_html(block.get("next")) or "(无)")
-        if tokens:
-            meanings = ["%s = %s" % (key, re.sub(r"<[^>]+>", "", build_html(value)))
-                        for key, value in tokens.items()]
-            prompt += "\n\n以下占位值仅供理解。译文只保留【本块】中的编号，各出现一次。\n" + "\n".join(meanings)
-        budget = block.get("text_budget")
-        if budget:
-            prompt += "\n\n版面约容纳 %d 个全角字宽，请尽量贴近该长度，并保留全部原文信息。" % budget
-        best = ""
-        best_width = float("inf")
-        expected = Counter(tokens.keys())
-        issue = "missing_translation"
-        max_tokens = 4096
-        for attempt in range(3):
-            try:
-                result = llm.chat(
-                    [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-                    {"timeoutMs": timeout_ms, "maxTokens": max_tokens},
-                )
-                if result.get("finish_reason") == "length":
-                    issue = "truncated_response"
-                    max_tokens = 8192
-                    continue
-                candidate = str(result.get("text") or "").strip()
-            except Exception as exc:  # noqa: BLE001 - 单块失败留空，最后统一报告
-                print("[translate] 块 %s 翻译失败：%s" % (block["id"], exc))
-                candidate = ""
-            found = Counter(PLACEHOLDER.findall(candidate))
-            if not candidate or found != expected:
-                if candidate and tokens:
-                    issue = "invalid_placeholders"
-                    missing = "、".join((expected - found).elements()) or "无"
-                    extra = "、".join((found - expected).elements()) or "无"
-                    prompt += "\n上次缺少占位 %s，多写占位 %s。请重新翻译，逐字复制所有指定占位。" % (missing, extra)
-                continue
-            candidate = PLACEHOLDER.sub(lambda m: tokens[m.group(0)], candidate)
-            candidate = re.sub(r"\s+", " ", candidate).strip()
-            problem = _translation_problem(source, candidate)
-            if problem:
-                issue = problem
-                prompt += "\n上一版疑似漏译或仍为原文。请完整翻译本块的全部语句，再核对数字、引文及限制条件。"
-                continue
-            width = _text_units(build_html(candidate))
-            if width < best_width:
-                best, best_width = candidate, width
-            if not budget or width <= budget * 1.08 or attempt:
-                break
-            prompt += (
-                "\n上次译文约占 %d 个全角字宽，排版目标为 %d。请以更紧凑的学术中文重新翻译，"
-                "保持全部事实、数据、限定条件和引文。"
-            ) % (math.ceil(width), budget)
-        block["translation"] = best
-        if best:
-            block.pop("translation_issue", None)
-        else:
-            block["translation_issue"] = issue
-        if on_block:
-            on_block(index + 1, total)
+        candidate = PLACEHOLDER.sub(lambda m: tokens[m.group(0)], candidate)
+        candidate = re.sub(r"\s+", " ", candidate).strip()
+        problem = _translation_problem(source, candidate)
+        if problem:
+            issue = problem
+            prompt += "\n上一版疑似漏译或仍为原文。请完整翻译本块的全部语句，再核对数字、引文及限制条件。"
+            continue
+        width = _text_units(build_html(candidate))
+        if width < best_width:
+            best, best_width = candidate, width
+        if not budget or width <= budget * 1.08 or attempt:
+            break
+        prompt += (
+            "\n上次译文约占 %d 个全角字宽，排版目标为 %d。请以更紧凑的学术中文重新翻译，"
+            "保持全部事实、数据、限定条件和引文。"
+        ) % (math.ceil(width), budget)
+    return best, issue
+
+
+def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_block=None,
+                     workers=1, slots=None):
+    """Translate blocks in place, reporting completed work in a single sequence."""
+    total = len(blocks)
+    remaining = iter(blocks)
+    lock = Lock()
+    stop = Event()
+    errors = []
+    completed = 0
+
+    def cancelled():
+        return stop.is_set() or (should_cancel is not None and should_cancel())
+
+    def work():
+        nonlocal completed
+        try:
+            while not cancelled():
+                with lock:
+                    block = next(remaining, None)
+                if block is None:
+                    return
+
+                outcome = None
+                if not block.get("protected_layout"):
+                    if slots is not None:
+                        while not slots.acquire(timeout=0.1):
+                            if cancelled():
+                                return
+                    try:
+                        outcome = _translate_block(llm, block, timeout_ms, cancelled)
+                    finally:
+                        if slots is not None:
+                            slots.release()
+                with lock:
+                    if cancelled():
+                        return
+                    if outcome is not None:
+                        translation, issue = outcome
+                        block["translation"] = translation
+                        if translation:
+                            block.pop("translation_issue", None)
+                        else:
+                            block["translation_issue"] = issue
+                    completed += 1
+                    if on_block:
+                        on_block(completed, total)
+        except Exception as exc:
+            stop.set()
+            with lock:
+                errors.append(exc)
+
+    count = min(total, workers)
+    if count == 1:
+        work()
+    elif count > 1:
+        threads = []
+        try:
+            for _ in range(count):
+                thread = Thread(target=work, name="pdf-translation", daemon=True)
+                thread.start()
+                threads.append(thread)
+        except RuntimeError:
+            stop.set()
+            raise
+        finally:
+            for thread in threads:
+                thread.join()
+    if errors:
+        raise errors[0]
     return blocks
