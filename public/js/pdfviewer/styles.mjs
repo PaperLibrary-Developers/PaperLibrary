@@ -88,24 +88,13 @@ export const STYLE_TEXT = `
   height: 30px; padding: 6px 8px; gap: 0;
 }
 .lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn + .lv-pdf-btn { border-left: 1px solid var(--border, #e2dfd5); }
-/* 不做 overflow:hidden（批注条数角标要探出框外），改成首尾自己带圆角 */
+/* 不做 overflow:hidden：首尾按钮自己带圆角，hover 的底色也不会溢出到框外 */
 .lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn:first-child { border-radius: calc(var(--radius-sm, 8px) - 1px) 0 0 calc(var(--radius-sm, 8px) - 1px); }
 .lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn:last-child { border-radius: 0 calc(var(--radius-sm, 8px) - 1px) calc(var(--radius-sm, 8px) - 1px) 0; }
 .lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn:hover { background: var(--surface-3, #efeee8); }
 .lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn.active {
   background: var(--accent-soft, #e4efea); color: var(--accent-text, #235648);
 }
-/* 带角标的按钮（批注条数） */
-.lv-pdf-viewer .lv-pdf-badged { position: relative; }
-.lv-pdf-viewer .lv-pdf-badge {
-  position: absolute; top: -4px; right: -4px;
-  min-width: 14px; height: 14px; padding: 0 3px;
-  font-size: 9.5px; line-height: 13px; font-weight: 700; text-align: center;
-  color: #fff; background: var(--accent, #2f6f5e);
-  border: 1px solid var(--surface, #fffefb); border-radius: 99px;
-  pointer-events: none;
-}
-.lv-pdf-viewer .lv-pdf-badge[hidden] { display: none; }
 /* 只有一个图标的按钮：左右内边距收窄、上下补足，高度与文字按钮一致 */
 .lv-pdf-viewer .lv-pdf-iconbtn { padding: 6px 7px; gap: 0; }
 
@@ -258,7 +247,8 @@ export const STYLE_TEXT = `
   border-bottom: 1px solid var(--border, #e2dfd5);
 }
 .lv-pdf-viewer .lv-pdf-drawer-close {
-  flex: 0 0 auto; width: 24px; height: 24px; padding: 0;
+  /* 标题在左、× 靠右 */
+  flex: 0 0 auto; margin-left: auto; width: 24px; height: 24px; padding: 0;
   display: grid; place-items: center;
   font-size: 16px; line-height: 1; color: var(--muted, #75726a);
   background: transparent; border: 0; border-radius: 6px; cursor: pointer;

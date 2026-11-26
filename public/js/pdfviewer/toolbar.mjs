@@ -131,12 +131,11 @@ export function buildViewerUi (ctx) {
     title: '便签（N）：在页面上点一下放一张便签'
   }, ui.noteIcon)
   ui.palette = el('div.lv-pdf-inkbar', { hidden: true, role: 'toolbar', 'aria-label': '荧光笔颜色' })
-  /* 批注列表：图标 + 数量角标（0 条时不显示角标） */
-  ui.annotBadge = el('span.lv-pdf-badge', { hidden: true })
-  ui.btnAnnotList = el('button.lv-pdf-btn.lv-pdf-iconbtn.lv-pdf-badged', {
+  /* 批注列表：只放图标，条数写进 title / aria-label，不再用右上角气泡 */
+  ui.btnAnnotList = el('button.lv-pdf-btn.lv-pdf-iconbtn', {
     type: 'button', 'aria-pressed': 'false', 'aria-label': '批注列表',
     title: '展开批注列表：点一条就跳到它在哪一页'
-  }, [listIcon(), ui.annotBadge])
+  }, listIcon())
 
   /* 荧光笔 / 便签 / 批注列表：一个连体框，顺序就是这三个 */
   ui.toolSeg = el('div.lv-pdf-toolseg', { role: 'group', 'aria-label': '批注工具' },
@@ -215,7 +214,8 @@ export function buildViewerUi (ctx) {
   })
   ui.drawer = el('aside.lv-pdf-drawer', { id: SEARCH_ID, 'aria-label': '导航侧栏', 'aria-hidden': 'true' }, [
     el('div.lv-pdf-drawer-inner', null, [
-      el('div.lv-pdf-drawer-head', null, [ui.drawerClose, ui.drawerTitle]),
+      /* 标题在左、关闭 × 在右（和系统侧栏的习惯一致） */
+      el('div.lv-pdf-drawer-head', null, [ui.drawerTitle, ui.drawerClose]),
       ui.annotPane,
       ui.searchPane
     ])

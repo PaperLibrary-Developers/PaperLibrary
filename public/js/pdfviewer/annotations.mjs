@@ -541,11 +541,7 @@ export function createAnnotationController (ctx) {
   function syncAnnotCount () {
     if (!ui.btnAnnotList) return
     const total = state.annotations.length
-    // 按钮本身是图标，条数走右上角的小角标（0 条时不显示）
-    if (ui.annotBadge) {
-      ui.annotBadge.textContent = total ? String(total) : ''
-      ui.annotBadge.hidden = !total
-    }
+    // 条数只写进 title / aria-label：按钮上不再挂气泡，连体框边缘保持干净
     ui.btnAnnotList.title = total
       ? '共 ' + total + ' 条批注（点击展开列表，再点可定位）'
       : '还没有批注：用「荧光笔」选文字，或用「便签」点页面'
@@ -697,6 +693,9 @@ export function createAnnotationController (ctx) {
     if (state.annotMode) togglePalette(true, state.annotMode)
     else togglePalette(false)
     if (!state.annotMode) closeAnnotPop()
+    /* 工具记忆：切换 PDF / SI / 译文标签页时阅读器整个重建，记住「正在用哪支笔」，
+       新挂载起来后自动恢复，不用重新点一遍。 */
+    if (typeof ctx.rememberAnnotMode === 'function') ctx.rememberAnnotMode(state.annotMode)
   }
 
   function setAnnotColor (hex, kind) {

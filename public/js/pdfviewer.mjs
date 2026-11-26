@@ -15,6 +15,11 @@ export { setPdfjsBase, getPdfjsBase }
    恢复时再把这一点放回同一个高度，换源/换标签页才能停在原处。 */
 const VIEW_ANCHOR = 0.6
 
+/* 跨挂载的工具记忆：在同一篇文献里切 PDF / SI / 译文标签页时阅读器会整个重建，
+   这里记住上次正在用的批注工具（荧光笔或便签），重建后自动接上，
+   不用每次切换都重新点一遍。颜色本身就存在 localStorage 里，跟着笔走。 */
+const toolMemory = { annotMode: null }
+
 async function mount (container, options) {
   const opts = options || {}
   const signal = opts.signal
@@ -224,7 +229,8 @@ async function mount (container, options) {
     syncZoom,
     zoomBy,
     applyFit,
-    onGlobal
+    onGlobal,
+    rememberAnnotMode: function (mode) { toolMemory.annotMode = mode === 'note' ? 'note' : (mode === 'highlight' ? 'highlight' : null) }
   }
 
   const annot = createAnnotationController(ctx)
@@ -462,6 +468,8 @@ async function mount (container, options) {
     container.appendChild(ui.root)
     applyTheme()
     annot.setAnnotations(opts.annotations || [])
+    // 接上切换标签页前的工具：重建后自动恢复荧光笔 / 便签
+    if (toolMemory.annotMode) annot.setAnnotMode(toolMemory.annotMode)
 
     if (typeof window.MutationObserver === 'function' && document.documentElement) {
       state.themeObserver = new window.MutationObserver(function () { applyTheme() })
