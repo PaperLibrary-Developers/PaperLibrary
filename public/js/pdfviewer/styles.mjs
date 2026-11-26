@@ -30,15 +30,20 @@ export const STYLE_TEXT = `
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
+  /* 列间距给到组与组之间（组内另有 4px），不再靠竖线分隔：换行时不会留下悬空的线 */
+  gap: 6px 12px;
   padding: 6px 8px;
   background: var(--surface-2, #f8f7f3);
   border-bottom: 1px solid var(--border, #e2dfd5);
 }
 .lv-pdf-viewer .lv-pdf-group { display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: nowrap; }
-.lv-pdf-viewer .lv-pdf-group.grow { flex: 1 1 220px; }
-.lv-pdf-viewer .lv-pdf-group.right { margin-left: auto; }
-.lv-pdf-viewer .lv-pdf-sep { flex: 0 0 1px; width: 1px; height: 18px; background: var(--border, #e2dfd5); }
+/* 搜索组不许被压到内容宽度以下：flex 默认允许把 nowrap 的组压扁，
+   里面的按钮就会顶出工具栏右边界（1180/1680 宽度实测溢出 43px）。
+   min-width: min-content 让浏览器改用换行，而不是溢出。 */
+.lv-pdf-viewer .lv-pdf-group.grow { flex: 1 1 200px; min-width: min-content; }
+/* 不再用 margin-left:auto：搜索组自己会撑满剩余宽度，右组本来就在最右。
+   去掉 auto 后，右组换行时会左对齐，不会孤零零挂在行尾。 */
+.lv-pdf-viewer .lv-pdf-group.right { flex-wrap: wrap; }
 
 .lv-pdf-viewer .lv-pdf-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
@@ -69,7 +74,9 @@ export const STYLE_TEXT = `
 .lv-pdf-viewer .lv-pdf-input:focus-visible,
 .lv-pdf-viewer .lv-pdf-btn:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
 .lv-pdf-viewer .lv-pdf-page { flex: 0 0 auto; width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
-.lv-pdf-viewer .lv-pdf-search { flex: 1 1 110px; width: auto; min-width: 78px; max-width: 260px; }
+/* width: 0 让输入框的固有宽度不参与最小宽度计算：搜索组因此能一路压到按钮的宽度，
+   而不会被输入框默认的 20 字符宽度顶住（否则窄屏下按钮会溢出工具栏）。 */
+.lv-pdf-viewer .lv-pdf-search { flex: 1 1 110px; width: 0; min-width: 70px; max-width: 260px; }
 
 .lv-pdf-viewer .lv-pdf-num,
 .lv-pdf-viewer .lv-pdf-count,
@@ -78,7 +85,9 @@ export const STYLE_TEXT = `
   font-size: 12px; color: var(--muted, #75726a);
   white-space: nowrap; font-variant-numeric: tabular-nums;
 }
-.lv-pdf-viewer .lv-pdf-count { min-width: 92px; }
+.lv-pdf-viewer .lv-pdf-count { min-width: 80px; }
+/* 没有搜索结果时不留 80px 空位：窄屏里那段空白会把「上一条 / 下一条」推到行尾 */
+.lv-pdf-viewer .lv-pdf-count:empty { min-width: 0; }
 .lv-pdf-viewer .lv-pdf-zoom { min-width: 42px; text-align: center; }
 
 /* ---------- 阅读区 ---------- */

@@ -1049,8 +1049,9 @@ a.external-title:hover { color: var(--accent-text); }
   .read-side > #read-panel { flex: 0 0 auto; }
   .ai-scroll, .chat-scroll { max-height: 46vh; }
   /* 上下堆叠时右栏拿到整宽，但手机宽度下标题栏的 tab + 四个动作仍可能
-     超过一行：允许换行，并让两组各自保持完整宽度再换行，避免把面板撑出屏幕。 */
-  #read-panel .panel-head, #pdf-panel .panel-head { flex-wrap: wrap; row-gap: 8px; }
+     超过一行：允许换行，并让两组各自保持完整宽度再换行，避免把面板撑出屏幕。
+     PDF 面板头不必等这个断点，它自己随时可换行（见下方 #pdf-panel > .pdf-head）。 */
+  #read-panel .panel-head { flex-wrap: wrap; row-gap: 8px; }
   #read-panel .read-tabs, #read-actions-summary { flex: 0 0 auto; }
 }
 /* PDF 阅读区给足高度（内置阅读器的挂载点与回退 iframe 都按这个高度，跟右列同一个变量） */
@@ -1058,7 +1059,29 @@ a.external-title:hover { color: var(--accent-text); }
 .pdf-viewer-host.pdf-fallback { background: transparent; }
 .pdf-viewer-host .pdf-frame { height: 100%; border-radius: 0; }
 .read-grid .pdf-frame { height: var(--read-h, clamp(560px, 84vh, 1500px)); }
-.pdf-doc-tabs { display: flex; flex: 0 0 auto; max-width: 60%; min-width: 48px; gap: 5px; overflow-x: auto; padding: 2px; }
+/* ---------- PDF 面板头：标签条 + 动作组两段，任何宽度都不溢出 ----------
+ * 结构：.panel-head.pdf-head > (.pdf-doc-tabs | .pdf-head-actions)
+ * ① 「原文 / 翻译」开关收进「PDF」标签内部（.pdf-doc-tab[data-original="true"]），
+ *    面板头只剩两段；以前开关自己是第三段、也有 margin-left:auto，
+ *    两段 auto 平分空白，宽屏下开关会漂在标签和按钮中间（就是「错位」的来源）。
+ * ② 头部自身允许换行（原来只在 ≤1200px 才换）：动作组放不下一行时整体落到第二行，
+ *    按钮不再顶出面板右边界。中等宽度的两栏布局里，PDF 列只有 480–650px，
+ *    这条比看窗口宽度的媒体查询更可靠。
+ * ③ 标签条 min-width:0 + 内部横向滚动：多份补充材料也不会把动作组挤出去。
+ * ④ 面板自身窄于 560px（看的是容器宽度，不是窗口宽度，拖动分隔条同样生效）时，
+ *    动作组改为自适应网格：一行两个、等宽对齐，右边缘不再参差。 */
+#pdf-panel > .pdf-head {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 9px 12px;
+  container-type: inline-size;
+}
+.pdf-doc-tabs {
+  display: flex; flex: 0 1 auto; min-width: 0; max-width: 100%;
+  gap: 5px; overflow-x: auto; overflow-y: hidden; padding: 2px;
+  scrollbar-width: thin;
+}
 .pdf-doc-tab {
   display: flex; flex: 0 0 auto; align-items: center; max-width: min(16rem, 100%);
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
@@ -1068,21 +1091,51 @@ a.external-title:hover { color: var(--accent-text); }
 .pdf-doc-tab-name { padding: 4px 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pdf-doc-tab-close { margin-right: 3px; padding: 0 4px; border-radius: 4px; }
 .pdf-doc-tab-close:hover { background: var(--surface-3); color: var(--danger); }
-.pdf-original-actions[hidden] { display: none; }
 
-/* 原文 / 译文切换：胶囊滑块（只在原文标签页可见，没有译文时「翻译」置灰） */
+/* 原文标签：左边是文件名，右边内嵌「原文 / 翻译」开关，两者同属一个胶囊 */
+.pdf-doc-tab[data-original="true"] { padding-right: 3px; }
+.pdf-doc-tab[data-original="true"] .pdf-doc-tab-name { padding-right: 7px; font-weight: 700; }
+/* 看补充材料时开关留在原位（不隐藏），只降低不透明度，标签条宽度不跳动 */
+.pdf-doc-tab[data-active="false"] .pdf-lang-switch { opacity: .55; }
+.pdf-doc-tab[data-active="false"] .pdf-lang-switch:hover,
+.pdf-doc-tab[data-active="false"] .pdf-lang-switch:focus-within { opacity: 1; }
+
+/* 右侧动作组：宽屏右对齐一行；放不下就整体换行，自身再按需折成两行 */
+.pdf-head-actions {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+  gap: 6px; margin-left: auto; flex: 0 1 auto; min-width: 0;
+}
+.pdf-head-actions[hidden] { display: none; }
+
+@container (max-width: 560px) {
+  /* 占满整行，改成等宽网格：4 个动作 2×2，3 个动作按 2+1 不留锯齿右边缘 */
+  .pdf-head-actions {
+    flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    gap: 6px;
+    justify-content: stretch;
+  }
+  .pdf-head-actions > * { width: 100%; }
+  .pdf-head-actions[hidden] { display: none; }
+}
+
+/* 原文 / 译文切换：胶囊滑块（没有译文时「翻译」置灰） */
 .pdf-lang-switch {
   display: inline-flex; align-items: center; gap: 2px; padding: 2px;
-  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2);
-  flex: 0 0 auto; margin-left: auto;
+  border: 1px solid transparent; border-radius: 999px; background: var(--surface-3);
+  flex: 0 0 auto; margin: 0 2px 0 0;
+  transition: opacity .15s ease;
 }
 .pdf-lang-switch[hidden] { display: none; }
 .pdf-lang-btn {
   border: 0; background: none; color: var(--muted); font: inherit; font-size: 12.5px;
-  padding: 3px 11px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer; white-space: nowrap;
   transition: background .18s ease, color .18s ease;
 }
 .pdf-lang-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
+/* 夜间主题的 accent 是浅绿，白字对比度不够，压成深字 */
+html[data-theme="night"] .pdf-lang-btn[aria-pressed="true"] { color: #14161a; }
 .pdf-lang-btn:disabled { opacity: .45; cursor: not-allowed; }
 .pdf-lang-btn:not(:disabled):hover { color: var(--accent-text); }
 

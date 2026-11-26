@@ -136,11 +136,14 @@ export function buildPdfAndAttachments ({
     title: '把原文就地翻译成中文并保留原版式，可随时切回原文',
     onclick: () => toggleTranslation()
   }, '翻译')
+  /* 原文 / 翻译开关不再单独占一个位置：它被渲染进「PDF」标签内部（见 paintPdfTabs），
+     这样面板头只剩「标签条 + 动作组」两组，宽度变化时不会再出现两组各自 margin-left:auto
+     把开关挤到中间的错位。 */
   const langSwitch = h('div.pdf-lang-switch', { role: 'group', 'aria-label': '原文 / 翻译', hidden: '' },
     h('button.pdf-lang-btn', { type: 'button', 'data-mode': 'orig', 'aria-pressed': 'true', onclick: () => switchLang('orig') }, '原文'),
     h('button.pdf-lang-btn', { type: 'button', 'data-mode': 'trans', 'aria-pressed': 'false', onclick: () => switchLang('trans') }, '翻译')
   )
-  const originalPdfActions = h('div.right.pdf-original-actions',
+  const originalPdfActions = h('div.pdf-head-actions',
     pdfOk ? translateBtn : null,
     pdfOk ? h('a.btn.sm', { href: api.pdfUrl(paper.id), target: '_blank', rel: 'noopener' }, '新标签页打开') : null,
     h('button.btn.sm', { type: 'button', onclick: () => uploadInput.click() }, paper.pdfFile ? '更换文件' : '上传 PDF'),
@@ -170,14 +173,16 @@ export function buildPdfAndAttachments ({
     h('button.btn.primary', { type: 'button', onclick: () => uploadInput.click() }, '选择 PDF 文件上传')
   )
   const pdfPanel = h('section.panel', { id: 'pdf-panel' },
-    h('div.panel-head', pdfTabBar, langSwitch, originalPdfActions), uploadInput, pdfBody
+    h('div.panel-head.pdf-head', pdfTabBar, originalPdfActions), uploadInput, pdfBody
   )
 
   /* ---------- 原文 / 译文切换（保留原版式的原位翻译） ---------- */
   function paintLangSwitch () {
     const hasTrans = !!translationInfo.exists
     const translating = translationInfo.state === 'running'
-    langSwitch.hidden = !pdfOk || activePdfTab !== ''
+    // 开关已经是「PDF」标签的一部分，标签在不在当前页都保留位置，只靠样式表达非活动态，
+    // 避免切到 SI 标签页时标签条宽度跳变。翻译能力本身仍只在有 PDF 时可用。
+    langSwitch.hidden = !pdfOk
     for (const btn of langSwitch.querySelectorAll('.pdf-lang-btn')) {
       const on = btn.dataset.mode === translationMode
       btn.setAttribute('aria-pressed', String(on))
@@ -230,6 +235,13 @@ export function buildPdfAndAttachments ({
     }, 2500)
   }
 
+  /* 标签按钮上的说明文字（悬停提示）随原文/译文变化，但标签正文固定为「PDF」——
+     当前是哪一版由标签内部的开关显示，不需要再在标签名后面追一个「（译文）」。 */
+  function paintOriginalTabTitle () {
+    const btn = pdfTabBar.querySelector('.pdf-doc-tab[data-original="true"] .pdf-doc-tab-name')
+    if (btn) btn.title = (pdfTabs.get('') || {}).title || 'PDF'
+  }
+
   function switchLang (mode) {
     if (mode === 'trans' && !translationInfo.exists) return
     translationMode = mode
@@ -238,12 +250,16 @@ export function buildPdfAndAttachments ({
     if (activePdfTab === '' && activePdfViewer) tab.view = activePdfViewer.getViewState()
     tab.url = mode === 'trans' ? api.translationUrl(paper.id) : api.pdfUrl(paper.id)
     tab.title = mode === 'trans' ? 'PDF（译文）' : 'PDF'
-    paintPdfTabs()
-    if (activePdfTab === '') {
-      abortViewer()
-      pdfTabController = new AbortController()
-      pdfMount = openPdfDocument(pdfTabs.get(''), pdfTabController.signal)
+    paintLangSwitch()
+    paintOriginalTabTitle()
+    // 正在看某份补充材料时点开关：先切回原文标签页，再按新版本重新挂载。
+    if (activePdfTab !== '') {
+      selectPdfTab('')
+      return
     }
+    abortViewer()
+    pdfTabController = new AbortController()
+    pdfMount = openPdfDocument(tab, pdfTabController.signal)
   }
 
   async function toggleTranslation () {
@@ -287,23 +303,27 @@ export function buildPdfAndAttachments ({
       const selected = file === activePdfTab
       const buttonId = 'pdf-document-tab-' + index
       if (selected) pdfBody.setAttribute('aria-labelledby', buttonId)
-      return h('div.pdf-doc-tab', { role: 'presentation', 'data-active': String(selected) },
-        h('button.pdf-doc-tab-name', {
-          id: buttonId, type: 'button', role: 'tab', title: tab.title,
-          'aria-controls': pdfBody.id, 'aria-selected': String(selected), tabindex: selected ? 0 : -1,
-          onclick: () => selectPdfTab(file, true),
-          onkeydown: ev => {
-            const step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key]
-            if (step === undefined && ev.key !== 'Home' && ev.key !== 'End') return
-            ev.preventDefault()
-            const next = ev.key === 'Home' ? 0 : ev.key === 'End' ? files.length - 1 : (index + step + files.length) % files.length
-            selectPdfTab(files[next], true)
-          }
-        }, tab.title),
-        file ? h('button.pdf-doc-tab-close', {
-          type: 'button', title: '关闭标签页', 'aria-label': '关闭 ' + tab.title,
-          onclick: () => closePdfTab(file, true)
-        }, '×') : null)
+      return h('div.pdf-doc-tab', {
+        role: 'presentation', 'data-active': String(selected), 'data-original': file ? null : 'true'
+      },
+      h('button.pdf-doc-tab-name', {
+        id: buttonId, type: 'button', role: 'tab', title: tab.title,
+        'aria-controls': pdfBody.id, 'aria-selected': String(selected), tabindex: selected ? 0 : -1,
+        onclick: () => selectPdfTab(file, true),
+        onkeydown: ev => {
+          const step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key]
+          if (step === undefined && ev.key !== 'Home' && ev.key !== 'End') return
+          ev.preventDefault()
+          const next = ev.key === 'Home' ? 0 : ev.key === 'End' ? files.length - 1 : (index + step + files.length) % files.length
+          selectPdfTab(files[next], true)
+        }
+      }, file ? tab.title : 'PDF'),
+      // 原文标签页把「原文 / 翻译」开关收进标签内部，面板头因此只剩「标签条 + 动作组」两段
+      file ? null : langSwitch,
+      file ? h('button.pdf-doc-tab-close', {
+        type: 'button', title: '关闭标签页', 'aria-label': '关闭 ' + tab.title,
+        onclick: () => closePdfTab(file, true)
+      }, '×') : null)
     }))
     originalPdfActions.hidden = activePdfTab !== ''
     paintLangSwitch()

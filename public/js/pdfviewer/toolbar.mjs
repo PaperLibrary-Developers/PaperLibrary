@@ -74,12 +74,11 @@ export function buildViewerUi (ctx) {
   ui.toolbar = el('div.lv-pdf-toolbar', {
     role: 'toolbar', 'aria-label': 'PDF 工具栏'
   }, [
+    // 不再用竖线分隔：工具栏会自动换行，竖线换行后会孤零零吊在行尾/行首。
+    // 分组靠组间距（.lv-pdf-toolbar 的 column-gap）与组内小间距区分。
     el('div.lv-pdf-group', null, [ui.btnPrevPage, ui.pageInput, ui.total, ui.btnNextPage]),
-    el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
     el('div.lv-pdf-group', null, [ui.btnZoomOut, ui.zoom, ui.btnZoomIn, ui.btnFitWidth, ui.btnFitPage]),
-    el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
     el('div.lv-pdf-group', null, [ui.btnHighlight, ui.btnNote, ui.btnColor]),
-    el('span.lv-pdf-sep', { 'aria-hidden': 'true' }),
     el('div.lv-pdf-group.grow', null, [ui.searchInput, ui.count, ui.btnPrevMatch, ui.btnNextMatch]),
     el('div.lv-pdf-group.right', null, [ui.btnAnnotList, ui.btnRegion, ui.btnInvert, ui.linkDownload, ui.linkOpen]),
     ui.palette,
