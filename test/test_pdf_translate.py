@@ -185,6 +185,27 @@ class TranslationFramesTest(unittest.TestCase):
         translate_blocks(llm, [block])
         self.assertEqual(block["translation"], "")
 
+    def test_severe_truncation_is_retried_then_reported(self):
+        llm = Mock()
+        llm.chat.return_value = {"text": "实验结果。"}
+        block = {"id": "1", "source": "The experiment produced several distinct assemblies. " * 7}
+        translate_blocks(llm, [block])
+        self.assertEqual(llm.chat.call_count, 3)
+        self.assertEqual(block["translation"], "")
+        self.assertEqual(block["translation_issue"], "suspected_truncation")
+
+    def test_length_finish_reason_never_replaces_source_with_partial_result(self):
+        llm = Mock()
+        llm.chat.side_effect = [
+            {"text": "模型返回的未完句", "finish_reason": "length"},
+            {"text": "模型返回的完整译文。", "finish_reason": "stop"},
+        ]
+        block = {"id": "1", "source": "This paragraph is kept until a complete replacement."}
+        translate_blocks(llm, [block])
+        self.assertEqual(block["translation"], "模型返回的完整译文。")
+        self.assertGreater(llm.chat.call_args_list[1].args[1]["maxTokens"],
+                           llm.chat.call_args_list[0].args[1]["maxTokens"])
+
     def test_explicit_tex_spacing_in_ocr_formula_is_displayed_as_space(self):
         html = build_html(r"范围为⟦(n = 1, \ 2, \ 3)⟧")
         self.assertNotIn("\\", html)

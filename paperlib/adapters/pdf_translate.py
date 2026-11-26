@@ -1187,14 +1187,20 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
             items = []
             skipped_notr = protected = 0
             blocked = []
+            issues = []
             for block in by_page.get(page_no, []):
                 rect = fitz.Rect(block["bbox"]) & page_rect
                 zh = block.get("translation")
-                if (block.get("protected_layout") or _overlaps_image(rect, images)
-                        or zh == block.get("source")):
+                if block.get("protected_layout") or _overlaps_image(rect, images):
+                    if block.get("type") == "caption":
+                        issues.append({"id": block["id"], "reason": "overlapping_graphic"})
+                    else:
+                        protected += 1
+                elif zh == block.get("source"):
                     protected += 1
                 elif not zh:
                     skipped_notr += 1
+                    issues.append({"id": block["id"], "reason": block.get("translation_issue", "missing_translation")})
                 elif (rect.width >= 20 and rect.height >= 6
                       and any(_line_in_frame(line, rect) for line, _ in lines)):
                     size, leading = _typography(lines, rect)
@@ -1207,6 +1213,8 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                     items.append({"id": block["id"], "rect": rect, "type": kind, "left": left,
                                   "fs": size, "leading": leading, "color": color, "html": build_html(zh)})
                     continue
+                else:
+                    issues.append({"id": block["id"], "reason": "missing_native_text_frame"})
                 blocked.append(rect)
             # A conflicting parser frame cannot be safely erased or painted as a rectangle.
             conflicts = set()
@@ -1216,6 +1224,7 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                     if (box & previous).get_area() > 0.30 * min(box.get_area(), previous.get_area()):
                         conflicts.update((item["id"], other["id"]))
             blocked.extend(item["rect"] for item in items if item["id"] in conflicts)
+            issues.extend({"id": key, "reason": "overlapping_frames"} for key in sorted(conflicts))
             items = [item for item in items if item["id"] not in conflicts]
             forbidden = _protected_boxes(page_info, images, lines, items, blocked)
             ready = _fit_page(items, forbidden, page_rect, css, archive)
@@ -1237,14 +1246,21 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                     else:
                         covered = _erase_original(page, lines, ready)
                         page.show_pdf_page(page_rect, layer, 0)
+            ready_ids = {item["id"] for item, _, _ in ready}
             failed_fit = len(items) - len(ready) if not errors else 0
+            issues.extend({"id": item["id"], "reason": "draw_failed" if errors else "no_safe_fit"}
+                          for item in items if item["id"] not in ready_ids)
             skipped = len(by_page.get(page_no, [])) - protected - len(ready)
+            page_boxes = {block["id"]: block["bbox"] for block in by_page.get(page_no, [])}
+            for issue in issues:
+                issue["bbox"] = page_boxes[issue["id"]]
             pages_report.append({
                 "page": page_no, "replaced": len(ready), "covered_xobject": covered,
                 "no_translation": skipped_notr, "dropped_overlap": len(conflicts),
                 "errors": errors, "crowded": failed_fit, "preserved_original": skipped,
                 "protected_layout": protected,
                 "caption_replaced": sum(item["type"] == "caption" for item, _, _ in ready),
+                "issues": issues,
             })
             if on_page:
                 on_page(page_no, len(doc))
@@ -1256,6 +1272,17 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
 
 
 # --------------------------------------------------------------------------- 主入口
+
+
+def _translation_problem(source, candidate):
+    """Detect empty, echoed or severely truncated prose before replacing the source."""
+    english = sum(len(word) for word in re.findall(r"[A-Za-z]{2,}", clean_source(source)))
+    if english >= 24 and clean_source(source).casefold() == clean_source(candidate).casefold():
+        return "source_echo"
+    visible = len(re.findall(r"[A-Za-z㐀-鿿]", clean_source(candidate)))
+    if english >= 200 and visible < english * 0.18:
+        return "suspected_truncation"
+    return ""
 
 
 def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_block=None):
@@ -1288,12 +1315,18 @@ def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_bl
         best = ""
         best_width = float("inf")
         expected = Counter(tokens.keys())
+        issue = "missing_translation"
+        max_tokens = 4096
         for attempt in range(3):
             try:
                 result = llm.chat(
                     [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-                    {"timeoutMs": timeout_ms, "maxTokens": 4096},
+                    {"timeoutMs": timeout_ms, "maxTokens": max_tokens},
                 )
+                if result.get("finish_reason") == "length":
+                    issue = "truncated_response"
+                    max_tokens = 8192
+                    continue
                 candidate = str(result.get("text") or "").strip()
             except Exception as exc:  # noqa: BLE001 - 单块失败留空，最后统一报告
                 print("[translate] 块 %s 翻译失败：%s" % (block["id"], exc))
@@ -1301,12 +1334,18 @@ def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_bl
             found = Counter(PLACEHOLDER.findall(candidate))
             if not candidate or found != expected:
                 if candidate and tokens:
+                    issue = "invalid_placeholders"
                     missing = "、".join((expected - found).elements()) or "无"
                     extra = "、".join((found - expected).elements()) or "无"
                     prompt += "\n上次缺少占位 %s，多写占位 %s。请重新翻译，逐字复制所有指定占位。" % (missing, extra)
                 continue
             candidate = PLACEHOLDER.sub(lambda m: tokens[m.group(0)], candidate)
             candidate = re.sub(r"\s+", " ", candidate).strip()
+            problem = _translation_problem(source, candidate)
+            if problem:
+                issue = problem
+                prompt += "\n上一版疑似漏译或仍为原文。请完整翻译本块的全部语句，再核对数字、引文及限制条件。"
+                continue
             width = _text_units(build_html(candidate))
             if width < best_width:
                 best, best_width = candidate, width
@@ -1317,6 +1356,10 @@ def translate_blocks(llm, blocks, *, timeout_ms=90000, should_cancel=None, on_bl
                 "保持全部事实、数据、限定条件和引文。"
             ) % (math.ceil(width), budget)
         block["translation"] = best
+        if best:
+            block.pop("translation_issue", None)
+        else:
+            block["translation_issue"] = issue
         if on_block:
             on_block(index + 1, total)
     return blocks

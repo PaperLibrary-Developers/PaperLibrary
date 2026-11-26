@@ -184,6 +184,7 @@ class Translator:
                 raise TranslateError("这条文献没有关联 PDF，先上传原文")
 
             # 1) 版面解析
+            phase_started = time.monotonic()
             self._write_state(paper_id, stage="parse")
             layout = None
             content_v2 = None
@@ -239,7 +240,9 @@ class Translator:
             if not blocks:
                 raise TranslateError("没有可翻译的文本块（可能是扫描件或图片版 PDF）")
 
+            parse_seconds = round(time.monotonic() - phase_started, 2)
             # 2) 逐块翻译
+            phase_started = time.monotonic()
             self._write_state(paper_id, stage="translate", total=len(blocks), progress=0)
             apply_text_budgets(pdf_path, blocks, layout)
             translate_blocks(
@@ -252,7 +255,9 @@ class Translator:
                 self._write_state(paper_id, state="cancelled", stage="cancelled")
                 return
 
+            translate_seconds = round(time.monotonic() - phase_started, 2)
             # 3) 回填
+            phase_started = time.monotonic()
             self._write_state(paper_id, stage="render")
             out_pdf = self.pdf_path(paper)
             if out_pdf is None:
@@ -271,7 +276,8 @@ class Translator:
                     pdf_path=pdf_path, layout=layout, translations=blocks,
                     out_pdf=staged_pdf, font_dir=font_dir, font_name=font_name, on_page=on_page,
                 )
-                preserved = sum(page["preserved_original"] for page in pages_report)
+                preserved = (sum(page["preserved_original"] for page in pages_report)
+                             + len(normalization.get("emptySourceIds", ())))
                 report = {
                     "blocks": len(blocks),
                     "translated": sum(1 for b in blocks if b.get("translation")),
@@ -279,6 +285,8 @@ class Translator:
                     "mineru": bool(layout),
                     "preservedOriginal": preserved,
                     "normalization": normalization,
+                    "stageSeconds": {"parse": parse_seconds, "translate": translate_seconds,
+                                     "render": round(time.monotonic() - phase_started, 2)},
                     "captions": sum(block["type"] == "caption" for block in blocks),
                     "renderedCaptions": sum(page["caption_replaced"] for page in pages_report),
                     "warning": mineru_warning,
