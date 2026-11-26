@@ -99,6 +99,10 @@ export const STYLE_TEXT = `
   background: var(--surface-2, #f8f7f3);
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong, #cfcabb) transparent;
+  /* 把页面内容装进自己的层叠上下文：pdf.js 的 .linkAnnotation 带 z-index:12，
+     不隔离时会盖过侧边的批注面板（z-index:3），点批注项会被文档超链接吃掉。
+     隔离后页面里再高的 z-index 也只在滚动区内比较，面板/框选层/状态层正常压在页面之上。 */
+  isolation: isolate;
 }
 .lv-pdf-viewer .lv-pdf-scroll:focus { outline: none; }
 .lv-pdf-viewer.lv-night .lv-pdf-scroll { background: var(--bg, #14161a); }
