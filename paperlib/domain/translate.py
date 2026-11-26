@@ -24,11 +24,13 @@ from paperlib.adapters.pdf_translate import (
     blocks_from_layout,
     blocks_from_pdf,
     dedupe_hierarchy,
+    normalize_mineru_layout,
     read_mineru_result,
     relink,
     relocate_by_text,
     render_translated,
     repair_sources,
+    supplement_mineru_frames,
     translate_blocks,
 )
 from paperlib.assets import asset_path
@@ -141,7 +143,7 @@ class Translator:
             if target is not None:
                 target.unlink(missing_ok=True)
             self._write_state(paper_id, state="idle", stage="", progress=0, total=0,
-                              pages=0, pagesDone=0, error="", translated=0, preservedOriginal=0,
+                              pages=0, pagesDone=0, error="", translated=0, preservedOriginal=0, renderedCaptions=0,
                               warning="", seconds=0, outputSource=None)
             return self.state(paper)
 
@@ -205,20 +207,35 @@ class Translator:
                 return
 
             blocks = []
+            normalization = {"format": "native_pdf"}
+            if layout:
+                try:
+                    layout, recovery = normalize_mineru_layout(layout)
+                except ValueError as exc:
+                    mineru_warning = "MinerU 跨页归位失败，已使用备用分块：" + str(exc)
+                else:
+                    blocks = blocks_from_layout(layout, physical_pages=True)
+                    normalization = {"format": "middle", **recovery}
             if content_v2:
-                # 优先用归一化的段落框，旧通道需要按文字重新定位父块。
                 page_sizes = [page.get("page_size") or [595.0, 841.0]
                               for page in (layout or {}).get("pdf_info") or []]
-                blocks = blocks_from_content_list_v2(content_v2, page_sizes, layout)
+                physical_frames = blocks_from_content_list_v2(content_v2, page_sizes, layout)
                 if blocks:
-                    blocks = repair_sources(blocks, pdf_path)
-                    blocks = relink(dedupe_hierarchy(blocks, pdf_path))
-            if not blocks and layout:
-                blocks = repair_sources(blocks_from_layout(layout), pdf_path)
-                blocks = relocate_by_text(blocks, pdf_path)
+                    blocks, supplemented = supplement_mineru_frames(blocks, physical_frames)
+                    normalization["supplementedFrameIds"] = supplemented
+                else:
+                    blocks = physical_frames
+                    normalization = {"format": "content_list_v2"}
+            if blocks:
+                source_ids = {block["id"] for block in blocks}
+                blocks = repair_sources(blocks, pdf_path)
+                normalization["emptySourceIds"] = sorted(source_ids - {block["id"] for block in blocks})
+                if normalization["format"] == "middle" and not content_v2 and not recovery:
+                    blocks = relocate_by_text(blocks, pdf_path)
                 blocks = relink(dedupe_hierarchy(blocks, pdf_path))
-            elif not blocks:
+            if not blocks:
                 blocks = blocks_from_pdf(pdf_path)
+                normalization["format"] = "native_pdf"
             if not blocks:
                 raise TranslateError("没有可翻译的文本块（可能是扫描件或图片版 PDF）")
 
@@ -261,6 +278,9 @@ class Translator:
                     "pages": pages_report,
                     "mineru": bool(layout),
                     "preservedOriginal": preserved,
+                    "normalization": normalization,
+                    "captions": sum(block["type"] == "caption" for block in blocks),
+                    "renderedCaptions": sum(page["caption_replaced"] for page in pages_report),
                     "warning": mineru_warning,
                     "seconds": round(time.time() - started, 1),
                 }
@@ -273,7 +293,8 @@ class Translator:
                     self._write_state(
                         paper_id, state="done", stage="done", error="",
                         progress=len(blocks), total=len(blocks), pages=len(pages_report), pagesDone=len(pages_report),
-                        translated=report["translated"], preservedOriginal=preserved, warning=mineru_warning,
+                        translated=report["translated"], preservedOriginal=preserved,
+                        renderedCaptions=report["renderedCaptions"], warning=mineru_warning,
                         seconds=report["seconds"], outputSource=paper["pdfFile"],
                     )
             legacy_pdf = self.root / paper_id / "translated.pdf"

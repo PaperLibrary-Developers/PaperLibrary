@@ -200,8 +200,9 @@ export function buildPdfAndAttachments ({
     paintLangSwitch()
     if (!wasRunning) return
     if (state.state === 'done') {
-      if (state.preservedOriginal) toast(`译文已生成，${state.preservedOriginal} 个文本块仍显示原文`, 'warn')
-      else toast('译文已生成')
+      const captions = state.renderedCaptions ? `，已翻译 ${state.renderedCaptions} 条图表题注` : ''
+      const retained = state.preservedOriginal ? `，${state.preservedOriginal} 个文本块仍显示原文` : ''
+      toast('译文已生成' + captions + retained, retained ? 'warn' : undefined)
       switchLang('trans')
     } else if (state.state === 'failed') {
       toast('翻译失败：' + (state.error || '未知原因'), 'error')

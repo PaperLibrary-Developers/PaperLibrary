@@ -24,7 +24,15 @@ from unicodedata import east_asian_width, normalize
 
 import pymupdf as fitz
 
-TRANSLATABLE = ("text", "title", "abstract")
+from paperlib.adapters.mineru_layout import (
+    iter_child_blocks, iter_direct_lines, restore_cross_page_spans, valid_bbox,
+)
+
+TRANSLATABLE = ("text", "title", "abstract", "caption")
+CAPTION_TYPES = ("caption", "image_caption", "chart_caption", "table_caption")
+CAPTION_START = re.compile(
+    r"^(?:fig(?:ure)?\.?|scheme|table|chart|图|表)\s*[A-ZＡ-Ｚ]?[0-9０-９]+", re.I
+)
 FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "translation-fonts"
 SERIF_FONT = "SourceHanSerifCN-VF.ttf.xz"
 SERIF_REGULAR = "SourceHanSerifCN-Regular.ttf"
@@ -297,42 +305,115 @@ def _join_frame_clauses(blocks):
     return relink(blocks)
 
 
-def blocks_from_layout(layout):
+def normalize_mineru_layout(layout):
+    """Assign moved spans to their physical PDF pages before choosing frames."""
+    pages, report = restore_cross_page_spans(layout.get("pdf_info") or [])
+    return {**layout, "pdf_info": pages}, report
+
+
+def _layout_text_blocks(blocks, prefix=""):
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            continue
+        path = f"{prefix}{index}"
+        kind = block.get("type")
+        if kind in TRANSLATABLE or kind in CAPTION_TYPES or kind in ("doc_title", "paragraph_title"):
+            yield path, block
+        elif kind in ("image", "table", "chart"):
+            yield from _layout_text_blocks(iter_child_blocks(block), path + "-")
+
+
+def blocks_from_layout(layout, *, physical_pages=False):
     """MinerU layout.json → [{page,index,type,bbox,source,prev,next}]（坐标是 PDF 点）。"""
     blocks = []
     for page in layout.get("pdf_info") or []:
         page_no = int(page.get("page_idx", 0)) + 1
         page_blocks = []
-        for index, block in enumerate(page.get("para_blocks") or []):
-            if block.get("type") not in TRANSLATABLE:
+        for index, block in _layout_text_blocks(page.get("para_blocks") or []):
+            raw_box = valid_bbox(block.get("bbox"))
+            if raw_box is None or (physical_pages and block.get("lines_deleted")):
                 continue
-            box = fitz.Rect(block["bbox"])
-            lines = block.get("lines") or []
-            physical = _matching_layout_block(box, page.get("preproc_blocks", []))
+            kind = block.get("type")
+            is_caption = kind in CAPTION_TYPES
+            if is_caption:
+                kind = "caption"
+            elif kind in ("doc_title", "paragraph_title"):
+                kind = "title"
+            box = fitz.Rect(raw_box)
+            lines = list(iter_direct_lines(block))
+            physical = None if is_caption else _matching_layout_block(box, page.get("preproc_blocks") or [])
             continuation = ""
-            if physical and _redistributed_paragraph(block, box, bool(lines)):
+            if physical and not block.get("_retainpdf_cross_page_recovery") and _redistributed_paragraph(block, box, bool(lines)):
                 lines = physical.get("lines") or lines
                 continuation = _first_continuation_line(block, box)
             text = merge_lines(lines)
-            rects = [fitz.Rect(line["bbox"]) for line in lines if line.get("bbox")]
+            if is_caption and not CAPTION_START.match(clean_source(text)):
+                continue
+            rects = [fitz.Rect(line_box) for line in lines
+                     if (line_box := valid_bbox(line.get("bbox"))) is not None]
             if rects:
                 box = rects[0]
                 for extra in rects[1:]:
                     box |= extra
             else:
-                box = fitz.Rect(block["bbox"])   # 没有行信息：用块 bbox，文本稍后补
+                box = fitz.Rect(raw_box)   # 没有行信息：用块 bbox，文本稍后补
             if box.width < 12 or box.height < 5:
                 continue
             page_blocks.append({
-                "id": "p%db%d" % (page_no, index),
+                "id": "p%db%s" % (page_no, index),
                 "page": page_no,
-                "type": block.get("type"),
+                "type": kind,
                 "bbox": [box.x0, box.y0, box.x1, box.y1],
                 "source": text,
                 "_continuation": continuation,
             })
         blocks.extend(page_blocks)
     return _join_frame_clauses(blocks)
+
+
+def supplement_mineru_frames(blocks, physical_frames):
+    """Fill unclaimed same-page frames using the provider's physical block list."""
+    pages = {}
+    for block in blocks:
+        pages.setdefault(block["page"], []).append(block)
+    candidates = {}
+    for block in physical_frames:
+        candidates.setdefault(block["page"], []).append(block)
+
+    supplemented = []
+    for page, frames in candidates.items():
+        known = pages.setdefault(page, [])
+        anchors = []
+        for frame in frames:
+            rect = fitz.Rect(frame["bbox"])
+            match = None
+            best = 0.25
+            for block in known:
+                other = fitz.Rect(block["bbox"])
+                area = min(rect.get_area(), other.get_area())
+                covered = (rect & other).get_area() / area if area else 0
+                if covered >= best:
+                    match, best = block, covered
+            anchors.append(match)
+        next_anchor = None
+        insert_before = {}
+        at_end = []
+        for frame, match in reversed(list(zip(frames, anchors))):
+            if match is not None:
+                next_anchor = match["id"]
+            elif clean_source(frame["source"]):
+                supplemented.append(frame["id"])
+                if next_anchor is None:
+                    at_end.append(frame)
+                else:
+                    insert_before.setdefault(next_anchor, []).append(frame)
+        merged = []
+        for block in known:
+            merged.extend(reversed(insert_before.get(block["id"], [])))
+            merged.append(block)
+        merged.extend(reversed(at_end))
+        pages[page] = merged
+    return [block for page in sorted(pages) for block in pages[page]], sorted(supplemented)
 
 
 def relink(blocks):
@@ -346,7 +427,8 @@ def relink(blocks):
 
 def repair_sources(blocks, pdf_path):
     """Use the PDF text layer where OCR is empty or repeatedly marks prose as scripts."""
-    suspect = [b for b in blocks if not b.get("source") or len(LETTER_SCRIPT.findall(b["source"])) >= 5]
+    suspect = [b for b in blocks if b.get("type") == "caption" or not b.get("source")
+               or len(LETTER_SCRIPT.findall(b["source"])) >= 5]
     if not suspect:
         return blocks
     with fitz.open(str(pdf_path)) as doc:
@@ -366,8 +448,11 @@ def repair_sources(blocks, pdf_path):
             # Compare letters since the OCR path represents formulas as LaTeX.
             ocr_letters = re.sub(r"[^a-zA-Z]", "", clean_source(source)).lower()
             native_letters = re.sub(r"[^a-zA-Z]", "", clean_source(native)).lower()
-            if (native_letters and "�" not in native
-                    and SequenceMatcher(None, ocr_letters, native_letters, autojunk=False).ratio() >= 0.68):
+            similarity = SequenceMatcher(None, ocr_letters, native_letters, autojunk=False).ratio()
+            if block.get("type") == "caption":
+                if native_letters and "�" not in native and similarity >= 0.86:
+                    block["source"] = NATIVE_FORMULA.sub(lambda match: f"⟦{match[0]}⟧", native)
+            elif native_letters and "�" not in native and similarity >= 0.68:
                 # Keep each complete chemical label together through translation.
                 block["source"] = NATIVE_FORMULA.sub(lambda match: f"⟦{match[0]}⟧", native)
             else:
@@ -622,7 +707,11 @@ def read_mineru_result(zip_path):
             (name for name in files if name.endswith("/layout.json")), None,
         )
         if layout_name is None:
-            raise RuntimeError("MinerU 结果里没有 layout.json")
+            middle = [name for name in files if name.rsplit("/", 1)[-1] == "middle.json"
+                      or name.endswith("_middle.json")]
+            if len(middle) != 1:
+                raise RuntimeError("MinerU 结果中没有唯一的 layout.json 或 middle.json")
+            layout_name = middle[0]
         layout = json.loads(archive.read(layout_name))
         if not isinstance(layout, dict):
             raise RuntimeError("MinerU 版面数据格式错误")
@@ -971,9 +1060,14 @@ def _fit_page(items, forbidden, page_rect, css, archive):
 
 
 def _protected_boxes(page_info, images, lines, items, blocked):
-    forbidden = list(images) + _caption_rects(page_info) + blocked
+    forbidden = list(images) + blocked
+    for caption in _caption_rects(page_info):
+        if not any(item["type"] == "caption" and
+                   (caption & item["rect"]).get_area() >= 0.60 * caption.get_area()
+                   for item in items):
+            forbidden.append(caption)
     for block in (page_info.get("para_blocks") or []) + (page_info.get("discarded_blocks") or []):
-        if block.get("bbox") and block.get("type") not in (*TRANSLATABLE, "image", "chart", "table"):
+        if block.get("bbox") and block.get("type") not in (*TRANSLATABLE, *CAPTION_TYPES, "image", "chart", "table"):
             forbidden.append(fitz.Rect(block["bbox"]))
     # A known frame is more precise than a PDF line box for a decorative glyph
     # with oversized font metrics, such as a square before a section heading.
@@ -1150,6 +1244,7 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                 "no_translation": skipped_notr, "dropped_overlap": len(conflicts),
                 "errors": errors, "crowded": failed_fit, "preserved_original": skipped,
                 "protected_layout": protected,
+                "caption_replaced": sum(item["type"] == "caption" for item, _, _ in ready),
             })
             if on_page:
                 on_page(page_no, len(doc))

@@ -11,8 +11,9 @@ import pymupdf as fitz
 
 from paperlib.adapters.mineru import MinerU, MinerUError
 from paperlib.adapters.pdf_translate import (
-    _font_dir, _protected_boxes, apply_text_budgets, blocks_from_content_list_v2, blocks_from_layout,
-    read_mineru_result, render_translated, repair_sources, translate_blocks,
+    _font_dir, _protected_boxes, apply_text_budgets, blocks_from_content_list_v2, blocks_from_layout, build_html,
+    normalize_mineru_layout, read_mineru_result, render_translated, repair_sources,
+    supplement_mineru_frames, translate_blocks,
 )
 from paperlib.domain.translate import Translator
 
@@ -32,6 +33,14 @@ class MinerUTranslationTest(unittest.TestCase):
             with ZipFile(archive, "a") as stream:
                 stream.writestr("new/content_list_v2.json", json.dumps(content))
             self.assertEqual(read_mineru_result(archive), (layout, content))
+
+    def test_accepts_current_middle_archive_name(self):
+        with tempfile.TemporaryDirectory() as folder:
+            archive = Path(folder) / "result.zip"
+            layout = {"pdf_info": [{"page_idx": 0}]}
+            with ZipFile(archive, "w") as stream:
+                stream.writestr("new/paper_middle.json", json.dumps(layout))
+            self.assertEqual(read_mineru_result(archive), (layout, None))
 
     def test_dns_upload_failure_retries_but_http_failure_is_final(self):
         client = MinerU.__new__(MinerU)
@@ -103,6 +112,55 @@ class TranslationFramesTest(unittest.TestCase):
             self.assertEqual(a["source"] + " " + b["source"], left_source + " " + right_source)
             self.assertEqual(a["next"], b["source"])
 
+    def test_cross_page_spans_keep_physical_page(self):
+        def text_block(index, bbox, text):
+            return {"index": index, "type": "text", "bbox": bbox, "lines": [
+                {"bbox": bbox, "spans": [{"type": "text", "bbox": bbox, "content": text}]}
+            ]}
+
+        head = text_block(3, [40, 180, 190, 194], "A long paragraph begins")
+        tail = text_block(1, [40, 20, 190, 34], "and continues on another page.")
+        moved = {"bbox": tail["bbox"], "spans": [dict(tail["lines"][0]["spans"][0], cross_page=True)]}
+        layout = {"pdf_info": [
+            {"page_idx": 0, "preproc_blocks": [head],
+             "para_blocks": [dict(head, lines=[*head["lines"], moved])]},
+            {"page_idx": 1, "preproc_blocks": [tail],
+             "para_blocks": [dict(tail, lines=[], lines_deleted=True)]},
+        ]}
+        normalized, report = normalize_mineru_layout(layout)
+        blocks = blocks_from_layout(normalized, physical_pages=True)
+        self.assertEqual([(b["page"], b["source"]) for b in blocks], [
+            (1, "A long paragraph begins"), (2, "and continues on another page."),
+        ])
+        self.assertEqual(report["cross_page_recovered_span_count"], 1)
+        self.assertTrue(layout["pdf_info"][1]["para_blocks"][0]["lines_deleted"])
+
+    def test_supplement_adds_unclaimed_frame_without_duplication(self):
+        left = {"id": "p1b0", "page": 1, "bbox": [20, 60, 110, 92], "source": "A complete left frame."}
+        right = {"id": "p1v1", "page": 1, "bbox": [130, 60, 221, 92], "source": "A valid continuation."}
+        footer = {"id": "p1b2", "page": 1, "bbox": [21, 120, 110, 150], "source": "Then the next section."}
+        blocks, added = supplement_mineru_frames(
+            [left, footer], [dict(left, id="duplicate"), right, dict(footer, id="duplicate-2")],
+        )
+        self.assertEqual([b["id"] for b in blocks], [left["id"], right["id"], footer["id"]])
+        self.assertEqual(added, [right["id"]])
+
+    def test_formal_caption_is_translatable_but_panel_label_is_not(self):
+        def caption(text, bbox):
+            return {"type": "image_caption", "bbox": bbox, "lines": [
+                {"bbox": bbox, "spans": [{"type": "text", "content": text}]}
+            ]}
+
+        layout = {"pdf_info": [{"page_idx": 0, "para_blocks": [
+            {"type": "image", "blocks": [
+                caption("a)", [20, 90, 44, 105]),
+                caption("Figure 1. Structure of the complex.", [20, 200, 190, 216]),
+            ]},
+        ]}]}
+        self.assertEqual([(b["type"], b["source"]) for b in blocks_from_layout(layout)], [
+            ("caption", "Figure 1. Structure of the complex."),
+        ])
+
     def test_translation_retries_length_and_restores_protected_tokens(self):
         llm = Mock()
         llm.chat.side_effect = [
@@ -126,6 +184,11 @@ class TranslationFramesTest(unittest.TestCase):
         block = {"id": "1", "source": "The result is ⟦A⟧."}
         translate_blocks(llm, [block])
         self.assertEqual(block["translation"], "")
+
+    def test_explicit_tex_spacing_in_ocr_formula_is_displayed_as_space(self):
+        html = build_html(r"范围为⟦(n = 1, \ 2, \ 3)⟧")
+        self.assertNotIn("\\", html)
+        self.assertIn("1, 2, 3", html)
 
     def test_corrupt_ocr_scripts_use_native_prose_and_keep_real_subscripts(self):
         with tempfile.TemporaryDirectory() as folder:
