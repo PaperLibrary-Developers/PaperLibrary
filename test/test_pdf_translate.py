@@ -318,6 +318,36 @@ class TranslationRenderTest(unittest.TestCase):
                 self.assertAlmostEqual(starts[1] - starts[0], starts[2] - starts[1], places=1)
                 self.assertLess(spans[-1]["bbox"][3], blocks[-1]["bbox"][3])
 
+    def test_bundled_serif_keeps_weight_and_searchable_han_characters(self):
+        from paperlib.adapters.pdf_translate import SERIF_FONT
+
+        font_dir, font_name = _font_dir()
+        if font_name != SERIF_FONT:
+            self.skipTest("bundled translation font or fontTools unavailable")
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.pdf"
+            output = Path(folder) / "translation.pdf"
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_text((48, 80), "A section heading.", fontsize=11)
+                page.insert_text((48, 115), "The original paragraph.", fontsize=10)
+                doc.save(source)
+
+            blocks = [
+                {"id": "title", "page": 1, "type": "title", "bbox": [46, 64, 280, 91],
+                 "source": "A section heading.", "translation": "研究标题"},
+                {"id": "body", "page": 1, "type": "text", "bbox": [46, 101, 280, 130],
+                 "source": "The original paragraph.", "translation": "译文段落"},
+            ]
+            report = render_translated(pdf_path=source, layout=None, translations=blocks,
+                                       out_pdf=output, font_dir=font_dir, font_name=font_name)
+            self.assertEqual(report[0]["replaced"], 2)
+            with fitz.open(output) as doc:
+                fonts = {span["text"]: span["font"] for block in doc[0].get_text("dict")["blocks"]
+                         for line in block.get("lines", []) for span in line["spans"]}
+            self.assertIn("SourceHanSerifCNVF-Bold", fonts["研究标题"])
+            self.assertIn("SourceHanSerifCNVF-Regular", fonts["译文段落"])
+
     def test_render_preserves_text_after_null_even_with_pretranslated_blocks(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.pdf"

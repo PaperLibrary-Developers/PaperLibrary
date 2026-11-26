@@ -38,6 +38,7 @@ SELF_TEST = (
     "import pymupdf; from PIL import Image; "
     "from striprtf.striprtf import rtf_to_text; "
     "from openpyxl import load_workbook; import et_xmlfile; "
+    "import lzma; from fontTools.varLib import instancer; "
     "print('portable-ok', sys.version.split()[0], *(version(name) for name in sys.argv[1:]))"
 )
 
@@ -77,7 +78,7 @@ def copy_packages(source: Path, target: Path):
     target.mkdir(parents=True, exist_ok=True)
     copied = []
     for name in ("pymupdf", "fitz", "PIL", "pillow.libs", "pymupdf.libs",
-                 "striprtf", "openpyxl", "et_xmlfile"):
+                 "striprtf", "openpyxl", "et_xmlfile", "fontTools"):
         src = source / name
         if src.is_dir():
             dst = target / name
@@ -85,6 +86,9 @@ def copy_packages(source: Path, target: Path):
             copied.append(name)
     if "pymupdf" not in copied and "fitz" not in copied:
         raise SystemExit("复制失败：源 site-packages 里没有 pymupdf/fitz")
+    for notice in source.glob("fonttools-*.dist-info"):
+        if notice.is_dir():
+            shutil.copytree(notice, target / notice.name)
     # Pillow 12 把扩展模块放在 PIL 包内；老版本可能放在 site-packages 根，按需补
     for pyd in list(source.glob("_imaging*.pyd")) + list(source.glob("_imagingft*.pyd")):
         shutil.copy(pyd, target / pyd.name)

@@ -81,7 +81,7 @@ $file = Join-Path $temp 'native-write-probe'
         }
     } else {
         $testSource = (New-Item -ItemType Directory -Path (Join-Path $scratch "source")).FullName
-        $testFiles = @("paperlib", "public", "shared", "test", "tools", "launcher", "vendor",
+        $testFiles = @("paperlib", "public", "shared", "test", "tools", "launcher", "vendor", "assets",
                        "requirements.txt", "version.json", "使用说明.txt", "README.md")
         Copy-Item -LiteralPath $testFiles -Destination $testSource -Recurse
         $buildRuntime = Join-Path $testSource "runtime"

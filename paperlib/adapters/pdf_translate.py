@@ -7,19 +7,28 @@ MinerU 提供物理段框和类型，PyMuPDF 提供原始字号、基线与备�
 from __future__ import annotations
 
 import json
+import lzma
 import math
 import re
 import zipfile
 from collections import Counter
+from contextlib import contextmanager
 from difflib import SequenceMatcher
 from html import unescape
+from importlib.util import find_spec
+from io import BytesIO
 from pathlib import Path
 from statistics import median
+from tempfile import TemporaryDirectory
 from unicodedata import east_asian_width, normalize
 
 import pymupdf as fitz
 
 TRANSLATABLE = ("text", "title", "abstract")
+FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "translation-fonts"
+SERIF_FONT = "SourceHanSerifCN-VF.ttf.xz"
+SERIF_REGULAR = "SourceHanSerifCN-Regular.ttf"
+SERIF_BOLD = "SourceHanSerifCN-Bold.ttf"
 PLACEHOLDER = re.compile(r"⟦.*?⟧", re.S)
 PROTECTED_TOKEN = re.compile(
     r"(?:⟦[^⟦⟧]*⟧|<sup>[^<>]*</sup>|<sub>[^<>]*</sub>|−\d+(?:\.\d+)?)+"
@@ -103,7 +112,7 @@ def clean_source(text):
 
 def latex_to_html(src):
     """把 MinerU 给的 LaTeX 片段转成 insert_htmlbox 能排的 HTML（上下标 + 希腊字母）。"""
-    s = src.strip("⟦⟧")
+    s = re.sub(r"\\[ \t]+", " ", src.strip("⟦⟧"))
     s = re.sub(r"\\tag\{[^{}]*\}", "", s)
     s = re.sub(
         r"\\(?:mathrm|mathbf|mathit|boldsymbol|text|operatorname|textrm|mbox|textsf|bar|hat|tilde|vec|dot|mathsf|mathtt)\s*",
@@ -633,6 +642,8 @@ def read_mineru_result(zip_path):
 
 
 def _font_dir():
+    if find_spec("fontTools") and (FONT_DIR / SERIF_FONT).is_file():
+        return FONT_DIR, SERIF_FONT
     for name in ("msyh.ttc", "msyhbd.ttc", "simsun.ttc", "simhei.ttf", "NotoSansCJK-Regular.ttc"):
         for folder in (Path(r"C:\Windows\Fonts"), Path("/usr/share/fonts"), Path("/System/Library/Fonts")):
             path = folder / name
@@ -846,7 +857,7 @@ def _frame_limits(item, right, obstacles, page_rect):
         if min(right, obstacle.x1) - max(item["left"], obstacle.x0) <= 1:
             continue
         if obstacle.y0 <= rect.y0:
-            top = max(top, obstacle.y1 + 1.5)
+            top = max(top, obstacle.y1 + 2.0)
         else:
             bottom = min(bottom, obstacle.y0 - 1.5)
     return top, bottom
@@ -860,7 +871,9 @@ def _story(item, size, leading, css, archive):
         "line-height:%.3f; color:#%06x; } sub, sup { font-size:68%%; }"
         % (size, leading, item["color"])
     )
-    body = "<div>" + item["html"] + "</div>"
+    align = "justify" if item["type"] in ("text", "abstract", "caption") else "left"
+    weight = "bold" if item["type"] == "title" else "normal"
+    body = f'<div style="text-align:{align};font-weight:{weight}">' + item["html"] + "</div>"
     return fitz.Story(html=body, user_css=style, archive=archive)
 
 
@@ -1030,17 +1043,48 @@ def _erase_original(page, lines, ready):
     return len({key for key, _ in residual})
 
 
+@contextmanager
+def _translation_fonts(font_dir, font_name, translations):
+    if font_name != SERIF_FONT:
+        yield font_dir
+        return
+
+    from fontTools import subset
+    from fontTools.varLib.instancer import instantiateVariableFont
+
+    # MuPDF Story uses static font weights. Subset the distributable variable
+    # font once per document, then materialize the two weights locally.
+    glyphs = set(chr(code) for code in range(32, 127))
+    for block in translations:
+        glyphs.update(unescape(re.sub(r"<[^>]+>", "", build_html(block.get("translation")))))
+    with TemporaryDirectory(prefix="nexus-translation-fonts-") as directory:
+        work_dir = Path(directory)
+        options = subset.Options()
+        data = lzma.decompress((Path(font_dir) / font_name).read_bytes())
+        with subset.load_font(BytesIO(data), options) as font:
+            subsetter = subset.Subsetter(options=options)
+            subsetter.populate(unicodes={ord(char) for char in glyphs})
+            subsetter.subset(font)
+            for name, weight in ((SERIF_REGULAR, 400), (SERIF_BOLD, 700)):
+                with instantiateVariableFont(font, {"wght": weight}, updateFontNames=True) as instance:
+                    instance.save(work_dir / name)
+        yield work_dir
+
+
 def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font_name, on_page=None):
     """Fit complete translated paragraphs before modifying the original page."""
-    archive = fitz.Archive(str(font_dir)) if font_dir else None
-    css = ("@font-face { font-family: han; src: url(%s); }" % font_name if font_name else "")
-    css += "body { font-family: han, sans-serif; color:#111; }"
     geometry = _layout_pages(layout)
     by_page = {}
     for translation in translations:
         by_page.setdefault(translation["page"], []).append(translation)
     pages_report = []
-    with fitz.open(str(pdf_path)) as doc:
+    with _translation_fonts(font_dir, font_name, translations) as font_dir, fitz.open(str(pdf_path)) as doc:
+        archive = fitz.Archive(str(font_dir)) if font_dir else None
+        regular = SERIF_REGULAR if font_name == SERIF_FONT else font_name
+        css = ("@font-face { font-family: han; src: url(%s); }" % regular if regular else "")
+        if font_name == SERIF_FONT:
+            css += f"@font-face {{ font-family:han; font-weight:bold; src:url({SERIF_BOLD}); }}"
+        css += "body { font-family: han, serif; color:#111; }"
         for page_no, page in enumerate(doc, 1):
             page_rect = page.rect * page.derotation_matrix
             lines = _page_text_lines(page)
@@ -1110,7 +1154,8 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
             if on_page:
                 on_page(page_no, len(doc))
 
-        doc.subset_fonts()
+        if font_name != SERIF_FONT:
+            doc.subset_fonts()
         doc.save(str(out_pdf), garbage=4, deflate=True, clean=True)
     return pages_report
 
