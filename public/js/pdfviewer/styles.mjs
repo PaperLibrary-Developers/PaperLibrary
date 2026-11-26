@@ -131,10 +131,6 @@ export const STYLE_TEXT = `
   --highlight-selected-bg-color: rgb(124 192 168 / .5);
 }
 
-/* ---------- 反色 ---------- */
-.lv-pdf-viewer.lv-invert .pdfViewer .page canvas { filter: invert(1) hue-rotate(180deg); }
-.lv-pdf-viewer.lv-invert .pdfViewer { --page-bg-color: #17191d; }
-
 /* ---------- 加载提示 ---------- */
 .lv-pdf-viewer .lv-pdf-status {
   position: absolute; inset: 0; z-index: 3;

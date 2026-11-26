@@ -3,9 +3,7 @@ import test from 'node:test'
 import pdfviewerDefault, {
   getPdfjsBase,
   mount,
-  readInvertPref,
-  setPdfjsBase,
-  writeInvertPref
+  setPdfjsBase
 } from '../../public/js/pdfviewer.mjs'
 import {
   ANNOT_BUILTIN_COLORS,
@@ -231,11 +229,10 @@ test('pdfviewer facade exports stay backwards-compatible and guard invalid mount
   assert.equal(typeof mount, 'function')
   assert.equal(typeof setPdfjsBase, 'function')
   assert.equal(typeof getPdfjsBase, 'function')
-  assert.equal(typeof readInvertPref, 'function')
-  assert.equal(typeof writeInvertPref, 'function')
   assert.equal(pdfviewerDefault.mount, mount)
-  assert.equal(pdfviewerDefault.readInvertPref, readInvertPref)
-  assert.equal(pdfviewerDefault.writeInvertPref, writeInvertPref)
+  // 「反色」已下线：门面不再导出它的偏好读写（避免死接口被外部继续引用）
+  assert.equal('readInvertPref' in pdfviewerDefault, false)
+  assert.equal('writeInvertPref' in pdfviewerDefault, false)
 
   const noContainer = await mount(null, { url: '/api/papers/p1/pdf' })
   assert.equal(noContainer.ok, false)

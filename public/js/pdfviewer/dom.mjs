@@ -1,7 +1,5 @@
-/* PDF 阅读器 DOM、SVG 图标与本地反色偏好工具 */
+/* PDF 阅读器 DOM 与 SVG 图标工具 */
 import { ANNOT_DEFAULT_COLOR, clamp01, normalizeColor } from './annot-model.mjs'
-
-const INVERT_PREF_KEY = 'lv:pdf-invert'
 
 const hasWindow = typeof window !== 'undefined'
 export const requestRaf = hasWindow && window.requestAnimationFrame
@@ -170,26 +168,3 @@ export function eventPoint (ev) {
   return { x: x, y: y }
 }
 
-function getStore () {
-  try {
-    return typeof localStorage !== 'undefined' && localStorage ? localStorage : null
-  } catch (err) {
-    return null
-  }
-}
-
-export function readInvertPref () {
-  const store = getStore()
-  if (!store) return null
-  let raw = null
-  try { raw = store.getItem(INVERT_PREF_KEY) } catch (err) { return null }
-  if (raw === '1') return true
-  if (raw === '0') return false
-  return null
-}
-
-export function writeInvertPref (on) {
-  const store = getStore()
-  if (!store) return
-  try { store.setItem(INVERT_PREF_KEY, on ? '1' : '0') } catch (err) {}
-}

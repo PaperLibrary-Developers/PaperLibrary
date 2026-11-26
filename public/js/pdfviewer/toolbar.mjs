@@ -28,9 +28,6 @@ export function buildViewerUi (ctx) {
   ui.btnPrevMatch = el('button.lv-pdf-btn', { type: 'button', title: '上一个匹配（Shift + 回车）', text: '上一条' })
   ui.btnNextMatch = el('button.lv-pdf-btn', { type: 'button', title: '下一个匹配（回车）', text: '下一条' })
 
-  ui.btnInvert = el('button.lv-pdf-btn', {
-    type: 'button', text: '反色', 'aria-pressed': 'false', title: '反色显示（点一次就记住，下次打开还是这个状态）'
-  })
   ui.btnRegion = el('button.lv-pdf-btn', {
     type: 'button', 'aria-pressed': 'false',
     title: '在 PDF 上拖一个框，把这一块发给模型识别'
@@ -80,7 +77,7 @@ export function buildViewerUi (ctx) {
     el('div.lv-pdf-group', null, [ui.btnZoomOut, ui.zoom, ui.btnZoomIn, ui.btnFitWidth, ui.btnFitPage]),
     el('div.lv-pdf-group', null, [ui.btnHighlight, ui.btnNote, ui.btnColor]),
     el('div.lv-pdf-group.grow', null, [ui.searchInput, ui.count, ui.btnPrevMatch, ui.btnNextMatch]),
-    el('div.lv-pdf-group.right', null, [ui.btnAnnotList, ui.btnRegion, ui.btnInvert, ui.linkDownload, ui.linkOpen]),
+    el('div.lv-pdf-group.right', null, [ui.btnAnnotList, ui.btnRegion, ui.linkDownload, ui.linkOpen]),
     ui.palette,
     ui.colorInput
   ])
@@ -133,7 +130,6 @@ export function buildViewerUi (ctx) {
   ui.searchInput.oninput = function () { if (!ui.searchInput.value) ctx.clearSearch() }
   ui.btnPrevMatch.onclick = function () { ctx.findAgain(true) }
   ui.btnNextMatch.onclick = function () { ctx.findAgain(false) }
-  ui.btnInvert.onclick = function () { ctx.setInvert(!state.invert, true) }
   ui.root.addEventListener('keydown', ctx.onViewerKeydown)
   state.domListeners.push({ target: ui.root, type: 'keydown', fn: ctx.onViewerKeydown })
 

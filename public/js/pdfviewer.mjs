@@ -1,6 +1,6 @@
 /* 内置 PDF 阅读器门面入口（子模块拆分在 js/pdfviewer/ 下，对外导出保持 100% 兼容） */
 import { ANNOT_DEFAULT_COLOR, GENERIC_FAIL, MAX_SCALE, MIN_SCALE, clampScale } from './pdfviewer/annot-model.mjs'
-import { cancelRaf, isNightTheme, readInvertPref, requestRaf, scrollPagePointIntoView, viewportAnchor, writeInvertPref } from './pdfviewer/dom.mjs'
+import { cancelRaf, isNightTheme, requestRaf, scrollPagePointIntoView, viewportAnchor } from './pdfviewer/dom.mjs'
 import { FALLBACK_FIND_STATE, MIN_CONTAINER_SIZE, getPdfjsBase, loadPdfDocument, pdfjsUrls, setPdfjsBase } from './pdfviewer/loader.mjs'
 import { injectStyle, injectViewerCss } from './pdfviewer/styles.mjs'
 import { createSearchController } from './pdfviewer/search.mjs'
@@ -40,7 +40,6 @@ async function mount (container, options) {
     domListeners: [],
     rafId: 0,
     presetScale: 'page-width',
-    invert: false,
     matchQuery: '',
     findState: FALLBACK_FIND_STATE,
     pdfDocument: null,
@@ -67,7 +66,7 @@ async function mount (container, options) {
     pageInput: null, total: null, btnPrevPage: null, btnNextPage: null,
     zoom: null, btnZoomOut: null, btnZoomIn: null, btnFitWidth: null, btnFitPage: null,
     searchInput: null, count: null, btnPrevMatch: null, btnNextMatch: null,
-    btnInvert: null, linkDownload: null, linkOpen: null,
+    linkDownload: null, linkOpen: null,
     btnRegion: null, regionLayer: null, regionBox: null, regionHint: null,
     btnHighlight: null, btnNote: null, btnColor: null, btnAnnotList: null,
     highlightIcon: null, noteIcon: null, colorDot: null,
@@ -88,17 +87,6 @@ async function mount (container, options) {
     const total = Number(data && data.total) || 0
     if (total > 0 && loaded > 0) {
       ui.statusText.textContent = '正在加载 PDF… ' + Math.min(100, Math.round(loaded / total * 100)) + '%'
-    }
-  }
-
-  function setInvert (on, remember) {
-    state.invert = !!on
-    if (remember) writeInvertPref(state.invert)
-    if (ui.root) ui.root.classList.toggle('lv-invert', state.invert)
-    if (ui.btnInvert) {
-      ui.btnInvert.classList.toggle('active', state.invert)
-      ui.btnInvert.setAttribute('aria-pressed', state.invert ? 'true' : 'false')
-      ui.btnInvert.title = state.invert ? '当前：反色显示（点击恢复正常）' : '反色显示（夜间看 PDF 不刺眼）'
     }
   }
 
@@ -226,7 +214,6 @@ async function mount (container, options) {
     syncZoom,
     zoomBy,
     applyFit,
-    setInvert,
     onGlobal
   }
 
@@ -388,7 +375,6 @@ async function mount (container, options) {
     buildViewerUi(ctx)
     container.appendChild(ui.root)
     applyTheme()
-    setInvert(readInvertPref() === true)
     annot.setAnnotations(opts.annotations || [])
 
     if (typeof window.MutationObserver === 'function' && document.documentElement) {
@@ -440,7 +426,6 @@ async function mount (container, options) {
         if (anchor) view.y = anchor.y
         return view
       },
-      isInverted: () => state.invert,
       closeAnnotationEditor: () => annot.closeAnnotPop(),
       getAnnotations: annot.getAnnotations,
       setAnnotations: annot.setAnnotations,
@@ -451,5 +436,5 @@ async function mount (container, options) {
   }
 }
 
-export { mount, readInvertPref, writeInvertPref }
-export default { mount, readInvertPref, writeInvertPref }
+export { mount }
+export default { mount }
