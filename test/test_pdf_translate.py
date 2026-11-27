@@ -412,6 +412,28 @@ class TranslationRenderTest(unittest.TestCase):
             self.assertFalse(worker.is_alive())
             self.assertEqual(Translator(services).region_status(paper), next_draft)
 
+    def test_short_heading_can_use_clearance_above_without_touching_following_text(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.pdf"
+            output = Path(folder) / "translation.pdf"
+            with fitz.open() as doc:
+                page = doc.new_page(width=300, height=200)
+                page.insert_text((50, 80), "Methods", fontsize=9)
+                page.insert_text((50, 90), "The original paragraph must remain.", fontsize=8)
+                doc.save(source)
+            layout = {"pdf_info": [{"para_blocks": [{"type": "ref_text", "bbox": [48, 80, 260, 105]}]}]}
+            heading = {"id": "methods", "page": 1, "bbox": [49, 71, 90, 82], "type": "title",
+                       "source": "Methods", "translation": "方法"}
+            font_dir, font_name = _font_dir()
+
+            report = render_translated(pdf_path=source, layout=layout, translations=[heading], out_pdf=output,
+                                       font_dir=font_dir, font_name=font_name)
+            self.assertLess(report[0]["placed"]["methods"]["bbox"][3], 80)
+            with fitz.open(source) as original, fitz.open(output) as translated:
+                self.assertIn("方法", translated[0].get_text())
+                self.assertEqual(translated[0].search_for("The original paragraph must remain."),
+                                 original[0].search_for("The original paragraph must remain."))
+
     def test_reader_retries_only_the_selected_block_and_keeps_other_layout(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)

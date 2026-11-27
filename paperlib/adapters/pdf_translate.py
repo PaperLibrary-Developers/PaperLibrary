@@ -1065,7 +1065,7 @@ def _story(item, size, leading, css, archive):
     return fitz.Story(html=body, user_css=style, archive=archive)
 
 
-def _fit_run(run, obstacles, page_rect, css, archive):
+def _fit_run(run, obstacles, page_rect, css, archive, *, title_offset=0):
     last = run[-1]
     original_bottom = last["rect"].y1
     limits = [_frame_limits(item, item["rect"].x1, obstacles, page_rect) for item in run]
@@ -1099,7 +1099,7 @@ def _fit_run(run, obstacles, page_rect, css, archive):
         run_bottom = original_bottom if extra_gap else original_bottom + last["fs"] * 0.85
         run_bottom = min(page_rect.y1, run_bottom)
         ready = []
-        y = run[0]["rect"].y0
+        y = run[0]["rect"].y0 - title_offset
         for index, item in enumerate(run):
             box = item["rect"]
             top, limit = limits[index]
@@ -1140,6 +1140,13 @@ def _fit_run(run, obstacles, page_rect, css, archive):
 
 
 def _fit_page(items, forbidden, page_rect, css, archive):
+    def fit(run, obstacles):
+        result = _fit_run(run, obstacles, page_rect, css, archive)
+        first = run[0]
+        if not result and first["type"] == "title" and first["rect"].height <= first["fs"] * 1.65:
+            result = _fit_run(run, obstacles, page_rect, css, archive, title_offset=min(6.0, first["fs"] * 0.65))
+        return result
+
     ready = []
     runs = _column_runs(items, forbidden)
     for run in runs:
@@ -1147,7 +1154,7 @@ def _fit_page(items, forbidden, page_rect, css, archive):
             item = run[0]
             item["right"] = _fit_right(item, forbidden + [it["rect"] for it in items if it is not item], page_rect)
         obstacles = forbidden + [item["rect"] for other in runs if other is not run for item in other]
-        fitted = _fit_run(run, obstacles, page_rect, css, archive)
+        fitted = fit(run, obstacles)
         if fitted or len(run) == 1:
             ready.extend(fitted)
             continue
@@ -1155,7 +1162,7 @@ def _fit_page(items, forbidden, page_rect, css, archive):
         # This also keeps the position of any original text left on the page.
         for item in run:
             boundaries = obstacles + [other["rect"] for other in run if other is not item]
-            ready.extend(_fit_run([item], boundaries, page_rect, css, archive))
+            ready.extend(fit([item], boundaries))
     return ready
 
 
