@@ -327,14 +327,6 @@ class TranslationRenderTest(unittest.TestCase):
             revision = translator.review(paper)["revision"]
             draft = translator.inspect_region(paper, revision, 1, [.11, .15, .96, .37])
             self.assertEqual(draft["source"], [first, missed])
-            services.llm.chat.side_effect = lambda messages, _: {
-                "text": "方法" if "【本块（请翻译）】\nMethods\n\n" in messages[1]["content"] else "这是一段恢复的漏译正文。"
-            }
-            preview = translator.preview_region(paper, draft["token"])
-            self.assertEqual(preview["translations"], ["方法", "这是一段恢复的漏译正文。"])
-            self.assertTrue(preview["canApply"])
-            self.assertEqual(output.read_bytes(), previous)
-
             worker = Thread()
 
             def launch(*args, **kwargs):
@@ -342,20 +334,52 @@ class TranslationRenderTest(unittest.TestCase):
                 worker = Thread(*args, **kwargs)
                 return worker
 
+            translator = Translator(services)
+            self.assertEqual(translator.region_status(paper), draft)
+            with self.assertRaisesRegex(TranslateError, "请先应用或关闭"):
+                translator.inspect_region(paper, revision, 1, [.11, .15, .96, .37])
+            with patch("paperlib.domain.translate.Thread"):
+                self.assertEqual(translator.preview_region(paper, draft["token"])["phase"], "previewing")
+            restored = Translator(services)
+            self.assertEqual(restored.region_status(paper)["phase"], "selected")
+            self.assertIn("上次重译已中断", restored.region_status(paper)["message"])
+
+            def preview_with(reply, token):
+                services.llm.chat.side_effect = reply
+                with patch("paperlib.domain.translate.Thread", side_effect=launch):
+                    self.assertEqual(restored.preview_region(paper, token)["phase"], "previewing")
+                worker.join(12)
+                self.assertFalse(worker.is_alive())
+                return restored.region_status(paper)
+
+            preview = preview_with(lambda messages, _: {
+                "text": "方法" if "【本块（请翻译）】\nMethods\n\n" in messages[1]["content"] else "这是一段恢复的漏译正文。"
+            }, draft["token"])
+            self.assertEqual(preview["translations"], ["方法", "这是一段恢复的漏译正文。"])
+            self.assertTrue(preview["canApply"])
+            self.assertEqual(output.read_bytes(), previous)
+
+            with patch("paperlib.domain.translate.Thread"):
+                self.assertTrue(restored.apply_region(paper, draft["token"])["started"])
+            translator = Translator(services)
+            self.assertTrue(translator.region_status(paper)["canApply"])
+            self.assertIn("上次写回已中断", translator.region_status(paper)["message"])
             with patch("paperlib.domain.translate.Thread", side_effect=launch):
                 self.assertTrue(translator.apply_region(paper, draft["token"])["started"])
             worker.join(12)
             self.assertFalse(worker.is_alive())
             self.assertEqual(translator.state(paper)["state"], "done")
             self.assertEqual(services.llm.chat.call_count, 2)
+            self.assertIsNone(Translator(services).region_status(paper))
+            self.assertFalse(translator._region_path(paper["id"]).exists())
             with fitz.open(output) as doc:
                 self.assertIn("这是一段恢复的漏译正文。", doc[0].get_text())
                 self.assertEqual(doc[0].search_for(neighbor), original_neighbor)
 
             previous = output.read_bytes()
             oversized = translator.inspect_region(paper, translator.review(paper)["revision"], 1, [.11, .15, .96, .37])
-            services.llm.chat.side_effect = lambda *_: {"text": "用于验证排版容量的完整译文。" * 180}
-            preview = translator.preview_region(paper, oversized["token"])
+            restored = translator
+            preview = preview_with(lambda *_: {"text": "用于验证排版容量的完整译文。" * 180}, oversized["token"])
             self.assertTrue(preview["canApply"])
             self.assertGreater(len(preview["translations"][0]), 1000)
             with patch("paperlib.domain.translate.Thread", side_effect=launch):
@@ -364,6 +388,29 @@ class TranslationRenderTest(unittest.TestCase):
             self.assertFalse(worker.is_alive())
             self.assertIn("无法安全放入", translator.state(paper)["error"])
             self.assertEqual(output.read_bytes(), previous)
+            self.assertEqual(Translator(services).region_status(paper)["translations"], preview["translations"])
+            translator.close_region(paper, oversized["token"])
+            self.assertIsNone(Translator(services).region_status(paper))
+
+            revision = translator.review(paper)["revision"]
+            abandoned = translator.inspect_region(paper, revision, 1, [.11, .15, .96, .37])
+            entered, release = Event(), Event()
+            def wait_for_close(*_):
+                entered.set()
+                release.wait(5)
+                return {"text": "关闭期间完成的旧译文。"}
+            services.llm.chat.side_effect = wait_for_close
+            with patch("paperlib.domain.translate.Thread", side_effect=launch):
+                translator.preview_region(paper, abandoned["token"])
+            try:
+                self.assertTrue(entered.wait(5))
+                translator.close_region(paper, abandoned["token"])
+                next_draft = translator.inspect_region(paper, revision, 1, [.11, .15, .96, .37])
+            finally:
+                release.set()
+                worker.join(12)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(Translator(services).region_status(paper), next_draft)
 
     def test_reader_retries_only_the_selected_block_and_keeps_other_layout(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -481,10 +528,10 @@ class TranslationRenderTest(unittest.TestCase):
             with self.assertRaisesRegex(TranslateError, "旧译文"):
                 translator.retry(paper, "a", review["revision"])
 
-    def test_production_jobs_share_eight_slots_and_cancel_without_more_calls(self):
+    def test_production_jobs_share_sixty_four_slots_and_cancel_without_more_calls(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
-            for filename, marker, pages in (("first.pdf", "Alpha", 12), ("second.pdf", "Beta", 2)):
+            for filename, marker, pages in (("first.pdf", "Alpha", 68), ("second.pdf", "Beta", 2)):
                 with fitz.open() as doc:
                     for _ in range(pages):
                         page = doc.new_page()
@@ -495,10 +542,10 @@ class TranslationRenderTest(unittest.TestCase):
             saturated = Event()
             second_called = Event()
             lock = Lock()
-            active = peak = first_calls = second_calls = 0
+            active = peak = first_calls = second_calls = second_peak = 0
 
             def chat(messages, _):
-                nonlocal active, peak, first_calls, second_calls
+                nonlocal active, peak, first_calls, second_calls, second_peak
                 is_first = "Alpha paragraph" in messages[1]["content"]
                 with lock:
                     active += 1
@@ -507,13 +554,15 @@ class TranslationRenderTest(unittest.TestCase):
                         first_calls += 1
                     else:
                         second_calls += 1
+                        second_peak = max(second_peak, active)
                         second_called.set()
-                    if active == 8:
+                    if active == 64:
                         saturated.set()
                 try:
                     if is_first:
                         release.wait(8)
                         return {"text": ""}
+                    time.sleep(0.02)
                     return {"text": "这是第二份的译文。"}
                 finally:
                     with lock:
@@ -530,7 +579,7 @@ class TranslationRenderTest(unittest.TestCase):
             services = SimpleNamespace(
                 runtime=SimpleNamespace(data_dir=directory),
                 db=SimpleNamespace(path_for_paper_file=lambda name: directory / name),
-                llm=SimpleNamespace(chat=chat),
+                llm=SimpleNamespace(chat=chat, settings={}),
             )
             translator = Translator(services)
             first = {"id": "first", "pdfFile": "first.pdf"}
@@ -549,13 +598,15 @@ class TranslationRenderTest(unittest.TestCase):
                     self.assertTrue(translator.start(second)["started"])
                     self.assertTrue(wait_for(lambda: translator.state(second)["stage"] == "translate"))
                     self.assertFalse(second_called.wait(0.2))
+                    services.llm.settings["translationConcurrency"] = 1
                     self.assertEqual(translator.cancel(first)["state"]["stage"], "cancelling")
                 finally:
                     release.set()
                     for runner in runners:
                         runner.join(10)
             self.assertFalse(any(runner.is_alive() for runner in runners))
-            self.assertEqual((peak, first_calls, second_calls), (8, 8, 2))
+            self.assertEqual((peak, first_calls, second_calls), (64, 64, 2))
+            self.assertEqual(second_peak, 1)
             self.assertEqual(translator.state(first)["state"], "cancelled")
             self.assertFalse(translator.state(first)["exists"])
             state = translator.state(second)

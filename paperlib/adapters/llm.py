@@ -45,6 +45,7 @@ PRESETS = [
 ]
 
 DEFAULT_MAX_TOKENS = 128000
+MAX_TRANSLATION_CONCURRENCY = 64
 
 DEFAULT_SETTINGS = {
     "provider": "deepseek",
@@ -53,6 +54,7 @@ DEFAULT_SETTINGS = {
     "model": "deepseek-chat",
     "temperature": 0.3,
     "maxTokens": DEFAULT_MAX_TOKENS,
+    "translationConcurrency": MAX_TRANSLATION_CONCURRENCY,
     "promptTemplate": "\n".join([
         "你是一名严谨的科研助手。请阅读文献题录和提供的正文、补充材料，输出结构化的中文总结。",
         "",
@@ -184,6 +186,10 @@ def paper_metadata(paper):
     return "\n".join(line for line in head if line)
 
 
+def valid_translation_concurrency(value):
+    return type(value) is int and 1 <= value <= MAX_TRANSLATION_CONCURRENCY
+
+
 class LLM:
     def __init__(self, data_dir):
         self.file = Path(data_dir) / "settings.json"
@@ -196,6 +202,8 @@ class LLM:
         self.settings = dict(DEFAULT_SETTINGS)
         if isinstance(raw, dict):
             self.settings.update(raw)
+        if not valid_translation_concurrency(self.settings["translationConcurrency"]):
+            self.settings["translationConcurrency"] = MAX_TRANSLATION_CONCURRENCY
         if load_secret_field(self.settings, "apiKey") and self.file.is_file():
             try:
                 self.save()
@@ -216,6 +224,7 @@ class LLM:
             "model": self.settings.get("model"),
             "temperature": self.settings.get("temperature"),
             "maxTokens": self.settings.get("maxTokens"),
+            "translationConcurrency": self.settings["translationConcurrency"],
             "promptTemplate": self.settings.get("promptTemplate"),
             "autoSummaryZh": self.settings.get("autoSummaryZh") is not False,
             "hasKey": bool(key),
@@ -245,6 +254,11 @@ class LLM:
             nxt["temperature"] = _num(patch.get("temperature"), nxt.get("temperature") or 0.3)
         if patch.get("maxTokens") is not None:
             nxt["maxTokens"] = int(_num(patch.get("maxTokens"), nxt.get("maxTokens") or DEFAULT_MAX_TOKENS))
+        if "translationConcurrency" in patch:
+            value = patch["translationConcurrency"]
+            if not valid_translation_concurrency(value):
+                raise ValueError(f"翻译最高并发数须为 1–{MAX_TRANSLATION_CONCURRENCY} 的整数")
+            nxt["translationConcurrency"] = value
         if patch.get("autoSummaryZh") is not None:
             nxt["autoSummaryZh"] = bool(patch.get("autoSummaryZh"))
         explicit_new_key = False

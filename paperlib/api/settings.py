@@ -29,7 +29,10 @@ def ai_settings(ctx):
     patch = ctx.read_json() or {}
     if not isinstance(patch, dict):
         return ctx.fail(400, "请求体必须是对象")
-    llm.update(patch)
+    try:
+        llm.update(patch)
+    except ValueError as exc:
+        return ctx.fail(400, str(exc))
     return ctx.json(200, {"ok": True, "settings": llm.public_settings(), "ready": llm.ready()})
 
 

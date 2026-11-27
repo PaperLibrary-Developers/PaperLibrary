@@ -131,7 +131,10 @@ export function buildPdfAndAttachments ({
   let translationPoll = null
   let translationAction = false
   let translationRevision = 0
-  let regionSelection = 0
+  let regionVersion = 0
+  let regionBusy = false
+  let regionPoll = null
+  let regionDraft = null
   let regionPanel = null
   let activePdfTab = ''
   let pdfMount = null
@@ -210,21 +213,17 @@ export function buildPdfAndAttachments ({
     translationInfo = state
     paintLangSwitch()
     if (!wasRunning) return
+    if (state.state !== 'running' && regionDraft) void refreshRegion()
     if (state.retryBlock) {
       if (state.state === 'done') {
-        regionPanel?.close()
         toast('已更新所选区域的译文')
         const tab = pdfTabs.get('')
         if (tab.lang === 'trans') {
           tab.url = translatedPdfUrl()
           if (activePdfTab === '') switchLang('trans')
         }
-      } else if (state.state === 'failed') {
-        const message = state.error || '已保留当前译文'
-        if (regionPanel) regionPanel.applyFinished(message)
-        else toast(message, 'error')
-      } else if (state.state === 'cancelled') {
-        regionPanel?.applyFinished('已取消写回')
+      } else if (state.state === 'failed' && !regionPanel) {
+        toast(state.error || '已保留当前译文', 'error')
       }
       return
     }
@@ -323,13 +322,13 @@ export function buildPdfAndAttachments ({
     }
   }
 
-  async function applyRegion (token, viewSignal) {
+  async function applyRegion (token) {
     if (translationAction || translationInfo.state === 'running') throw new Error('这篇文献正在翻译，请稍后再试')
     translationAction = true
     translationRevision++
     paintLangSwitch()
     try {
-      const res = await api.translationRegion(paper.id, { action: 'apply', token }, viewSignal)
+      const res = await api.translationRegion(paper.id, { action: 'apply', token })
       if (!signal.aborted) updateTranslationState(res.state)
     } finally {
       translationAction = false
@@ -340,29 +339,79 @@ export function buildPdfAndAttachments ({
     }
   }
 
-  async function openRegionPreview (area, revision, viewSignal) {
+  function paintRegion (draft, focus = false) {
+    if (!draft || draft.token !== regionDraft?.token) {
+      regionPanel?.dispose(!draft)
+      regionPanel = null
+    }
+    regionDraft = draft
+    if (!draft) return
+    if (regionPanel) regionPanel.update(draft)
+    else regionPanel = showRegionPreview({
+      draft, focus, onAction: action => actOnRegion(action, { token: draft.token })
+    })
+  }
+
+  function scheduleRegionPoll () {
+    if (signal.aborted || regionPoll !== null || !['previewing', 'applying'].includes(regionDraft?.phase)) return
+    regionPoll = setTimeout(() => {
+      regionPoll = null
+      void refreshRegion()
+    }, 1200)
+  }
+
+  async function refreshRegion () {
+    const version = regionVersion
+    try {
+      const { draft } = await api.translationRegion(paper.id, { action: 'status' }, signal)
+      if (!signal.aborted && !regionBusy && version === regionVersion) paintRegion(draft)
+    } catch {
+      // Keep the visible draft while a transient connection error prevents refreshing it.
+    } finally {
+      scheduleRegionPoll()
+    }
+  }
+
+  async function actOnRegion (action, fields) {
+    if (regionBusy) return
+    regionBusy = true
+    regionVersion++
+    try {
+      if (action === 'apply') {
+        await applyRegion(fields.token)
+        if (!signal.aborted) paintRegion({ ...regionDraft, phase: 'applying', message: '' })
+      } else {
+        // The operation is owned by the document, so switching views does not abort it.
+        const response = await api.translationRegion(paper.id, { action, ...fields })
+        if (!signal.aborted) paintRegion(action === 'close' ? null : response, action === 'inspect')
+      }
+    } catch (err) {
+      if (!signal.aborted) {
+        if (regionPanel) regionPanel.showError(err.message)
+        else toast(err.message, 'warn')
+      }
+    } finally {
+      regionBusy = false
+      scheduleRegionPoll()
+    }
+  }
+
+  function openRegionPreview (area, revision) {
     if (translationAction || translationInfo.state === 'running') {
       toast('这篇文献正在翻译，请稍后再试', 'warn')
       return
     }
-    const sequence = ++regionSelection
-    regionPanel?.close()
-    try {
-      const draft = await api.translationRegion(paper.id, { action: 'inspect', revision, ...area }, viewSignal)
-      if (viewSignal.aborted || sequence !== regionSelection) return
-      regionPanel = showRegionPreview({
-        source: draft.source, signal: viewSignal,
-        onPreview: () => api.translationRegion(paper.id, { action: 'preview', token: draft.token }, viewSignal),
-        onApply: () => applyRegion(draft.token, viewSignal),
-        onClose: () => { regionPanel = null }
-      })
-    } catch (err) {
-      if (!viewSignal.aborted && sequence === regionSelection) toast(err.message, 'warn')
+    if (regionDraft) {
+      regionPanel?.showError('请先应用或关闭已有的框选重译。')
+      return
     }
+    void actOnRegion('inspect', { revision, ...area })
   }
 
   signal.addEventListener('abort', () => {
     clearTimeout(translationPoll)
+    clearTimeout(regionPoll)
+    regionPanel?.dispose()
   }, { once: true })
 
   function paintPdfTabs () {
@@ -444,7 +493,7 @@ export function buildPdfAndAttachments ({
       initialView: tab.view || target,
       annotations: annotations.items,
       onTranslationRegion: review?.revision
-        ? area => openRegionPreview(area, review.revision, viewSignal)
+        ? area => openRegionPreview(area, review.revision)
         : undefined,
       onAnnotationsChange: items => { if (!viewSignal.aborted) savePdfAnnotations(annotations.state, items) },
       onRegionSelected: (dataUrl, info) => {
@@ -609,6 +658,7 @@ export function buildPdfAndAttachments ({
   loadAttachments()
 
   if (pdfOk) refreshTranslationState().then(scheduleTranslationPoll)
+  void refreshRegion()
 
   return {
     pdfPanel,

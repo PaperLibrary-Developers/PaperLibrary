@@ -7,18 +7,24 @@ export const STYLE_TEXT = `
 .lv-pdf-translation-preview {
   position: fixed; inset: auto 16px 16px auto; margin: 0; z-index: 120;
   width: min(410px, calc(100vw - 32px)); max-height: min(62vh, 640px);
-  box-sizing: border-box; padding: 15px; overflow: auto;
+  box-sizing: border-box; padding: 15px; overflow: hidden;
   border: 1px solid var(--border); border-radius: var(--radius-sm, 8px);
   background: var(--surface, #fffefb); color: var(--text, #26251f);
   box-shadow: 0 12px 44px #0003;
 }
+.lv-pdf-translation-preview[open] { display: flex; flex-direction: column; }
 .lv-pdf-translation-preview header, .lv-pdf-region-preview-actions {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
+.lv-pdf-translation-preview header, .lv-pdf-translation-preview footer { flex: none; }
+.lv-pdf-translation-preview .lv-pdf-region-close {
+  color: var(--surface); background: var(--danger); border-color: var(--danger);
+}
+.lv-pdf-translation-preview .lv-pdf-region-close:hover { filter: brightness(.9); }
 .lv-pdf-translation-preview h3, .lv-pdf-translation-preview h4 { margin: 0; }
 .lv-pdf-translation-preview [hidden] { display: none; }
 .lv-pdf-translation-preview h4 { font-size: 13px; }
-.lv-pdf-region-preview-text { margin-block: 12px; }
+.lv-pdf-region-preview-text { min-height: 0; overflow: auto; margin-block: 12px; }
 .lv-pdf-region-preview-text section + section {
   margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;
 }

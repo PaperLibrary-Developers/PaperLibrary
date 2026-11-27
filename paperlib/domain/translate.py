@@ -3,6 +3,7 @@
 任务目录 data/translations/<paper_id>/
     state.json        状态（idle / running / done / failed / cancelled + 阶段与进度）
     report.json       块级报告（替换数、XObject 兜底数、未译块数）
+    region.json       阅读器中尚未关闭或应用的框选重译草稿
     review/           与当前译文 PDF 指纹配对的分块与回填数据
     mineru/           MinerU 原始解析 ZIP，便于复查
 
@@ -16,9 +17,10 @@ import re
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import BoundedSemaphore, RLock, Thread
+from threading import Condition, RLock, Thread
 from uuid import uuid4
 
+from paperlib.adapters.llm import MAX_TRANSLATION_CONCURRENCY, valid_translation_concurrency
 from paperlib.adapters.pdf_translate import (
     _font_dir,
     apply_text_budgets,
@@ -41,7 +43,6 @@ from paperlib.adapters.pdf_translate import (
 from paperlib.assets import asset_path, sha256_file
 from paperlib.util import read_json, sanitize_file_name, write_json_atomic
 
-TRANSLATION_WORKERS = 8
 LAYOUT_ONLY_ISSUES = {"overlapping_graphic", "missing_native_text_frame", "overlapping_frames", "missing_source"}
 
 
@@ -57,6 +58,27 @@ def translated_pdf_name(paper):
     return "[Translated]" + stem + ".pdf"
 
 
+class TranslationSlots:
+    """Limit model requests across translation jobs, including when settings change."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.active = 0
+        self.condition = Condition()
+
+    def acquire(self, *, timeout):
+        with self.condition:
+            if not self.condition.wait_for(lambda: self.active < self.limit(), timeout):
+                return False
+            self.active += 1
+            return True
+
+    def release(self):
+        with self.condition:
+            self.active -= 1
+            self.condition.notify()
+
+
 class Translator:
     def __init__(self, services):
         self.services = services
@@ -65,8 +87,13 @@ class Translator:
         self._lock = RLock()
         self._running = set()
         self._cancel = set()
-        self._translation_slots = BoundedSemaphore(TRANSLATION_WORKERS)
-        self._region_drafts = {}
+        self._translation_slots = TranslationSlots(self._translation_limit)
+        self._region_previews = set()
+
+    def _translation_limit(self):
+        settings = getattr(self.services.llm, "settings", None)
+        value = settings.get("translationConcurrency") if isinstance(settings, dict) else None
+        return value if valid_translation_concurrency(value) else MAX_TRANSLATION_CONCURRENCY
 
     # ---------------- 路径与状态 ----------------
 
@@ -157,7 +184,6 @@ class Translator:
                               pages=0, pagesDone=0, error="", translated=0, preservedOriginal=0, renderedCaptions=0,
                               warning="", seconds=0, outputSource=None, outputRevision="", retryBlock=None)
             self._clear_review(paper_id)
-            self._region_drafts.pop(paper_id, None)
             return self.state(paper)
 
     def _should_cancel(self, paper_id):
@@ -176,10 +202,10 @@ class Translator:
                 return {"started": False, "reason": "cached", "state": state}
             return self._launch(paper, self._run)
 
-    def _launch(self, paper, run, *args, block_id=None):
+    def _launch(self, paper, run, *args, block_id=None, region_token=None):
         paper_id = str(paper["id"])
         self._write_state(paper_id, state="running", stage="queued", progress=0, total=int(block_id is not None),
-                          pages=0, pagesDone=0, error="", retryBlock=block_id)
+                          pages=0, pagesDone=0, error="", retryBlock=block_id, regionToken=region_token)
         self._running.add(paper_id)
         try:
             Thread(target=run, args=(paper, *args), daemon=True).start()
@@ -240,6 +266,8 @@ class Translator:
     def inspect_region(self, paper, revision, page, rect):
         paper_id = str(paper["id"])
         with self._lock:
+            if self.region_status(paper):
+                raise TranslateError("请先应用或关闭已有的框选重译")
             _, current, snapshot = self._review_snapshot(paper)
             if not current or revision != current:
                 raise TranslateError("译文已更新，请重新打开译文后框选")
@@ -258,59 +286,142 @@ class Translator:
             context = {block["id"]: block for block in (*known, *candidates)}
             relink(sorted(context.values(), key=lambda block: (block["bbox"][1], block["bbox"][0])))
             apply_text_budgets(pdf_path, candidates, snapshot["layout"] if snapshot else None)
-            token = uuid4().hex
-            if paper_id not in self._region_drafts and len(self._region_drafts) >= 32:
-                self._region_drafts.pop(next(iter(self._region_drafts)))
-            self._region_drafts[paper_id] = {
-                "token": token, "sourceHash": source_hash, "revision": revision, "blocks": candidates,
-                "canApply": bool(snapshot), "pending": False,
+            draft = {
+                "token": uuid4().hex, "sourceHash": source_hash, "sourceFile": paper["pdfFile"],
+                "revision": revision, "blocks": candidates, "canApply": bool(snapshot), "phase": "selected",
             }
-            return {"token": token, "source": [block["source"] for block in candidates]}
+            write_json_atomic(self._region_path(paper_id), draft)
+            return self._region_public(draft)
+
+    def _region_path(self, paper_id):
+        return self.root / str(paper_id) / "region.json"
+
+    def _read_region(self, paper_id):
+        draft = read_json(self._region_path(paper_id))
+        return draft if isinstance(draft, dict) else None
 
     def _region_draft(self, paper_id, token):
-        draft = self._region_drafts.get(paper_id)
+        draft = self._read_region(paper_id)
         if not draft or draft["token"] != token:
             raise TranslateError("框选预览已失效，请重新框选")
         return draft
+
+    def _region_public(self, draft, *, phase=None, message=None):
+        phase = phase or draft["phase"]
+        translations = draft.get("translations", [])
+        return {
+            "token": draft["token"], "source": [block["source"] for block in draft["blocks"]],
+            "translations": translations, "phase": phase,
+            "canApply": phase == "ready" and draft["canApply"] and bool(translations) and all(translations),
+            "message": draft.get("error", "") if message is None else message,
+        }
+
+    def region_status(self, paper):
+        paper_id = str(paper["id"])
+        with self._lock:
+            draft = self._read_region(paper_id)
+            if not draft:
+                return None
+            token = draft["token"]
+            state = self._read_state(paper_id)
+            owns_writeback = state.get("regionToken") == token
+            if owns_writeback and state.get("state") == "done":
+                target = self.existing_pdf(paper, state)
+                published = sha256_file(target) if target else ""
+                if published and state.get("outputRevision") == published:
+                    return None
+                if published == draft["revision"]:
+                    return self._region_public(draft, message="上次写回已中断，可重新应用。")
+                return self._region_public(draft, phase="stale", message="译文已更新。可复制已有译文，关闭后可重新框选。")
+            if owns_writeback and state.get("state") == "running" and paper_id in self._running:
+                return self._region_public(draft, phase="applying")
+            revision = state.get("outputRevision")
+            if (paper.get("pdfFile") != draft["sourceFile"]
+                    or not self.existing_pdf(paper, state)
+                    or (revision and revision != draft["revision"] and not owns_writeback)):
+                return self._region_public(draft, phase="stale", message="原文或译文已更新。可复制已有译文，关闭后可重新框选。")
+            if owns_writeback:
+                message = {
+                    "failed": state.get("error") or "写回失败，可重新应用。",
+                    "cancelled": "已取消写回，可重新应用。",
+                    "running": "上次写回已中断，可重新应用。",
+                }.get(state["state"], "")
+                return self._region_public(draft, message=message)
+            if draft["phase"] == "previewing" and token not in self._region_previews:
+                return self._region_public(draft, phase="selected", message="上次重译已中断，可重新重译选区。")
+            return self._region_public(draft)
+
+    def close_region(self, paper, token):
+        paper_id = str(paper["id"])
+        with self._lock:
+            draft = self._read_region(paper_id)
+            if not draft:
+                return
+            if draft["token"] != token:
+                raise TranslateError("当前框选已更新，请重新打开详情页")
+            self._region_path(paper_id).unlink(missing_ok=True)
+            self._region_previews.discard(token)
+            if self._read_state(paper_id).get("regionToken") == token:
+                self.cancel(paper)
+
+    def _preview_active(self, token):
+        with self._lock:
+            return token in self._region_previews
 
     def preview_region(self, paper, token):
         paper_id = str(paper["id"])
         with self._lock:
             draft = self._region_draft(paper_id, token)
-            if draft["pending"]:
-                raise TranslateError("正在翻译此处，请稍候")
+            if token in self._region_previews:
+                return self._region_public(draft)
+            if draft["phase"] == "ready":
+                return self.region_status(paper)
             target = self.existing_pdf(paper)
             pdf_path = self.services.db.path_for_paper_file(paper.get("pdfFile"))
             if (not target or sha256_file(target) != draft["revision"]
                     or not pdf_path or sha256_file(pdf_path) != draft["sourceHash"]):
                 raise TranslateError("原文或译文已更新，请重新框选")
-            draft["pending"] = True
+            draft.update(phase="previewing", error="")
+            write_json_atomic(self._region_path(paper_id), draft)
+            self._region_previews.add(token)
+            try:
+                Thread(target=self._run_region_preview, args=(paper_id, draft), daemon=True).start()
+            except RuntimeError as exc:
+                self._region_previews.discard(token)
+                draft.update(phase="selected", error="无法启动重译，请重试。")
+                write_json_atomic(self._region_path(paper_id), draft)
+                raise TranslateError(draft["error"]) from exc
+            return self._region_public(draft)
+
+    def _run_region_preview(self, paper_id, draft):
+        token = draft["token"]
         try:
             candidates = [dict(block, translation="") for block in draft["blocks"]]
             # Protected content can still be read in a preview. The renderer retains that protection.
             for block in candidates:
                 block.pop("protected_layout", None)
-            translate_blocks(self.services.llm, candidates, workers=min(4, len(candidates)),
-                             slots=self._translation_slots)
+            translate_blocks(self.services.llm, candidates, workers=self._translation_limit(),
+                             slots=self._translation_slots, should_cancel=lambda: not self._preview_active(token))
             translations = []
             for block in candidates:
                 text = block.get("translation") or ""
                 translations.append("" if text == block["source"] else text)
             if not any(translations):
                 raise TranslateError("本次没有获得可用的译文，可重新框选后再试")
-            with self._lock:
-                self._region_draft(paper_id, token)
-                draft["translations"] = translations
-            return {"translations": translations, "canApply": draft["canApply"] and all(translations)}
+            draft.update(phase="ready", translations=translations)
+        except Exception as exc:  # noqa: BLE001 - return preview errors through the saved draft
+            draft.update(phase="selected", error=str(exc)[:400])
         finally:
             with self._lock:
-                draft["pending"] = False
+                if token in self._region_previews:
+                    self._region_previews.discard(token)
+                    write_json_atomic(self._region_path(paper_id), draft)
 
     def apply_region(self, paper, token):
         paper_id = str(paper["id"])
         with self._lock:
             draft = self._region_draft(paper_id, token)
-            if paper_id in self._running or draft["pending"]:
+            if paper_id in self._running or token in self._region_previews:
                 raise TranslateError("这篇文献正在翻译，请稍后再试")
             _, revision, snapshot = self._review_snapshot(paper)
             pdf_path = self.services.db.path_for_paper_file(paper.get("pdfFile"))
@@ -318,7 +429,8 @@ class Translator:
                 raise TranslateError("当前预览无法写回，可在预览中阅读或复制译文")
             if revision != draft["revision"] or not pdf_path or sha256_file(pdf_path) != draft["sourceHash"]:
                 raise TranslateError("原文或译文已更新，请重新打开译文后框选")
-            return self._launch(paper, self._run_region_apply, pdf_path, snapshot, draft, block_id="region")
+            return self._launch(paper, self._run_region_apply, pdf_path, snapshot, draft,
+                                block_id="region", region_token=token)
 
     def _run_region_apply(self, paper, pdf_path, snapshot, draft):
         paper_id = str(paper["id"])
@@ -334,6 +446,14 @@ class Translator:
                 selected.append(replacement)
             self._render(paper, pdf_path, draft["sourceHash"], snapshot["layout"], list(blocks.values()),
                          snapshot["report"], started, 0, retry_blocks=selected)
+            with self._lock:
+                saved = self._read_region(paper_id)
+                if saved and saved["token"] == draft["token"] and self._read_state(paper_id).get("state") == "done":
+                    try:
+                        self._region_path(paper_id).unlink(missing_ok=True)
+                    except OSError:
+                        # A completed writeback is also recognized by its published PDF revision.
+                        pass
         except Exception as exc:  # noqa: BLE001 - report back without publishing an unsafe rewrite
             error = exc
         finally:
@@ -464,7 +584,7 @@ class Translator:
                 should_cancel=lambda: self._should_cancel(paper_id),
                 on_block=lambda done, total: self._write_state(
                     paper_id, stage="translate", progress=done, total=total),
-                workers=TRANSLATION_WORKERS, slots=self._translation_slots,
+                workers=self._translation_limit(), slots=self._translation_slots,
             )
             if self._should_cancel(paper_id):
                 return

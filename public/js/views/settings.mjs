@@ -10,6 +10,7 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
 
   const { h, toast, rich, confirmDialog, fileSize, formatDate } = util
   const DEFAULT_AI_MAX_TOKENS = 128000
+  const MAX_TRANSLATION_CONCURRENCY = 64
   
   function download (url) {
     const a = h('a', { href: url, download: '' })
@@ -1053,6 +1054,11 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
     const fKey = h('input.input', { type: 'password', value: '', placeholder: ai.hasKey ? '已保存，留空表示不修改' : '粘贴你的 API 密钥', autocomplete: 'off' })
     const fTemp = h('input.input', { type: 'text', inputmode: 'decimal', value: String(ai.temperature != null ? ai.temperature : 0.3) })
     const fTokens = h('input.input', { type: 'text', id: 'ai-max-tokens', inputmode: 'numeric', value: String(ai.maxTokens ?? DEFAULT_AI_MAX_TOKENS) })
+    const fTranslationConcurrency = h('input.input', {
+      type: 'number', id: 'ai-translation-concurrency', min: 1, max: MAX_TRANSLATION_CONCURRENCY, step: 1,
+      required: true, value: ai.translationConcurrency ?? MAX_TRANSLATION_CONCURRENCY,
+      'aria-describedby': 'ai-translation-concurrency-hint'
+    })
     const fPrompt = h('textarea.textarea', { rows: 7 }, ai.promptTemplate || '')
     // 新增文献后是否自动生成中文一句话总结（默认开）
     const fAutoSummary = h('input.check', { type: 'checkbox', checked: ai.autoSummaryZh !== false })
@@ -1114,6 +1120,12 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
     }, h('span.privacy-mark', { 'aria-hidden': 'true' }, '!'))
     const privacyBox = h('span.privacy', privacyBtn, privacyNote)
 
+    function readTranslationConcurrency () {
+      if (fTranslationConcurrency.reportValidity()) return Number(fTranslationConcurrency.value)
+      toast('翻译最高并发数须为 1–' + MAX_TRANSLATION_CONCURRENCY + ' 的整数', 'error')
+      return null
+    }
+
     const testResult = h('div.hint', '')
     const aiPanel = foldPanel('api-ai', '大模型',
       h('div', { style: { display: 'grid', gap: '13px' } },
@@ -1132,6 +1144,11 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
           h('div.field', h('label', '温度 temperature'), fTemp, h('div.hint', '越低越稳定，0.2~0.4 适合总结')),
           h('div.field', h('label', { for: 'ai-max-tokens' }, '最大输出 max_tokens'), fTokens)
         ),
+        h('div.form-grid.pair',
+          h('div.field', h('label', { for: 'ai-translation-concurrency' }, '翻译最高并发数'), fTranslationConcurrency,
+            h('div.hint', { id: 'ai-translation-concurrency-hint' }, '1–' + MAX_TRANSLATION_CONCURRENCY +
+              '，全文翻译与框选重译共用。服务商频繁限流时可调低。'))
+        ),
         h('div.field', h('label', '提示词（决定总结的结构）'), fPrompt),
         h('div.field', h('label', '自动生成'), autoSummaryField),
         h('div', { style: { display: 'flex', gap: '9px', flexWrap: 'wrap', alignItems: 'center' } },
@@ -1143,6 +1160,8 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
                 toast('接口地址和模型名称不能为空（空值不会覆盖已保存的配置）', 'error')
                 return
               }
+              const translationConcurrency = readTranslationConcurrency()
+              if (translationConcurrency === null) return
               try {
                 const res = await api.aiSaveSettings({
                   provider: presetSelect.value,
@@ -1151,6 +1170,7 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
                   apiKey: fKey.value.trim(),
                   temperature: Number(fTemp.value) || 0.3,
                   maxTokens: Number(fTokens.value) || DEFAULT_AI_MAX_TOKENS,
+                  translationConcurrency,
                   promptTemplate: fPrompt.value,
                   autoSummaryZh: !!fAutoSummary.checked
                 })
@@ -1169,6 +1189,8 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
                 toast('接口地址和模型名称不能为空', 'error')
                 return
               }
+              const translationConcurrency = readTranslationConcurrency()
+              if (translationConcurrency === null) return
               const btn = ev.target
               btn.setAttribute('disabled', '')
               testResult.textContent = '正在测试…'
@@ -1180,6 +1202,7 @@ import { fetchLocalNotice, openNoticeModal } from '../notice.mjs'
                   apiKey: fKey.value.trim(),
                   temperature: Number(fTemp.value) || 0.3,
                   maxTokens: Number(fTokens.value) || DEFAULT_AI_MAX_TOKENS,
+                  translationConcurrency,
                   promptTemplate: fPrompt.value,
                   autoSummaryZh: !!fAutoSummary.checked
                 })

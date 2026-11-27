@@ -5,7 +5,7 @@
   POST   /api/papers/:id/translation/cancel 取消
   GET    /api/papers/:id/translation/review   阅读器内的文本块坐标
   POST   /api/papers/:id/translation/retry    重译已保存的单个文本块
-  POST   /api/papers/:id/translation/region   框选取文、重译预览或写回
+  POST   /api/papers/:id/translation/region   获取、创建、重译、写回或关闭选区草稿
   DELETE /api/papers/:id/translation        删除译文产物
   GET    /api/papers/:id/translation.pdf    预览 / 下载译文 PDF
 """
@@ -96,11 +96,16 @@ def region(ctx):
                     or not (rect[0] < rect[2] and rect[1] < rect[3])):
                 return ctx.fail(400, "缺少有效的译文版本、页码或框选坐标")
             return ctx.json(200, translator.inspect_region(paper, revision, page, rect))
-        if action not in ("preview", "apply"):
+        if action == "status":
+            return ctx.json(200, {"draft": translator.region_status(paper)})
+        if action not in ("preview", "apply", "close"):
             return ctx.fail(400, "未知的框选操作")
         token = body.get("token")
         if not isinstance(token, str) or not re.fullmatch("[a-f0-9]{32}", token):
             return ctx.fail(400, "缺少有效的框选记录")
+        if action == "close":
+            translator.close_region(paper, token)
+            return ctx.json(200, {"draft": None})
         handler = translator.preview_region if action == "preview" else translator.apply_region
         return ctx.json(200, handler(paper, token))
     except ValueError as exc:

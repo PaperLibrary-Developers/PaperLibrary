@@ -23,6 +23,7 @@ os.environ["PAPERLIB_SKIP_MIGRATE"] = "1"
 os.environ["PYTHONUTF8"] = "1"
 
 from paperlib.app import build  # noqa: E402
+from paperlib.adapters.llm import LLM  # noqa: E402
 from paperlib.config import Config  # noqa: E402
 from paperlib.http.server import HttpServer  # noqa: E402
 
@@ -89,6 +90,20 @@ class SmokeTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.fx.stop()
+
+    def test_translation_concurrency_setting_validates_and_survives_reload(self):
+        path = "/api/ai/settings"
+        self.assertEqual(self.fx.json("GET", path)[1]["settings"]["translationConcurrency"], 64)
+        try:
+            status, data = self.fx.json("PUT", path, {"translationConcurrency": 11})
+            self.assertEqual(status, 200)
+            self.assertEqual(data["settings"]["translationConcurrency"], 11)
+            for invalid in (0, 65, 1.5, True, "7", None):
+                with self.subTest(invalid=invalid):
+                    self.assertEqual(self.fx.json("PUT", path, {"translationConcurrency": invalid})[0], 400)
+            self.assertEqual(LLM(self.fx.data_dir).public_settings()["translationConcurrency"], 11)
+        finally:
+            self.fx.json("PUT", path, {"translationConcurrency": 64})
 
     def test_translation_recovers_interrupted_job_and_cancel_preserves_pdf(self):
         import pymupdf
