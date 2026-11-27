@@ -21,6 +21,29 @@ from paperlib.domain.translate import Translator
 
 
 class MinerUTranslationTest(unittest.TestCase):
+    def test_methods_prose_mislabelled_as_references_is_recovered(self):
+        def block(kind, text, y):
+            box = [40, y, 220, y + 22]
+            return {"type": kind, "bbox": box, "lines": [
+                {"bbox": [40, y + 11 * row, 220, y + 11 * (row + 1)],
+                 "spans": [{"type": "text", "content": line}]}
+                for row, line in enumerate(text.splitlines())
+            ]}
+
+        prose = ("Sample preparation. The solution was prepared and left to equilibrate.\n"
+                 "The measurement was then recorded and compared with the control sample.")
+        blocks = [block("title", "Methods", 20), block("ref_text", prose, 42),
+                  block("ref_text", "1. " + prose, 64), block("title", "References", 108),
+                  block("ref_text", prose, 130)]
+        layout = {"pdf_info": [{"page_idx": 0, "para_blocks": blocks}]}
+
+        normalized, report = normalize_mineru_layout(layout)
+        self.assertEqual(report["methods_prose_recovered"], 1)
+        self.assertEqual(blocks[1]["type"], "ref_text")
+        self.assertEqual([item["type"] for item in normalized["pdf_info"][0]["para_blocks"]],
+                         ["title", "text", "ref_text", "title", "ref_text"])
+        self.assertIn("Sample preparation.", blocks_from_layout(normalized)[1]["source"])
+
     def test_only_current_archive_can_supply_layout_and_v2(self):
         with tempfile.TemporaryDirectory() as folder:
             work = Path(folder)

@@ -234,7 +234,7 @@ class Translator:
                 source_ids = {block["id"] for block in blocks}
                 blocks = repair_sources(blocks, pdf_path)
                 normalization["emptySourceIds"] = sorted(source_ids - {block["id"] for block in blocks})
-                if normalization["format"] == "middle" and not content_v2 and not recovery:
+                if normalization["format"] == "middle" and not content_v2 and not recovery.get("cross_page_recovered_block_count"):
                     blocks = relocate_by_text(blocks, pdf_path)
                 blocks = relink(dedupe_hierarchy(blocks, pdf_path))
             if not blocks:

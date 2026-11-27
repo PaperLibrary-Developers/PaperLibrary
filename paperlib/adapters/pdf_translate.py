@@ -34,6 +34,15 @@ CAPTION_TYPES = ("caption", "image_caption", "chart_caption", "table_caption")
 CAPTION_START = re.compile(
     r"^(?:fig(?:ure)?\.?|scheme|table|chart|图|表)\s*[A-ZＡ-Ｚ]?[0-9０-９]+", re.I
 )
+METHODS_HEADING = re.compile(
+    r"^(?:\d+(?:\.\d+)*[.)]?\s+)?(?:methods|online methods|materials and methods|"
+    r"experimental (?:section|methods|procedures))[.:]?$", re.I,
+)
+METHODS_END = re.compile(
+    r"^(?:\d+(?:\.\d+)*[.)]?\s+)?(?:references|bibliography|literature cited|works cited|"
+    r"results(?: and discussion)?|discussion|conclusions?|acknowledg(?:e)?ments|"
+    r"data availability|author contributions)[.:]?$", re.I,
+)
 FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "translation-fonts"
 SERIF_FONT = "SourceHanSerifCN-VF.ttf.xz"
 SERIF_REGULAR = "SourceHanSerifCN-Regular.ttf"
@@ -309,6 +318,36 @@ def _join_frame_clauses(blocks):
 def normalize_mineru_layout(layout):
     """Assign moved spans to their physical PDF pages before choosing frames."""
     pages, report = restore_cross_page_spans(layout.get("pdf_info") or [])
+    methods = False
+    recovered = 0
+    for page_index, page in enumerate(pages):
+        replacements = {}
+        for index, block in enumerate(page.get("para_blocks") or []):
+            if not isinstance(block, dict) or block.get("lines_deleted"):
+                continue
+            kind = block.get("type")
+            if kind not in ("ref_text", "title", "doc_title", "paragraph_title"):
+                continue
+            lines = list(iter_direct_lines(block))
+            text = clean_source(merge_lines(lines)).strip()
+            if kind != "ref_text":
+                if METHODS_HEADING.fullmatch(text):
+                    methods = True
+                elif METHODS_END.fullmatch(text):
+                    methods = False
+            elif (methods and len(lines) >= 2 and len(re.findall(r"\b[A-Za-z]{3,}\b", text)) >= 12
+                  and not re.match(r"^(?:\[\d+\]|\d+[.)]?\s)", text)):
+                # Some compact Methods prose is emitted as a bibliography entry.
+                replacements[index] = {**block, "type": "text"}
+        if replacements:
+            if not recovered:
+                pages = list(pages)
+            pages[page_index] = {**page, "para_blocks": [
+                replacements.get(index, block) for index, block in enumerate(page["para_blocks"])
+            ]}
+            recovered += len(replacements)
+    if recovered:
+        report["methods_prose_recovered"] = recovered
     return {**layout, "pdf_info": pages}, report
 
 
