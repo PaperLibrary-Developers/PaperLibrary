@@ -206,12 +206,22 @@ export function createCaptureController (ctx) {
   /* ---- 框选模式取景层 ---- */
   function syncRegionButton () {
     if (!ui.btnRegion) return
-    const on = !!state.regionSelect
+    const on = state.regionSelect === 'ask'
     ui.btnRegion.classList.toggle('active', on)
     ui.btnRegion.setAttribute('aria-pressed', on ? 'true' : 'false')
     ui.btnRegion.title = on
       ? '正在框选：在 PDF 上按住鼠标拖一个框（Esc 取消）'
       : '在 PDF 上拖一个框，把这一块发给模型识别'
+    if (ui.btnTranslateRegion) {
+      const translating = state.regionSelect === 'translate'
+      ui.btnTranslateRegion.classList.toggle('active', translating)
+      ui.btnTranslateRegion.setAttribute('aria-pressed', String(translating))
+    }
+    if (ui.regionHint) {
+      ui.regionHint.textContent = state.regionSelect === 'translate'
+        ? '拖框选中要重译的标题或段落（Esc 取消）'
+        : '按住鼠标拖一个框，把这一块发给模型识别（Esc 取消）'
+    }
   }
 
   function drawRegionBox (x1, y1, x2, y2) {
@@ -245,8 +255,20 @@ export function createCaptureController (ctx) {
     drawRegionBox(drag.x0, drag.y0, pt.x, pt.y)
   }
 
-  async function handleRegionSelection (sel) {
+  async function handleRegionSelection (sel, mode) {
     try {
+      if (mode === 'translate') {
+        const target = findPageTarget(sel)
+        if (!target || overlapArea(sel, target.rect) <= 0) return
+        const { left, top, width, height } = target.rect
+        const limit = value => Math.max(0, Math.min(1, value))
+        opts.onTranslationRegion?.({
+          page: target.pageNumber,
+          rect: [limit((sel.left - left) / width), limit((sel.top - top) / height),
+            limit((sel.left + sel.width - left) / width), limit((sel.top + sel.height - top) / height)]
+        })
+        return
+      }
       const cb = opts.onRegionSelected
       if (typeof cb !== 'function') return
       const shot = await captureClientRect(sel, null)
@@ -265,9 +287,10 @@ export function createCaptureController (ctx) {
       width: Math.abs(pt.x - drag.x0),
       height: Math.abs(pt.y - drag.y0)
     })
+    const mode = state.regionSelect
     cancelRegionSelect()
     if (!sel || sel.width < REGION_MIN_SIDE || sel.height < REGION_MIN_SIDE) return
-    handleRegionSelection(sel)
+    handleRegionSelection(sel, mode)
   }
 
   function onRegionKeydown (ev) {
@@ -286,16 +309,17 @@ export function createCaptureController (ctx) {
     ui.scroll.scrollLeft += (Number(ev.deltaX) || 0) * unit
   }
 
-  function startRegionSelect () {
+  function startRegionSelect (mode = 'ask') {
     try {
       if (state.destroyed || state.tornDown) return
-      if (state.regionSelect) return
+      if (state.regionSelect === mode) return
+      if (state.regionSelect) cancelRegionSelect()
       if (!ui.regionLayer || !ui.body) return
       const viewer = state.pdfViewer
       if (!viewer || !viewer.pagesCount) return
       ctx.closeAnnotPop()
       ctx.setAnnotMode(null)
-      state.regionSelect = true
+      state.regionSelect = mode
       state.regionDrag = null
       if (ui.regionBox) ui.regionBox.style.display = 'none'
       ui.regionLayer.style.display = 'block'
@@ -321,11 +345,11 @@ export function createCaptureController (ctx) {
     } catch (err) {}
   }
 
-  function toggleRegionSelect () {
+  function toggleRegionSelect (mode = 'ask') {
     try {
       if (state.destroyed) return
-      if (state.regionSelect) cancelRegionSelect()
-      else startRegionSelect()
+      if (state.regionSelect === mode) cancelRegionSelect()
+      else startRegionSelect(mode)
     } catch (err) {}
   }
 

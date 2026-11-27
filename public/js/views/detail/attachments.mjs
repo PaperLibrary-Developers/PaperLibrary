@@ -2,6 +2,7 @@
 import * as util from '../../util.mjs'
 import { api } from '../../api.mjs'
 import * as pdfviewer from '../../pdfviewer.mjs'
+import { showRegionPreview } from '../../pdfviewer/translation-review.mjs'
 import { refreshMeta, render } from '../../shell/app-api.mjs'
 import {
   buildAnnotKey,
@@ -130,6 +131,8 @@ export function buildPdfAndAttachments ({
   let translationPoll = null
   let translationAction = false
   let translationRevision = 0
+  let regionSelection = 0
+  let regionPanel = null
   let activePdfTab = ''
   let pdfMount = null
   const pdfTabBar = h('div.pdf-doc-tabs', { role: 'tablist', 'aria-label': 'PDF 文档' })
@@ -192,7 +195,8 @@ export function buildPdfAndAttachments ({
     }
     translateBtn.disabled = translationAction
     translateBtn.textContent = translating
-      ? '取消翻译 ' + (translationInfo.progress || 0) + (translationInfo.total ? '/' + translationInfo.total : '')
+      ? (translationInfo.retryBlock ? '取消重译写回'
+          : '取消翻译 ' + (translationInfo.progress || 0) + (translationInfo.total ? '/' + translationInfo.total : ''))
       : (hasTrans ? '重新翻译' : '翻译')
     translateBtn.title = translating
       ? '正在翻译：点一下取消（已经花掉的模型调用不会退回）'
@@ -206,6 +210,24 @@ export function buildPdfAndAttachments ({
     translationInfo = state
     paintLangSwitch()
     if (!wasRunning) return
+    if (state.retryBlock) {
+      if (state.state === 'done') {
+        regionPanel?.close()
+        toast('已更新所选区域的译文')
+        const tab = pdfTabs.get('')
+        if (tab.lang === 'trans') {
+          tab.url = translatedPdfUrl()
+          if (activePdfTab === '') switchLang('trans')
+        }
+      } else if (state.state === 'failed') {
+        const message = state.error || '已保留当前译文'
+        if (regionPanel) regionPanel.applyFinished(message)
+        else toast(message, 'error')
+      } else if (state.state === 'cancelled') {
+        regionPanel?.applyFinished('已取消写回')
+      }
+      return
+    }
     if (state.state === 'done') {
       const captions = state.renderedCaptions ? `，已翻译 ${state.renderedCaptions} 条图表题注` : ''
       const retained = state.preservedOriginal ? `，${state.preservedOriginal} 个文本块仍显示原文` : ''
@@ -244,13 +266,18 @@ export function buildPdfAndAttachments ({
     if (btn) btn.title = (pdfTabs.get('') || {}).title || 'PDF'
   }
 
+  function translatedPdfUrl () {
+    const url = api.translationUrl(paper.id)
+    return translationInfo.outputRevision ? url + '?v=' + encodeURIComponent(translationInfo.outputRevision) : url
+  }
+
   function switchLang (mode) {
     if (mode === 'trans' && !translationInfo.exists) return
     translationMode = mode
     const tab = pdfTabs.get('')
     if (!tab) return
     if (activePdfTab === '' && activePdfViewer) tab.view = activePdfViewer.getViewState()
-    tab.url = mode === 'trans' ? api.translationUrl(paper.id) : api.pdfUrl(paper.id)
+    tab.url = mode === 'trans' ? translatedPdfUrl() : api.pdfUrl(paper.id)
     tab.title = mode === 'trans' ? 'PDF（译文）' : 'PDF'
     // 原文 / 译文各存一份批注：换版本要连批注一起换，不能把英文的坐标叠到中文上
     tab.lang = mode
@@ -293,6 +320,44 @@ export function buildPdfAndAttachments ({
         paintLangSwitch()
         scheduleTranslationPoll()
       }
+    }
+  }
+
+  async function applyRegion (token, viewSignal) {
+    if (translationAction || translationInfo.state === 'running') throw new Error('这篇文献正在翻译，请稍后再试')
+    translationAction = true
+    translationRevision++
+    paintLangSwitch()
+    try {
+      const res = await api.translationRegion(paper.id, { action: 'apply', token }, viewSignal)
+      if (!signal.aborted) updateTranslationState(res.state)
+    } finally {
+      translationAction = false
+      if (!signal.aborted) {
+        paintLangSwitch()
+        scheduleTranslationPoll()
+      }
+    }
+  }
+
+  async function openRegionPreview (area, revision, viewSignal) {
+    if (translationAction || translationInfo.state === 'running') {
+      toast('这篇文献正在翻译，请稍后再试', 'warn')
+      return
+    }
+    const sequence = ++regionSelection
+    regionPanel?.close()
+    try {
+      const draft = await api.translationRegion(paper.id, { action: 'inspect', revision, ...area }, viewSignal)
+      if (viewSignal.aborted || sequence !== regionSelection) return
+      regionPanel = showRegionPreview({
+        source: draft.source, signal: viewSignal,
+        onPreview: () => api.translationRegion(paper.id, { action: 'preview', token: draft.token }, viewSignal),
+        onApply: () => applyRegion(draft.token, viewSignal),
+        onClose: () => { regionPanel = null }
+      })
+    } catch (err) {
+      if (!viewSignal.aborted && sequence === regionSelection) toast(err.message, 'warn')
     }
   }
 
@@ -366,7 +431,11 @@ export function buildPdfAndAttachments ({
     const host = h('div.pdf-viewer-host', { id: 'pdf-viewer-host' }, h('div.pdf-empty', '正在打开 PDF…'))
     pdfBody.replaceChildren(host)
     syncHeight()
-    const annotations = await loadPdfAnnotations(tab, viewSignal)
+    const isTranslation = tab.lang === 'trans'
+    const [annotations, review] = await Promise.all([
+      loadPdfAnnotations(tab, viewSignal),
+      isTranslation ? api.translationReview(paper.id, viewSignal).catch(() => null) : null
+    ])
     if (!annotations || viewSignal.aborted) return null
     host.replaceChildren()
     const target = !tab.file && !tab.view ? figureLocation : null
@@ -374,6 +443,9 @@ export function buildPdfAndAttachments ({
       url: tab.url, title: tab.title, downloadUrl: tab.url, signal: viewSignal,
       initialView: tab.view || target,
       annotations: annotations.items,
+      onTranslationRegion: review?.revision
+        ? area => openRegionPreview(area, review.revision, viewSignal)
+        : undefined,
       onAnnotationsChange: items => { if (!viewSignal.aborted) savePdfAnnotations(annotations.state, items) },
       onRegionSelected: (dataUrl, info) => {
         if (!viewSignal.aborted) onRegionSelected(dataUrl, { ...info, source: tab.file ? tab.title : '' })

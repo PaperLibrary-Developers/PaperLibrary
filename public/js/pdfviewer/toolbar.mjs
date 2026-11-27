@@ -182,6 +182,13 @@ export function buildViewerUi (ctx) {
     type: 'button', 'aria-pressed': 'false',
     title: '框选：在 PDF 上拖一个框，把这一块发给模型识别', 'aria-label': '框选'
   }, selectIcon())
+  ui.btnTranslateRegion = typeof opts.onTranslationRegion === 'function'
+    ? el('button.lv-pdf-btn', {
+      type: 'button', 'aria-pressed': 'false',
+      title: '框选重译：拖框选中区域，预览对应原文和新译文',
+      onclick: () => ctx.toggleRegionSelect('translate')
+    }, '框选重译')
+    : null
 
   /* 荧光笔 / 便签：只留两个图标（参考 GoodNotes 的工具栏）。
      点哪个就等于「拿起哪支笔」，并在工具栏下方弹出那支笔自己的取色条。 */
@@ -230,7 +237,7 @@ export function buildViewerUi (ctx) {
     el('div.lv-pdf-group', null, [ui.btnZoomOut, ui.zoom, ui.btnZoomIn]),
     el('div.lv-pdf-group', null, [ui.fitSeg]),
     el('div.lv-pdf-group', null, [ui.toolSeg]),
-    el('div.lv-pdf-group', null, [ui.btnRegion]),
+    el('div.lv-pdf-group', null, [ui.btnRegion, ui.btnTranslateRegion]),
     el('div.lv-pdf-group', null, [ui.btnSearch, ui.linkDownload, ui.linkOpen]),
     ui.palette
   ])

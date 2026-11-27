@@ -4,6 +4,30 @@ export const STYLE_ID = 'lv-pdfviewer-style'
 export const CSS_LINK_ID = 'lv-pdfviewer-css'
 
 export const STYLE_TEXT = `
+.lv-pdf-translation-preview {
+  position: fixed; inset: auto 16px 16px auto; margin: 0; z-index: 120;
+  width: min(410px, calc(100vw - 32px)); max-height: min(62vh, 640px);
+  box-sizing: border-box; padding: 15px; overflow: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm, 8px);
+  background: var(--surface, #fffefb); color: var(--text, #26251f);
+  box-shadow: 0 12px 44px #0003;
+}
+.lv-pdf-translation-preview header, .lv-pdf-region-preview-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.lv-pdf-translation-preview h3, .lv-pdf-translation-preview h4 { margin: 0; }
+.lv-pdf-translation-preview [hidden] { display: none; }
+.lv-pdf-translation-preview h4 { font-size: 13px; }
+.lv-pdf-region-preview-text { margin-block: 12px; }
+.lv-pdf-region-preview-text section + section {
+  margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px;
+}
+.lv-pdf-region-preview-text p, .lv-pdf-region-status {
+  font-size: 13px; margin: 6px 0; overflow-wrap: anywhere;
+}
+.lv-pdf-region-status { color: var(--muted); }
+.lv-pdf-region-preview-actions { justify-content: flex-end; flex-wrap: wrap; }
+
 .lv-pdf-viewer {
   position: relative;
   display: flex;

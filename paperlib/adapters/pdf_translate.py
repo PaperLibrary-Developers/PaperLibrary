@@ -14,6 +14,7 @@ import zipfile
 from collections import Counter
 from contextlib import contextmanager
 from difflib import SequenceMatcher
+from hashlib import sha256
 from html import unescape
 from importlib.util import find_spec
 from io import BytesIO
@@ -844,6 +845,46 @@ def _page_text_lines(page):
     return lines
 
 
+def selected_source_blocks(pdf_path, page_no, rect, blocks, placed):
+    """Resolve the visible selection to whole translated blocks or native lines missed by OCR."""
+    with fitz.open(str(pdf_path)) as doc:
+        if not 1 <= page_no <= len(doc):
+            raise ValueError("没有找到所框选的 PDF 页")
+        page = doc[page_no - 1]
+        view = page.rect
+        clip = fitz.Rect(rect[0] * view.width, rect[1] * view.height,
+                         rect[2] * view.width, rect[3] * view.height) * page.derotation_matrix
+        boxes = [fitz.Rect(block["bbox"]) for block in blocks]
+        out = []
+        for block, source_box in zip(blocks, boxes):
+            target = fitz.Rect(placed[block["id"]]["bbox"]) if block["id"] in placed else source_box
+            overlap = target & clip
+            if (overlap.width >= 0.6 * min(clip.width, target.width)
+                    and overlap.height >= min(8, 0.45 * target.height)):
+                out.append(dict(block))
+
+        native = page.get_text("dict", flags=fitz.TEXTFLAGS_TEXT)["blocks"]
+        for group in native:
+            rows = []
+            for line in group.get("lines", ()):
+                box = fitz.Rect(line["bbox"])
+                if (line.get("dir", (1, 0))[0] < .99 or not _line_in_frame(box, clip)
+                        or any(_line_in_frame(box, known) for known in boxes)):
+                    continue
+                rows.append((box, line["spans"]))
+            if not rows:
+                continue
+            box = fitz.Rect(rows[0][0])
+            for row, _ in rows[1:]:
+                box |= row
+            source = NATIVE_FORMULA.sub(lambda match: f"⟦{match[0]}⟧", _native_frame_text(rows))
+            if not clean_source(source):
+                continue
+            key = sha256(repr((list(box), source)).encode()).hexdigest()[:12]
+            out.append({"id": f"p{page_no}r{key}", "page": page_no, "type": "text", "source": source, "bbox": list(box)})
+    return sorted(out, key=lambda block: (block["bbox"][1], block["bbox"][0]))
+
+
 def _line_in_frame(line, rect):
     center_y = (line.y0 + line.y1) / 2
     overlap = min(line.x1, rect.x1) - max(line.x0, rect.x0)
@@ -911,6 +952,23 @@ def apply_text_budgets(pdf_path, blocks, layout=None):
 def _layout_pages(layout):
     return {p.get("page_idx", index): p
             for index, p in enumerate((layout or {}).get("pdf_info") or [])}
+
+
+def render_geometry(layout):
+    """Keep the OCR obstacle boxes needed to replay rendering, without OCR spans or image paths."""
+    if not layout:
+        return None
+
+    def box(block):
+        return {key: block[key] for key in ("type", "bbox") if key in block}
+
+    return {"pdf_info": [
+        {"page_idx": index,
+         "para_blocks": [{**box(block), "blocks": [box(child) for child in block.get("blocks") or []]}
+                         for block in page.get("para_blocks") or []],
+         "discarded_blocks": [box(block) for block in page.get("discarded_blocks") or []]}
+        for index, page in _layout_pages(layout).items()
+    ]}
 
 
 def _page_images(page, page_info):
@@ -1071,7 +1129,8 @@ def _fit_run(run, obstacles, page_rect, css, archive):
             height = filled[3] + 0.15
             if more or height <= 0.15 or y + height > bottom + 0.05:
                 break
-            ready.append((item, fitz.Rect(left, y, right, y + height), story))
+            ready.append(({**item, "size": size, "line_height": leading},
+                          fitz.Rect(left, y, right, y + height), story))
             y += height
             if index < len(gaps):
                 y += gaps[index] + extra_gap
@@ -1098,6 +1157,34 @@ def _fit_page(items, forbidden, page_rect, css, archive):
             boundaries = obstacles + [other["rect"] for other in run if other is not item]
             ready.extend(_fit_run([item], boundaries, page_rect, css, archive))
     return ready
+
+
+def _fit_retry_page(items, forbidden, page_rect, css, archive, block_ids, previous):
+    """Keep other paragraphs in their existing positions and fit only the requested blocks."""
+    placed = previous["placed"]
+    fixed = []
+    candidates = []
+    obstacles = list(forbidden)
+    for item in items:
+        key = item["id"]
+        if key in block_ids:
+            anchor = placed.get(key)
+            candidates.append(({**item, "rect": fitz.Rect(anchor["bbox"]), "left": anchor["bbox"][0]}
+                               if anchor else item))
+        elif key in placed:
+            placement = placed[key]
+            target = fitz.Rect(placement["bbox"])
+            style = (placement["size"], placement["line_height"])
+            fixed.append(({**item, "size": style[0], "line_height": style[1]}, target,
+                          _story(item, *style, css, archive)))
+            obstacles.append(target)
+        else:
+            obstacles.append(item["rect"])
+    originals = {item["id"]: item["rect"] for item in items}
+    for fitted, target, story in _fit_page(candidates, obstacles, page_rect, css, archive):
+        fixed.append(({**fitted, "rect": originals[fitted["id"]]}, target, story))
+    order = {key: index for index, key in enumerate(originals)}
+    return sorted(fixed, key=lambda placement: order[placement[0]["id"]])
 
 
 def _protected_boxes(page_info, images, lines, items, blocked):
@@ -1206,7 +1293,7 @@ def _translation_fonts(font_dir, font_name, translations):
         yield work_dir
 
 
-def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font_name, on_page=None):
+def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font_name, on_page=None, retry=None):
     """Fit complete translated paragraphs before modifying the original page."""
     geometry = _layout_pages(layout)
     by_page = {}
@@ -1267,8 +1354,22 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
             blocked.extend(item["rect"] for item in items if item["id"] in conflicts)
             issues.extend({"id": key, "reason": "overlapping_frames"} for key in sorted(conflicts))
             items = [item for item in items if item["id"] not in conflicts]
+            previous = retry["pages"][page_no - 1] if retry else None
+            retry_ids = retry["ids"] if retry and retry["page"] == page_no else set()
+            # A user may explicitly include a complete region that OCR had classified as references.
+            # Retain every other obstacle, including figures and partial selections.
+            if retry_ids:
+                selected = [item["rect"] for item in items if item["id"] in retry_ids]
+                para_blocks = []
+                for block in page_info.get("para_blocks") or []:
+                    box = fitz.Rect(block["bbox"]) if block.get("type") == "ref_text" and block.get("bbox") else None
+                    if box and any((box & frame).get_area() >= 0.80 * box.get_area() for frame in selected):
+                        continue
+                    para_blocks.append(block)
+                page_info = {**page_info, "para_blocks": para_blocks}
             forbidden = _protected_boxes(page_info, images, lines, items, blocked)
-            ready = _fit_page(items, forbidden, page_rect, css, archive)
+            ready = (_fit_retry_page(items, forbidden, page_rect, css, archive, retry_ids, previous)
+                     if previous else _fit_page(items, forbidden, page_rect, css, archive))
             errors = covered = 0
             if ready:
                 # A staging page ensures the source survives even if the actual paint fails.
@@ -1293,14 +1394,19 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
                           for item in items if item["id"] not in ready_ids)
             skipped = len(by_page.get(page_no, [])) - protected - len(ready)
             page_boxes = {block["id"]: block["bbox"] for block in by_page.get(page_no, [])}
+            previous_reasons = {issue["id"]: issue["reason"] for issue in previous["issues"]} if previous else {}
             for issue in issues:
                 issue["bbox"] = page_boxes[issue["id"]]
+                if previous and issue["id"] not in retry_ids:
+                    issue["reason"] = previous_reasons.get(issue["id"], issue["reason"])
             pages_report.append({
                 "page": page_no, "replaced": len(ready), "covered_xobject": covered,
                 "no_translation": skipped_notr, "dropped_overlap": len(conflicts),
                 "errors": errors, "crowded": failed_fit, "preserved_original": skipped,
                 "protected_layout": protected,
                 "caption_replaced": sum(item["type"] == "caption" for item, _, _ in ready),
+                "placed": {item["id"]: {"bbox": list(target), "size": item["size"],
+                                        "line_height": item["line_height"]} for item, target, _ in ready},
                 "issues": issues,
             })
             if on_page:
@@ -1310,6 +1416,35 @@ def render_translated(*, pdf_path, layout, translations, out_pdf, font_dir, font
             doc.subset_fonts()
         doc.save(str(out_pdf), garbage=4, deflate=True, clean=True)
     return pages_report
+
+
+def review_frames(pdf_path, pages, retryable):
+    """Project unrotated renderer coordinates onto the visible PDF.js page."""
+    frames = {}
+    with fitz.open(str(pdf_path)) as doc:
+        for page_report in pages:
+            number = page_report["page"]
+            if not 1 <= number <= len(doc):
+                continue
+            page = doc[number - 1]
+            bounds = page.rect
+            candidates = [
+                {"id": key, "bbox": placement["bbox"], "reason": ""}
+                for key, placement in page_report.get("placed", {}).items() if key in retryable
+            ] + page_report.get("issues", [])
+            visible = []
+            for item in candidates:
+                box = (fitz.Rect(item["bbox"]) * page.rotation_matrix) & bounds
+                if box.is_empty:
+                    continue
+                visible.append({
+                    "id": item["id"], "reason": item["reason"], "retryable": item["id"] in retryable,
+                    "rect": [box.x0 / bounds.width, box.y0 / bounds.height,
+                             box.x1 / bounds.width, box.y1 / bounds.height],
+                })
+            if visible:
+                frames[number] = visible
+    return frames
 
 
 # --------------------------------------------------------------------------- 主入口

@@ -336,6 +336,9 @@ import { createRequestId, isWebViewHost, requestWebView } from './webview-reques
     translationStatus: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/translation', { signal }),
     startTranslation: (id, force) => request('POST', '/api/papers/' + encodeURIComponent(id) + '/translation',
       { body: force ? { force: true } : {} }),
+    translationReview: (id, signal) => request('GET', '/api/papers/' + encodeURIComponent(id) + '/translation/review', { signal }),
+    translationRegion: (id, body, signal) => request('POST', '/api/papers/' + encodeURIComponent(id) + '/translation/region',
+      { body, signal }),
     cancelTranslation: id => request('POST', '/api/papers/' + encodeURIComponent(id) + '/translation/cancel', {}),
     removeTranslation: id => request('DELETE', '/api/papers/' + encodeURIComponent(id) + '/translation'),
 

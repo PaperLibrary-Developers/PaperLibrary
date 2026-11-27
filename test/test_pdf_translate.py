@@ -17,7 +17,8 @@ from paperlib.adapters.pdf_translate import (
     normalize_mineru_layout, read_mineru_result, render_translated, repair_sources,
     supplement_mineru_frames, translate_blocks,
 )
-from paperlib.domain.translate import Translator
+from paperlib.assets import sha256_file
+from paperlib.domain.translate import TranslateError, Translator
 
 
 class MinerUTranslationTest(unittest.TestCase):
@@ -294,6 +295,192 @@ class TranslationFramesTest(unittest.TestCase):
 
 
 class TranslationRenderTest(unittest.TestCase):
+    def test_region_previews_and_applies_native_prose_missing_from_the_block_snapshot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            source = directory / "source.pdf"
+            first = "Methods"
+            missed = "This native paragraph was skipped by the recognizer."
+            neighbor = "The separate paragraph must remain visible."
+            with fitz.open() as doc:
+                page = doc.new_page(width=350, height=280)
+                page.insert_text((48, 60), first, fontsize=10)
+                page.insert_text((48, 82), missed, fontsize=10)
+                page.insert_text((48, 200), neighbor, fontsize=10)
+                heading_box = page.search_for(first)[0]
+                missed_box = page.search_for(missed)[0]
+                original_neighbor = page.search_for(neighbor)
+                doc.save(source)
+
+            services = SimpleNamespace(runtime=SimpleNamespace(data_dir=directory),
+                                       db=SimpleNamespace(path_for_paper_file=lambda _: source), llm=Mock())
+            translator = Translator(services)
+            paper = {"id": "paper", "pdfFile": source.name}
+            layout = {"pdf_info": [{"para_blocks": [{"type": "ref_text", "bbox": list(missed_box)}]}]}
+            baseline = [{"id": "heading", "page": 1, "type": "title", "bbox": list(heading_box),
+                         "source": first, "translation": "方法标题"}]
+            translator._render(paper, source, sha256_file(source), layout, baseline, {
+                "normalization": {}, "warning": "", "stageSeconds": {"parse": 0},
+            }, time.time(), 0)
+            output = translator.pdf_path(paper)
+            previous = output.read_bytes()
+            revision = translator.review(paper)["revision"]
+            draft = translator.inspect_region(paper, revision, 1, [.11, .15, .96, .37])
+            self.assertEqual(draft["source"], [first, missed])
+            services.llm.chat.side_effect = lambda messages, _: {
+                "text": "方法" if "【本块（请翻译）】\nMethods\n\n" in messages[1]["content"] else "这是一段恢复的漏译正文。"
+            }
+            preview = translator.preview_region(paper, draft["token"])
+            self.assertEqual(preview["translations"], ["方法", "这是一段恢复的漏译正文。"])
+            self.assertTrue(preview["canApply"])
+            self.assertEqual(output.read_bytes(), previous)
+
+            worker = Thread()
+
+            def launch(*args, **kwargs):
+                nonlocal worker
+                worker = Thread(*args, **kwargs)
+                return worker
+
+            with patch("paperlib.domain.translate.Thread", side_effect=launch):
+                self.assertTrue(translator.apply_region(paper, draft["token"])["started"])
+            worker.join(12)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(translator.state(paper)["state"], "done")
+            self.assertEqual(services.llm.chat.call_count, 2)
+            with fitz.open(output) as doc:
+                self.assertIn("这是一段恢复的漏译正文。", doc[0].get_text())
+                self.assertEqual(doc[0].search_for(neighbor), original_neighbor)
+
+            previous = output.read_bytes()
+            oversized = translator.inspect_region(paper, translator.review(paper)["revision"], 1, [.11, .15, .96, .37])
+            services.llm.chat.side_effect = lambda *_: {"text": "用于验证排版容量的完整译文。" * 180}
+            preview = translator.preview_region(paper, oversized["token"])
+            self.assertTrue(preview["canApply"])
+            self.assertGreater(len(preview["translations"][0]), 1000)
+            with patch("paperlib.domain.translate.Thread", side_effect=launch):
+                self.assertTrue(translator.apply_region(paper, oversized["token"])["started"])
+            worker.join(12)
+            self.assertFalse(worker.is_alive())
+            self.assertIn("无法安全放入", translator.state(paper)["error"])
+            self.assertEqual(output.read_bytes(), previous)
+
+    def test_reader_retries_only_the_selected_block_and_keeps_other_layout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            source = directory / "source.pdf"
+            with fitz.open() as doc:
+                page = doc.new_page()
+                page.insert_text((45, 90), "Alpha paragraph must remain visible after the first attempt.", fontsize=10)
+                page.insert_text((45, 225), "Beta paragraph is already translated and must not move.", fontsize=10)
+                page = doc.new_page()
+                page.insert_text((45, 100), "Gamma paragraph is on a separate page.", fontsize=10)
+                doc.save(source)
+
+            services = SimpleNamespace(runtime=SimpleNamespace(data_dir=directory),
+                                       db=SimpleNamespace(path_for_paper_file=lambda _: source), llm=Mock())
+            paper = {"id": "paper", "pdfFile": source.name}
+            translator = Translator(services)
+
+            def requested_block(messages):
+                return messages[1]["content"].split("【本块（请翻译）】\n")[1].split("\n\n")[0]
+
+            def first_pass(messages, _):
+                text = requested_block(messages)
+                if text.startswith("Alpha"):
+                    return {"text": ""}
+                return {"text": "已译旁边的段落。" if text.startswith("Beta") else "已译第二页。"}
+
+            services.llm.chat.side_effect = first_pass
+            translator._run(paper)
+            output = translator.pdf_path(paper)
+            first = translator.review(paper)
+            issue, = [frame for frame in first["pages"]["1"] if frame["reason"]]
+            self.assertEqual(issue["reason"], "missing_translation")
+            self.assertTrue(issue["retryable"])
+            self.assertTrue(all(0 <= edge <= 1 for edge in issue["rect"]))
+            with fitz.open(output) as doc:
+                self.assertIn("Alpha paragraph", doc[0].get_text())
+                other_block = doc[0].search_for("已译旁边的段落。")
+                other_page = doc[1].get_pixmap().samples
+
+            # A new app instance must be able to replay the saved blocks without any OCR.
+            translator = Translator(services)
+            services.llm.chat.reset_mock(side_effect=True)
+            runners = []
+
+            def launch(*args, **kwargs):
+                runner = Thread(*args, **kwargs)
+                runners.append(runner)
+                return runner
+
+            def retry(review, block_id, answer):
+                services.llm.chat.return_value = {"text": answer}
+                services.llm.chat.reset_mock()
+                with patch("paperlib.domain.translate.Thread", side_effect=launch):
+                    self.assertTrue(translator.retry(paper, block_id, review["revision"])["started"])
+                runners[-1].join(12)
+                self.assertFalse(runners[-1].is_alive())
+                self.assertTrue(all(requested_block(call.args[0]).startswith("Alpha")
+                                    for call in services.llm.chat.call_args_list))
+                return translator.state(paper)
+
+            self.assertEqual(retry(first, issue["id"], "现在已重译首段。")["state"], "done")
+            services.llm.chat.assert_called_once()
+            repaired = translator.review(paper)
+            self.assertNotEqual(repaired["revision"], first["revision"])
+            self.assertFalse(any(frame["reason"] for frame in repaired["pages"]["1"]))
+            with fitz.open(output) as doc:
+                self.assertIn("现在已重译首段。", doc[0].get_text())
+                self.assertEqual(doc[0].search_for("已译旁边的段落。"), other_block)
+                self.assertEqual(doc[1].get_pixmap().samples, other_page)
+            with self.assertRaisesRegex(TranslateError, "译文已更新"):
+                translator.retry(paper, issue["id"], first["revision"])
+
+            before = output.read_bytes()
+            self.assertEqual(retry(repaired, issue["id"], "")["state"], "failed")
+            self.assertEqual(output.read_bytes(), before)
+            self.assertEqual(translator.review(paper), repaired)
+
+            with patch.object(Path, "replace", side_effect=PermissionError("PDF is open elsewhere")):
+                failed = retry(repaired, issue["id"], "文件暂时被占用。")
+            self.assertEqual(failed["state"], "failed")
+            self.assertEqual(failed["outputRevision"], repaired["revision"])
+            self.assertEqual(output.read_bytes(), before)
+
+            self.assertEqual(retry(repaired, issue["id"], "手动修正首段译文。")["state"], "done")
+            with fitz.open(output) as doc:
+                self.assertIn("手动修正首段译文。", doc[0].get_text())
+                self.assertEqual(doc[0].search_for("已译旁边的段落。"), other_block)
+                self.assertEqual(doc[1].get_pixmap().samples, other_page)
+            with source.open("ab") as changed:
+                changed.write(b"\n% source changed\n")
+            with self.assertRaisesRegex(TranslateError, "原文已更换"):
+                translator.retry(paper, issue["id"], translator.review(paper)["revision"])
+
+    def test_legacy_review_can_locate_issues_without_enabling_retry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            paper = {"id": "paper", "pdfFile": "source.pdf"}
+            translator = Translator(SimpleNamespace(runtime=SimpleNamespace(data_dir=directory)))
+            output = translator.pdf_path(paper)
+            output.parent.mkdir(parents=True)
+            with fitz.open() as doc:
+                page = doc.new_page(width=200, height=300)
+                page.set_rotation(90)
+                doc.save(output)
+            translator._write_state("paper", state="done", outputSource=paper["pdfFile"])
+            translator.dir_for("paper").joinpath("report.json").write_text(json.dumps({"pages": [{
+                "page": 1, "issues": [{"id": "a", "reason": "missing_translation", "bbox": [20, 30, 60, 90]}],
+            }]}), encoding="utf-8")
+
+            review = translator.review(paper)
+            self.assertTrue(review["legacy"])
+            self.assertEqual(review["pages"][1][0]["rect"], [0.7, 0.1, 0.9, 0.3])
+            self.assertFalse(review["pages"][1][0]["retryable"])
+            with self.assertRaisesRegex(TranslateError, "旧译文"):
+                translator.retry(paper, "a", review["revision"])
+
     def test_production_jobs_share_eight_slots_and_cancel_without_more_calls(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)

@@ -89,6 +89,9 @@ ROUTES = [
     {"name": "translation-start", "methods": ("POST",), "pattern": "/api/papers/:id/translation", "handler": translate.start},
     {"name": "translation-remove", "methods": ("DELETE",), "pattern": "/api/papers/:id/translation", "handler": translate.remove},
     {"name": "translation-cancel", "methods": ("POST",), "pattern": "/api/papers/:id/translation/cancel", "handler": translate.cancel},
+    {"name": "translation-review", "methods": ("GET",), "pattern": "/api/papers/:id/translation/review", "handler": translate.review},
+    {"name": "translation-retry", "methods": ("POST",), "pattern": "/api/papers/:id/translation/retry", "handler": translate.retry},
+    {"name": "translation-region", "methods": ("POST",), "pattern": "/api/papers/:id/translation/region", "handler": translate.region},
     {"name": "translation-pdf", "methods": ("GET", "HEAD"), "pattern": "/api/papers/:id/translation.pdf", "handler": translate.pdf},
 
     # ---------------- 图表（合并后新增） ----------------
