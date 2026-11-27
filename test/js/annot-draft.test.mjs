@@ -23,6 +23,11 @@ function memoryStorage () {
 test('buildAnnotKey distinguishes original PDF and attachment files', () => {
   assert.equal(buildAnnotKey('p1', '', ''), 'p1')
   assert.equal(buildAnnotKey('p1', 'si 1.pdf', '2026-01-01'), 'p1/attachment/si%201.pdf/2026-01-01')
+  // 原文（orig / 省略）不带后缀，老草稿继续命中；译文才多一层
+  assert.equal(buildAnnotKey('p1', '', '', 'orig'), 'p1')
+  assert.equal(buildAnnotKey('p1', '', ''), 'p1')
+  assert.equal(buildAnnotKey('p1', '', '', 'trans'), 'p1/trans')
+  assert.equal(buildAnnotKey('p1', 'si.pdf', '2026-01-01', 'trans'), 'p1/attachment/si.pdf/2026-01-01/trans')
 })
 
 test('writeAnnotDraft, readAnnotDraft and clearAnnotDraft roundtrip safely', () => {

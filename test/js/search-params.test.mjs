@@ -161,6 +161,10 @@ test('api listPapers, queryFacets, annotations, and error handling build exact r
     await api.getAnnotations('p/1', undefined, 'si 1.pdf')
     await api.saveAnnotations('p/1', [{ id: 'a1' }])
     await api.externalSearch('MOF', { limit: 10, oa: false })
+    // 译文批注要带 ?lang=trans；原文省略参数（与老数据、老调用一致）
+    await api.getAnnotations('p/1', undefined, '', 'trans')
+    await api.saveAnnotations('p/1', [{ id: 'a2' }], '', 'trans')
+    await api.getAnnotations('p/1', undefined, '', 'orig')
 
     assert.equal(
       calls[0].url,
@@ -180,6 +184,11 @@ test('api listPapers, queryFacets, annotations, and error handling build exact r
     assert.deepEqual(JSON.parse(calls[3].init.body), { items: [{ id: 'a1' }] })
 
     assert.equal(calls[4].url, '/api/external/search?q=MOF&limit=10')
+    assert.equal(calls[5].url, '/api/papers/p%2F1/annotations?lang=trans')
+    assert.equal(calls[6].url, '/api/papers/p%2F1/annotations?lang=trans')
+    assert.deepEqual(JSON.parse(calls[6].init.body), { items: [{ id: 'a2' }] })
+    // 原文不带 lang 参数：与老数据库里的记录、老版本前端完全互通
+    assert.equal(calls[7].url, '/api/papers/p%2F1/annotations')
 
     await assert.rejects(
       async () => {

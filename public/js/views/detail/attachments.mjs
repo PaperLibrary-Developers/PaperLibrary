@@ -44,14 +44,17 @@ export function buildPdfAndAttachments ({
 
   /* ---------- PDF 批注（原文与每份 SI 分别写入） ---------- */
   async function loadPdfAnnotations (tab, viewSignal) {
-    const { file } = tab
-    const key = buildAnnotKey(paper.id, file, tab.addedAt)
+    /* tab.lang 只在原文标签页上有意义（'' 标签既能显示原文也能显示译文）；
+       补充材料永远按原文存，所以一律传 'orig'。 */
+    const file = tab.file
+    const lang = tab.file ? 'orig' : (tab.lang || 'orig')
+    const key = buildAnnotKey(paper.id, file, tab.addedAt, lang)
     await pendingAnnotationSaves.get(key)
     if (viewSignal.aborted) return null
     let items = []
     let loaded = false
     try {
-      const res = await api.getAnnotations(paper.id, viewSignal, file)
+      const res = await api.getAnnotations(paper.id, viewSignal, file, lang)
       items = Array.isArray(res && res.items) ? res.items : []
       loaded = true
     } catch (err) {
@@ -59,7 +62,7 @@ export function buildPdfAndAttachments ({
     }
     if (viewSignal.aborted) return null
     const draft = readAnnotDraft(key)
-    const state = { file, key, knownIds: items.map(item => item.id), removed: new Set(draft.removed), warned: false }
+    const state = { file, lang, key, knownIds: items.map(item => item.id), removed: new Set(draft.removed), warned: false }
     if (draft.items.length || draft.removed.length) {
       items = mergeAnnotations(items, draft.items).filter(item => !state.removed.has(item.id))
       if (loaded) savePdfAnnotations(state, items, true)
@@ -68,11 +71,11 @@ export function buildPdfAndAttachments ({
   }
 
   function savePdfAnnotations (state, items, silent = false) {
-    const { key, file } = state
+    const { key, file, lang } = state
     const list = Array.isArray(items) ? items : []
     const ids = list.map(item => item && item.id).filter(Boolean)
     const saving = (pendingAnnotationSaves.get(key) || Promise.resolve())
-      .then(() => api.saveAnnotations(paper.id, list, file))
+      .then(() => api.saveAnnotations(paper.id, list, file, lang))
       .then(() => {
         state.knownIds = ids
         state.removed.clear()
@@ -249,6 +252,8 @@ export function buildPdfAndAttachments ({
     if (activePdfTab === '' && activePdfViewer) tab.view = activePdfViewer.getViewState()
     tab.url = mode === 'trans' ? api.translationUrl(paper.id) : api.pdfUrl(paper.id)
     tab.title = mode === 'trans' ? 'PDF（译文）' : 'PDF'
+    // 原文 / 译文各存一份批注：换版本要连批注一起换，不能把英文的坐标叠到中文上
+    tab.lang = mode
     paintLangSwitch()
     paintOriginalTabTitle()
     // 正在看某份补充材料时点开关：先切回原文标签页，再按新版本重新挂载。

@@ -52,9 +52,14 @@ import { createRequestId, isWebViewHost, requestWebView } from './webview-reques
     return '/api/papers/' + encodeURIComponent(id) + '/attachments/' + encodeURIComponent(file)
   }
 
-  function annotationUrl (id, file) {
+  /* 批注按「文档 + 版本」分开：原文与译文各自一份。
+     译文是重新排版过的，同一段话中文比英文短、断行位置也不同，
+     一份归一化坐标在两边对不上，所以必须分语言存。
+     lang 省略时不带参数（服务端默认原文），保持老调用与老数据一致。 */
+  function annotationUrl (id, file, lang) {
     const documentUrl = file ? attachmentUrl(id, file) : '/api/papers/' + encodeURIComponent(id)
-    return documentUrl + '/annotations'
+    const query = lang && lang !== 'orig' ? '?lang=' + encodeURIComponent(lang) : ''
+    return documentUrl + '/annotations' + query
   }
 
   /**
@@ -236,8 +241,8 @@ import { createRequestId, isWebViewHost, requestWebView } from './webview-reques
 
     // PDF 批注（荧光笔 / 便签）：整表读写。坐标是「相对该页的 0~1 归一化值」，
     // 缩放 / 适宽 / 换屏幕都不用重算，前端只管按百分比画。
-    getAnnotations: (id, signal, file) => request('GET', annotationUrl(id, file), { signal }),
-    saveAnnotations: (id, items, file) => request('PUT', annotationUrl(id, file),
+    getAnnotations: (id, signal, file, lang) => request('GET', annotationUrl(id, file, lang), { signal }),
+    saveAnnotations: (id, items, file, lang) => request('PUT', annotationUrl(id, file, lang),
       { body: { items: Array.isArray(items) ? items : [] } }),
 
     // 「更多信息」补充材料

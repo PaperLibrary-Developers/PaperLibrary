@@ -8,8 +8,11 @@ export function annotDraftKey (paperId) {
   return ANNOT_DRAFT_PREFIX + String(paperId || '')
 }
 
-export function buildAnnotKey (paperId, file, addedAt) {
-  return file ? paperId + '/attachment/' + encodeURIComponent(file) + '/' + (addedAt || '') : paperId
+/* 本地草稿的 key 与服务端的 kind 一一对应：同样按「文档 + 版本」分开。
+   原文不带后缀（老草稿继续命中），译文才加 /trans。 */
+export function buildAnnotKey (paperId, file, addedAt, lang) {
+  const base = file ? paperId + '/attachment/' + encodeURIComponent(file) + '/' + (addedAt || '') : paperId
+  return lang && lang !== 'orig' ? base + '/' + lang : base
 }
 
 function resolveStorage (storage) {

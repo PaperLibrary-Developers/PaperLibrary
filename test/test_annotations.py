@@ -161,6 +161,39 @@ class AnnotationsApiTest(unittest.TestCase):
         status, data = self.fx.json("POST", PATH % self.paper_id, {"items": []})
         self.assertEqual(status, 404)       # 路由表里没有 POST 这一条（与其它端点一致）
 
+    def test_original_and_translation_keep_separate_annotations(self):
+        """原文和译文各存一份：译文是重新排版的，坐标对不上，不能共用。"""
+        orig = PATH % self.paper_id
+        trans = orig + "?lang=trans"
+        self.assertEqual(self.fx.json("PUT", orig, {"items": [highlight("en-1")]})[0], 200)
+        self.assertEqual(self.fx.json("PUT", trans, {"items": [highlight("zh-1"), note("zh-note")]})[0], 200)
+
+        self.assertEqual([i["id"] for i in self.fx.json("GET", orig)[1]["items"]], ["en-1"])
+        self.assertEqual([i["id"] for i in self.fx.json("GET", trans)[1]["items"]], ["zh-1", "zh-note"])
+        # 非法 lang 一律回落到原文，不会凭空多出一份
+        self.assertEqual([i["id"] for i in self.fx.json("GET", orig + "?lang=bogus")[1]["items"]], ["en-1"])
+        # 省略 lang 等价于 orig（老前端 / 老数据继续可用）
+        self.assertEqual([i["id"] for i in self.fx.json("GET", orig)[1]["items"]], ["en-1"])
+
+        # 写译文不影响原文
+        self.assertEqual(self.fx.json("PUT", trans, {"items": []})[0], 200)
+        self.assertEqual([i["id"] for i in self.fx.json("GET", orig)[1]["items"]], ["en-1"])
+        self.assertEqual(self.fx.json("GET", trans)[1]["items"], [])
+
+    def test_translation_annotations_for_attachment_are_separate(self):
+        status, data = self.fx.json("POST", "/api/papers", {"title": "Attachment translation fixture"})
+        self.assertEqual(status, 201)
+        paper_id = data["paper"]["id"]
+        attachments = "/api/papers/" + paper_id + "/attachments"
+        status, _, payload = self.fx.call("POST", attachments, raw=(b"%PDF-1.4\n% si fixture", {"X-Filename": quote("si.pdf")}))
+        self.assertEqual(status, 201, payload)
+        file = json.loads(payload)["attachment"]["file"]
+        base = attachments + "/" + quote(file, safe="") + "/annotations"
+        self.assertEqual(self.fx.json("PUT", base, {"items": [highlight("si-en")]})[0], 200)
+        self.assertEqual(self.fx.json("PUT", base + "?lang=trans", {"items": [highlight("si-zh")]})[0], 200)
+        self.assertEqual([i["id"] for i in self.fx.json("GET", base)[1]["items"]], ["si-en"])
+        self.assertEqual([i["id"] for i in self.fx.json("GET", base + "?lang=trans")[1]["items"]], ["si-zh"])
+
     def test_attachment_pdf_annotations_are_isolated_and_follow_rename(self):
         status, data = self.fx.json("POST", "/api/papers", {"title": "Attachment annotation fixture"})
         self.assertEqual(status, 201)

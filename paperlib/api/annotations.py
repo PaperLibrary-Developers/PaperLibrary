@@ -1,7 +1,12 @@
 """原文与补充材料 PDF 的荧光笔和便签批注端点。
 
-  GET /api/papers/:id/annotations   读这篇文献的全部批注
-  PUT /api/papers/:id/annotations   { items: [...] } 整表覆盖（一次请求写完，最原子）
+  GET /api/papers/:id/annotations[?lang=orig|trans]          读这批批注
+  PUT /api/papers/:id/annotations[?lang=orig|trans]          { items: [...] } 整表覆盖
+
+原文和译文各存一份（?lang=），因为译文是重新排版过的：
+  同一段话中文比英文短，句子断行位置也不一样，一份归一化坐标在两边对不上，
+  高亮会落到别处去。所以两种版本的批注必须各自独立。
+  lang 缺省 / 非法值一律按 orig 处理，老数据（没有 lang 的那些行）继续能读能写。
 
 为什么不新开一张表：
   批注只是「一篇文章的一坨 JSON」，量很小（几十条），也没有跨文献查询的需求。
@@ -166,21 +171,34 @@ def _norm_item(raw, stamp=False):
 
 
 # ------------------------------------------------------------------ 端点
-def attachment_annotation_kind(file):
-    return KIND + ":attachment:" + file
+LANGS = ("orig", "trans")
+DEFAULT_LANG = "orig"
+
+
+def attachment_annotation_kind(file, lang=DEFAULT_LANG):
+    """附件的 kind；只有译文才追加后缀，原文保持原样（兼容已有数据）。"""
+    base = KIND + ":attachment:" + file
+    return base if lang == DEFAULT_LANG else base + ":" + lang
+
+
+def _document_lang(ctx):
+    """?lang= 取值：只认 orig / trans，缺省或其它一律当原文。"""
+    raw = str(ctx.query("lang") or "").strip().lower()
+    return raw if raw in LANGS else DEFAULT_LANG
 
 
 def _document_kind(ctx, paper):
+    lang = _document_lang(ctx)
     file = (ctx.params or {}).get("file")
     if file is None:
-        return KIND
+        return KIND if lang == DEFAULT_LANG else KIND + ":" + lang
     if not any(item.get("file") == file for item in paper.get("attachments") or []):
         ctx.fail(404, "找不到这个附件")
         return None
     if not file.lower().endswith(".pdf"):
         ctx.fail(400, "只有 PDF 附件支持批注")
         return None
-    return attachment_annotation_kind(file)
+    return attachment_annotation_kind(file, lang)
 
 
 def get_annotations(ctx):
