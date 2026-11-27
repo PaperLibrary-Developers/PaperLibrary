@@ -1,4 +1,4 @@
-/* PDF 阅读器 DOM、SVG 图标与本地反色偏好工具 */
+/* PDF 阅读器 DOM 与 SVG 图标工具（批注图标含荧光笔 / 便签 / 橡皮擦） */
 import { ANNOT_DEFAULT_COLOR, clamp01, normalizeColor } from './annot-model.mjs'
 
 const hasWindow = typeof window !== 'undefined'
@@ -50,6 +50,10 @@ export function svgNode (tag, attrs) {
   return node
 }
 
+/* 同一页里可能同时有好几个橡皮擦图标（工具栏 + 批注列表），
+   clipPath 的 id 必须各不相同，否则后来的会覆盖前面的。 */
+let eraserSeq = 0
+
 export function annotIcon (kind, color) {
   const hex = normalizeColor(color) || ANNOT_DEFAULT_COLOR
   /* 24 视框、1.8 描边、全圆角端点：和 macOS / iOS 上那套线性图标同一路数。
@@ -60,6 +64,41 @@ export function annotIcon (kind, color) {
     stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
     'aria-hidden': 'true', focusable: 'false'
   })
+  if (kind === 'eraser') {
+    /* 橡皮擦：斜放的圆角橡皮，被一道分隔线切成两段——
+       右上是擦头（浅蓝），左下是橡皮主体（极淡的 currentColor 填充），
+       底部再加一道粗横线当纸面。两段都有填充，18px 下也能看出「块面」。
+       尺寸对齐左右两格：荧光笔墨迹 18.1×17.8、便签 18×17.2，
+       这里按 18×17.6 反推——橡皮本体 15.6×9.8、纸面横线跨 17.4。 */
+    const id = 'lv-eraser-clip-' + (++eraserSeq)
+    const defs = svgNode('defs')
+    const clip = svgNode('clipPath', { id: id })
+    clip.appendChild(svgNode('rect', { x: '13.6', y: '3', width: '9', height: '18' }))
+    defs.appendChild(clip)
+    svg.appendChild(defs)
+
+    // 以 (12,11.6) 为中心斜放；本体 14.8×9.2，旋转后包围盒约 18.5×18
+    const body = svgNode('g', { transform: 'rotate(-40 12 11.6)' })
+    const rectAttrs = { x: '4.6', y: '6.6', width: '14.8', height: '9.2', rx: '2.6' }
+    // 主体底：极淡的 currentColor，深浅主题都成立
+    body.appendChild(svgNode('rect', Object.assign({}, rectAttrs, {
+      fill: 'currentColor', 'fill-opacity': '0.10', stroke: 'none'
+    })))
+    // 擦头：同一矩形只留分隔线右边，填浅蓝
+    const cap = svgNode('g', { 'clip-path': 'url(#' + id + ')' })
+    cap.appendChild(svgNode('rect', Object.assign({}, rectAttrs, {
+      fill: '#7cc7e0', 'fill-opacity': '0.95', stroke: 'none'
+    })))
+    body.appendChild(cap)
+    body.appendChild(svgNode('rect', Object.assign({}, rectAttrs, {
+      fill: 'none', stroke: 'currentColor', 'stroke-width': '1.9'
+    })))
+    body.appendChild(svgNode('path', { d: 'M13.6 6.6v9.2', 'stroke-width': '1.9' }))
+    svg.appendChild(body)
+    // 纸面：比橡皮略窄的一道粗横线，正好把整体高度顶到 17.6
+    svg.appendChild(svgNode('path', { d: 'M4.1 20.3h15.8', 'stroke-width': '2.6' }))
+    return svg
+  }
   if (kind === 'note') {
     // 便签：带折角的便条 + 两行字
     svg.appendChild(svgNode('path', {

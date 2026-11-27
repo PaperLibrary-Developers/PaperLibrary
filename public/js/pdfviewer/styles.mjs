@@ -32,12 +32,12 @@ export const STYLE_TEXT = `
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 6px 7px;
-  padding: 5px 7px;
+  gap: 5px;
+  padding: 5px 5px;
   background: var(--surface-2, #f8f7f3);
   border-bottom: 1px solid var(--border, #e2dfd5);
 }
-.lv-pdf-viewer .lv-pdf-group { display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: nowrap; }
+.lv-pdf-viewer .lv-pdf-group { display: flex; align-items: center; gap: 2px; min-width: 0; flex-wrap: nowrap; }
 
 .lv-pdf-viewer .lv-pdf-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
@@ -65,7 +65,7 @@ export const STYLE_TEXT = `
 }
 .lv-pdf-viewer .lv-pdf-seg-btn {
   border: 0; background: transparent; color: var(--text, #26251f);
-  padding: 4px 10px; font-size: 12.5px; line-height: 1.6;
+  padding: 4px 6px; font-size: 12.5px; line-height: 1.6;
   cursor: pointer; white-space: nowrap;
   transition: background .15s, color .15s;
 }
@@ -76,7 +76,24 @@ export const STYLE_TEXT = `
 }
 .lv-pdf-viewer .lv-pdf-seg-btn:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: -2px; }
 
-/* 荧光笔 · 便签 · 批注：一个连体框，中间用分隔线断开（和「适宽/适页」同一套观感） */
+/* 撤销 / 重做：一个连体框，两个图标按钮共用一层描边；不可用时整格变淡但不塌陷 */
+.lv-pdf-viewer .lv-pdf-history {
+  display: inline-flex; align-items: stretch;
+  background: var(--surface, #fffefb);
+  border: 1px solid var(--border, #e2dfd5);
+  border-radius: var(--radius-sm, 8px);
+}
+.lv-pdf-viewer .lv-pdf-history > .lv-pdf-btn {
+  border: 0; border-radius: 0; background: transparent;
+  height: 30px; padding: 6px 3px; gap: 0;
+}
+.lv-pdf-viewer .lv-pdf-history > .lv-pdf-btn + .lv-pdf-btn { border-left: 1px solid var(--border, #e2dfd5); }
+.lv-pdf-viewer .lv-pdf-history > .lv-pdf-btn:first-child { border-radius: calc(var(--radius-sm, 8px) - 1px) 0 0 calc(var(--radius-sm, 8px) - 1px); }
+.lv-pdf-viewer .lv-pdf-history > .lv-pdf-btn:last-child { border-radius: 0 calc(var(--radius-sm, 8px) - 1px) calc(var(--radius-sm, 8px) - 1px) 0; }
+.lv-pdf-viewer .lv-pdf-history > .lv-pdf-btn:hover:not([disabled]) { background: var(--surface-3, #efeee8); }
+.lv-pdf-viewer .lv-pdf-history > .lv-pdf-btn[disabled] { opacity: .38; }
+
+/* 荧光笔 · 橡皮擦 · 便签 · 批注：一个连体框，中间用分隔线断开（和「适宽/适页」同一套观感） */
 .lv-pdf-viewer .lv-pdf-toolseg {
   display: inline-flex; align-items: stretch;
   background: var(--surface, #fffefb);
@@ -85,7 +102,7 @@ export const STYLE_TEXT = `
 }
 .lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn {
   border: 0; border-radius: 0; background: transparent;
-  height: 30px; padding: 6px 8px; gap: 0;
+  height: 30px; padding: 6px 6px; gap: 0;
 }
 .lv-pdf-viewer .lv-pdf-toolseg > .lv-pdf-btn + .lv-pdf-btn { border-left: 1px solid var(--border, #e2dfd5); }
 /* 不做 overflow:hidden：首尾按钮自己带圆角，hover 的底色也不会溢出到框外 */
@@ -108,7 +125,7 @@ export const STYLE_TEXT = `
 .lv-pdf-viewer .lv-pdf-input:focus { border-color: var(--accent, #2f6f5e); }
 .lv-pdf-viewer .lv-pdf-input:focus-visible,
 .lv-pdf-viewer .lv-pdf-btn:focus-visible { outline: 2px solid var(--accent, #2f6f5e); outline-offset: 1px; }
-.lv-pdf-viewer .lv-pdf-page { flex: 0 0 auto; width: 33px; padding: 4px 2px; text-align: center; font-variant-numeric: tabular-nums; }
+.lv-pdf-viewer .lv-pdf-page { flex: 0 0 auto; width: 28px; padding: 4px 1px; text-align: center; font-variant-numeric: tabular-nums; }
 /* width: 0 让输入框的固有宽度不参与最小宽度计算：搜索组因此能一路压到按钮的宽度，
    而不会被输入框默认的 20 字符宽度顶住（否则窄屏下按钮会溢出工具栏）。 */
 .lv-pdf-viewer .lv-pdf-search { flex: 1 1 110px; width: 0; min-width: 70px; max-width: 260px; }
@@ -123,7 +140,7 @@ export const STYLE_TEXT = `
 .lv-pdf-viewer .lv-pdf-count { min-width: 80px; }
 /* 没有搜索结果时不留 80px 空位：窄屏里那段空白会把「上一条 / 下一条」推到行尾 */
 .lv-pdf-viewer .lv-pdf-count:empty { min-width: 0; }
-.lv-pdf-viewer .lv-pdf-zoom { min-width: 42px; text-align: center; }
+.lv-pdf-viewer .lv-pdf-zoom { min-width: 34px; text-align: center; }
 
 /* ---------- 阅读区 ---------- */
 .lv-pdf-viewer .lv-pdf-body { position: relative; display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
@@ -379,6 +396,13 @@ export const STYLE_TEXT = `
 .lv-pdf-viewer.lv-annot-picking .lv-pdf-scroll .page { cursor: text; }
 .lv-pdf-viewer.lv-annot-pinning .lv-pdf-scroll,
 .lv-pdf-viewer.lv-annot-pinning .lv-pdf-scroll .page { cursor: copy; }
+/* 橡皮擦：自定义光标（小橡皮 + 十字定位），光标热点在橡皮尖上 */
+.lv-pdf-viewer.lv-annot-erasing .lv-pdf-scroll,
+.lv-pdf-viewer.lv-annot-erasing .lv-pdf-scroll .page {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'><g fill='none' stroke='%2326251f' stroke-width='1.6' stroke-linejoin='round'><path d='M4.4 16.2 12.8 7.8a2.4 2.4 0 0 1 3.4 0l3.6 3.6a2.4 2.4 0 0 1 0 3.4l-5 5H8.6z' fill='%23fffefb'/><path d='M9.6 11 15.4 16.8'/></g><path d='M3 21.6h18' stroke='%23f2c433' stroke-width='2.4' stroke-linecap='round'/></svg>") 4 21, cell;
+}
+/* 擦除时不让文字被选中，否则拖一路会拖出一个蓝色选区 */
+.lv-pdf-viewer.lv-annot-erasing .lv-pdf-scroll { user-select: none; }
 
 .lv-pdf-viewer .lv-pdf-icon,
 .lv-pdf-viewer .lv-annot-kind {

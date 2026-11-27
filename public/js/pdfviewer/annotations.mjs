@@ -3,6 +3,7 @@ import {
   ANNOT_CUSTOM_MAX,
   ANNOT_DEFAULT_COLOR,
   ANNOT_FLASH_MS,
+  ANNOT_HISTORY_MAX,
   ANNOT_HL_ALPHA,
   ANNOT_LAYER_CLASS,
   ANNOT_MAX_RECTS,
@@ -12,6 +13,8 @@ import {
   annotId,
   annotPalette,
   annotationAnchorY,
+  createAnnotHistory,
+  hitAnnotation,
   hexToRgba,
   inkOnColor,
   isBuiltinColor,
@@ -33,6 +36,9 @@ import { createInkPicker } from './inkpicker.mjs'
 
 export function createAnnotationController (ctx) {
   const { state, ui, opts } = ctx
+  /* 撤销 / 重做只管批注这一层：荧光笔、便签、橡皮擦都会先记一步，
+     再改 state.annotations 并通过 emitAnnotations() 落到后端（原本的即时保存链路不变）。 */
+  const history = createAnnotHistory(ANNOT_HISTORY_MAX)
 
   function pageInfos () {
     const out = []
@@ -156,6 +162,58 @@ export function createAnnotationController (ctx) {
     try { cb(state.annotations.slice()) } catch (err) {}
   }
 
+  function syncHistoryButtons () {
+    const st = history.state()
+    if (ui.btnUndo) {
+      ui.btnUndo.disabled = !st.canUndo
+      ui.btnUndo.title = st.canUndo ? '撤销（Ctrl + Z）· 还可退 ' + st.depth + ' 步' : '没有可撤销的批注操作'
+    }
+    if (ui.btnRedo) {
+      ui.btnRedo.disabled = !st.canRedo
+      ui.btnRedo.title = st.canRedo ? '重做（Ctrl + Shift + Z）· 还可进 ' + st.redoDepth + ' 步' : '没有可重做的批注操作'
+    }
+  }
+
+  /* 记一步历史（在真正改动 state.annotations 之前调用） */
+  function markHistory (coalesce) {
+    if (state.destroyed || state.tornDown) return
+    history.push(state.annotations, coalesce ? { coalesce: coalesce, coalesceMs: 900 } : null)
+    syncHistoryButtons()
+  }
+
+  function applySnapshot (items) {
+    state.annotations = (Array.isArray(items) ? items : []).map(item => sanitizeAnnot(item)).filter(Boolean)
+    closeAnnotPop({ keepChanges: false })
+    paintAllAnnotations()
+    renderAnnotPanel()
+    syncAnnotCount()
+    emitAnnotations()
+    syncHistoryButtons()
+  }
+
+  function undoAnnotation () {
+    if (state.destroyed || state.tornDown) return false
+    const prev = history.undo(state.annotations)
+    if (!prev) { syncHistoryButtons(); return false }
+    applySnapshot(prev)
+    // 撤销后把焦点还给阅读区，Ctrl+Z 可以连着按
+    try { if (ui.scroll && document.activeElement === document.body) ui.scroll.focus({ preventScroll: true }) } catch (err) {}
+    return true
+  }
+
+  function redoAnnotation () {
+    if (state.destroyed || state.tornDown) return false
+    const next = history.redo(state.annotations)
+    if (!next) { syncHistoryButtons(); return false }
+    applySnapshot(next)
+    return true
+  }
+
+  function resetHistory () {
+    history.reset()
+    syncHistoryButtons()
+  }
+
   function setAnnotations (items) {
     if (state.destroyed || state.tornDown) return
     const next = []
@@ -221,6 +279,12 @@ export function createAnnotationController (ctx) {
       if (bucket.length < ANNOT_MAX_RECTS) bucket.push(box)
     }
     if (!groups.size) return false
+    // 只有真有新增时才记历史：全是被去重命中的话撤销栈不该长一格
+    const willAdd = [...groups.entries()].some(([page, rects]) => {
+      const probe = { type: 'highlight', page: page, rects: rects }
+      return !state.annotations.some(other => other.type === 'highlight' && isSameHighlight(other, probe))
+    })
+    if (willAdd) markHistory()
     const stamp = nowStamp()
     const created = []
     let added = 0
@@ -271,6 +335,7 @@ export function createAnnotationController (ctx) {
   function deleteAnnotation (id) {
     const index = state.annotations.findIndex(a => a.id === id)
     if (index < 0) return
+    markHistory()
     const removed = state.annotations.splice(index, 1)[0]
     closeAnnotPop({ keepChanges: state.annotPopId !== id })
     if (removed) paintPageAnnotations(removed.page)
@@ -464,6 +529,9 @@ export function createAnnotationController (ctx) {
         updatedAt: nowStamp()
       }
       const index = state.annotations.findIndex(a => a.id === next.id)
+      // 新建的便签在「第一次真正落库」时记一步；后续改文字/颜色用同一个 key 合并，
+      // 一次编辑只算一步，不会每 500ms 输入就塞一条历史。
+      if (!persisted) markHistory('annot-pop:' + next.id)
       if (index >= 0) state.annotations[index] = next
       else state.annotations.push(next)
       const firstSave = !persisted
@@ -671,26 +739,36 @@ export function createAnnotationController (ctx) {
       ui.btnNote.classList.toggle('active', on)
       ui.btnNote.setAttribute('aria-pressed', on ? 'true' : 'false')
     }
+    if (ui.btnEraser) {
+      const on = state.annotMode === 'eraser'
+      ui.btnEraser.classList.toggle('active', on)
+      ui.btnEraser.setAttribute('aria-pressed', on ? 'true' : 'false')
+    }
     syncAnnotIcon(ui.highlightIcon, 'highlight')
     syncAnnotIcon(ui.noteIcon, 'note')
     syncAnnotCount()
+    syncHistoryButtons()
   }
 
   function setAnnotMode (mode) {
-    const want = mode === 'highlight' || mode === 'note' ? mode : null
+    const allowed = mode === 'highlight' || mode === 'note' || mode === 'eraser'
+    const want = allowed ? mode : null
     state.annotMode = want && want === state.annotMode ? null : want
     state.annotPress = null
     if (ui.root) {
       ui.root.classList.toggle('lv-annot-picking', state.annotMode === 'highlight')
       ui.root.classList.toggle('lv-annot-pinning', state.annotMode === 'note')
+      ui.root.classList.toggle('lv-annot-erasing', state.annotMode === 'eraser')
     }
     if (ui.annotHint) {
       ui.annotHint.hidden = !state.annotMode
       if (state.annotMode === 'highlight') ui.annotHint.textContent = '荧光笔：在 PDF 上选中文字即可高亮（Esc 退出）'
       else if (state.annotMode === 'note') ui.annotHint.textContent = '便签：在 PDF 上点一下放便签（Esc 退出）'
+      else if (state.annotMode === 'eraser') ui.annotHint.textContent = '橡皮擦：点荧光笔迹擦掉整条，按住拖可连着擦（Esc 退出）'
     }
     syncAnnotButtons()
-    if (state.annotMode) togglePalette(true, state.annotMode)
+    // 橡皮擦不需要颜色，取色条只在两支笔上出现
+    if (state.annotMode === 'highlight' || state.annotMode === 'note') togglePalette(true, state.annotMode)
     else togglePalette(false)
     if (!state.annotMode) closeAnnotPop()
     /* 工具记忆：切换 PDF / SI / 译文标签页时阅读器整个重建，记住「正在用哪支笔」，
@@ -910,9 +988,76 @@ export function createAnnotationController (ctx) {
     unbindPaletteDoc()
   }
 
+  /* ---- 橡皮擦：按笔画擦 ----
+     一条荧光笔记录 = 一次划过的整条笔迹（多行时是多段矩形）。点中任一矩形就把
+     整条删掉，而不是把矩形切碎——这才是「按笔画擦除」而不是「擦掉一个像素」。
+     按住拖动时连续命中：整段拖动共用一个历史 key，撤销时一次退回整段。 */
+  function eraseAt (pt, page) {
+    const box = page.rect
+    if (!box || !(box.width > 0) || !(box.height > 0)) return null
+    const x = (pt.x - box.left) / box.width
+    const y = (pt.y - box.top) / box.height
+    // 容差按页宽折算：缩放小的时候点得没那么准，给 3px 的余量
+    const pad = Math.min(0.02, 3 / box.width)
+    for (let i = state.annotations.length - 1; i >= 0; i--) {
+      const item = state.annotations[i]
+      if (!hitAnnotation(item, page.pageNumber, x, y, pad)) continue
+      return item
+    }
+    return null
+  }
+
+  function eraseHit (item) {
+    if (!item) return false
+    const index = state.annotations.findIndex(a => a.id === item.id)
+    if (index < 0) return false
+    // 整段拖动合并成一步：eraseStroke 期间只记第一次
+    if (!state.eraseStrokeActive) {
+      markHistory('erase:' + Date.now())
+      state.eraseStrokeActive = true
+    }
+    state.annotations.splice(index, 1)
+    paintPageAnnotations(item.page)
+    renderAnnotPanel()
+    syncAnnotCount()
+    emitAnnotations()
+    return true
+  }
+
+  function eraseBegin (ev) {
+    if (state.destroyed || state.annotMode !== 'eraser') return false
+    if (ev.button !== undefined && ev.button !== 0) return false
+    const pt = eventPoint(ev)
+    if (!pt) return false
+    const page = pageAtPoint(pageInfos(), pt.x, pt.y)
+    if (!page) return false
+    state.eraseStrokeActive = false
+    const hit = eraseAt(pt, page)
+    return eraseHit(hit)
+  }
+
+  function eraseMove (ev) {
+    if (state.destroyed || state.annotMode !== 'eraser' || !state.eraseStrokeActive) return
+    if (ev.buttons === 0) { state.eraseStrokeActive = false; return }
+    const pt = eventPoint(ev)
+    if (!pt) return
+    const page = pageAtPoint(pageInfos(), pt.x, pt.y)
+    if (!page) return
+    const hit = eraseAt(pt, page)
+    if (hit) eraseHit(hit)
+  }
+
+  function eraseEnd () {
+    state.eraseStrokeActive = false
+  }
+
   function onAnnotDown (ev) {
     if (state.destroyed || !state.annotMode) return
     if (ev.button !== undefined && ev.button !== 0) return
+    if (state.annotMode === 'eraser') {
+      eraseBegin(ev)
+      return
+    }
     if (state.annotMode !== 'note') { state.annotPress = null; return }
     const pt = eventPoint(ev)
     state.annotPress = pt ? { x: pt.x, y: pt.y, snap: selectionSnapshot() } : null
@@ -920,6 +1065,10 @@ export function createAnnotationController (ctx) {
 
   function onAnnotUp (ev) {
     if (state.destroyed || !state.annotMode) return
+    if (state.annotMode === 'eraser') {
+      eraseEnd()
+      return
+    }
     const target = ev && ev.target
     if (target && typeof target.closest === 'function' && target.closest('.lv-annot-note')) {
       state.annotPress = null
@@ -985,7 +1134,12 @@ export function createAnnotationController (ctx) {
     togglePalette,
     closePalette,
     onAnnotDown,
+    onAnnotMove: eraseMove,
     onAnnotUp,
-    onPageRendered
+    onPageRendered,
+    undoAnnotation,
+    redoAnnotation,
+    resetHistory,
+    syncHistoryButtons
   }
 }

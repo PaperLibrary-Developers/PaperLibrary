@@ -73,6 +73,49 @@ function listIcon () {
   return svg
 }
 
+/* 撤销 / 重做：Word 那种「先横再绕回去」的弯箭头。
+   撤销：箭头端在左上、尾巴绕回右上；重做是它的左右镜像。
+   视框里笔画的包围盒是 x 3.4→20.6、y 4.4→19.0：横向刚好居中（左右各 3.4），
+   纵向中心在 11.7 而视框中心是 12，所以整体再下移 0.3 才真正居中——
+   这个偏差在 18px 下看不出，放大到 8 倍就能发现箭头会「贴着下沿」。 */
+function historyIcon (dir) {
+  const svg = svgNode('svg', {
+    width: '18', height: '18', viewBox: '0 0 24 24', fill: 'none',
+    stroke: 'currentColor', 'stroke-width': '1.9',
+    'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+    'aria-hidden': 'true', focusable: 'false'
+  })
+  /* 画法（以撤销为例，重做是左右镜像）：
+     横线从左上往右，到右端折成 U 形回到左下——就是 Word 那个弯箭头。
+     形状先按「横线 y=8、弧半径 5.1、箭头臂长 3.7」画准，再整体平移，
+     让墨迹包围盒的中心落在视框 (12,12)。
+     平移量**不能手算**：箭头臂是斜线，包围盒宽度不直观，
+     所以这里在挂到 DOM 后用 getBBox() 实测一次再补 transform——
+     换个描边宽度或改箭头角度都不会重新偏掉。 */
+  const y0 = 8.0
+  const r = 5.1
+  const tip = 3.7
+  const geo = dir === 'redo'
+    ? 'M20.6 ' + y0 + 'H11.1a' + r + ' ' + r + ' 0 0 0 0 ' + (2 * r) + 'h4.3' +
+      'M20.6 ' + y0 + ' 16.9 ' + (y0 - tip) + 'M20.6 ' + y0 + ' 16.9 ' + (y0 + tip)
+    : 'M3.4 ' + y0 + 'h11.3a' + r + ' ' + r + ' 0 0 1 0 ' + (2 * r) + 'H8.7' +
+      'M3.4 ' + y0 + ' 7.1 ' + (y0 - tip) + 'M3.4 ' + y0 + ' 7.1 ' + (y0 + tip)
+  const g = svgNode('g')
+  g.appendChild(svgNode('path', { d: geo }))
+  svg.appendChild(g)
+  // 挂进文档前 getBBox 是空值，所以交给 requestAnimationFrame 之后的首次绘制校正
+  svg.__centerInk = function () {
+    try {
+      const bb = g.getBBox()
+      if (!bb || !bb.width) return
+      const dx = 12 - (bb.x + bb.width / 2)
+      const dy = 12 - (bb.y + bb.height / 2)
+      g.setAttribute('transform', 'translate(' + dx.toFixed(2) + ' ' + dy.toFixed(2) + ')')
+    } catch (err) {}
+  }
+  return svg
+}
+
 /* 放大镜：工具栏按钮与搜索栏里的「搜索」按钮共用 */
 function searchIcon () {
   const svg = strokeIcon(16)
@@ -83,9 +126,31 @@ function searchIcon () {
 
 const SEARCH_ID = 'lv-pdf-search'
 
+/* 把撤销/重做箭头按实测墨迹包围盒摆到按钮正中。
+   必须在 DOM 真正挂上之后调用：getBBox() 依赖布局，节点游离时返回全 0。 */
+export function centerHistoryIcons (ui) {
+  if (!ui || !ui.historySeg || typeof ui.historySeg.querySelectorAll !== 'function') return
+  const nodes = ui.historySeg.querySelectorAll('svg')
+  for (let i = 0; i < nodes.length; i++) {
+    const svg = nodes[i]
+    if (typeof svg.__centerInk === 'function') svg.__centerInk()
+  }
+}
+
 export function buildViewerUi (ctx) {
   const { state, ui, opts, url } = ctx
   const downloadHref = opts.downloadUrl ? String(opts.downloadUrl) : url
+
+  /* 撤销 / 重做：只作用于批注（荧光笔、便签、橡皮擦），和 Word 一样
+     按钮常驻、不可用时置灰；Ctrl+Z / Ctrl+Shift+Z 在阅读区内也能触发。 */
+  ui.btnUndo = el('button.lv-pdf-btn.lv-pdf-iconbtn', {
+    type: 'button', disabled: true, title: '撤销（Ctrl + Z）', 'aria-label': '撤销'
+  }, historyIcon('undo'))
+  ui.btnRedo = el('button.lv-pdf-btn.lv-pdf-iconbtn', {
+    type: 'button', disabled: true, title: '重做（Ctrl + Shift + Z）', 'aria-label': '重做'
+  }, historyIcon('redo'))
+  ui.historySeg = el('div.lv-pdf-history', { role: 'group', 'aria-label': '撤销与重做' },
+    [ui.btnUndo, ui.btnRedo])
 
   ui.btnPrevPage = el('button.lv-pdf-btn.lv-pdf-iconbtn', {
     type: 'button', title: '上一页（PageUp / ↑）', 'aria-label': '上一页'
@@ -130,6 +195,12 @@ export function buildViewerUi (ctx) {
     type: 'button', 'aria-pressed': 'false', 'aria-expanded': 'false', 'aria-label': '便签',
     title: '便签（N）：在页面上点一下放一张便签'
   }, ui.noteIcon)
+  /* 橡皮擦：按笔画擦除荧光笔迹（一次点掉一条，和 GoodNotes 的「按笔画」一致） */
+  ui.eraserIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('eraser', state.annotColors.highlight)])
+  ui.btnEraser = el('button.lv-pdf-btn.lv-pdf-iconbtn', {
+    type: 'button', 'aria-pressed': 'false', 'aria-label': '橡皮擦',
+    title: '橡皮擦（E）：点一下荧光笔迹就擦掉那一整条'
+  }, ui.eraserIcon)
   ui.palette = el('div.lv-pdf-inkbar', { hidden: true, role: 'toolbar', 'aria-label': '荧光笔颜色' })
   /* 批注列表：只放图标，条数写进 title / aria-label，不再用右上角气泡 */
   ui.btnAnnotList = el('button.lv-pdf-btn.lv-pdf-iconbtn', {
@@ -137,9 +208,9 @@ export function buildViewerUi (ctx) {
     title: '展开批注列表：点一条就跳到它在哪一页'
   }, listIcon())
 
-  /* 荧光笔 / 便签 / 批注列表：一个连体框，顺序就是这三个 */
+  /* 荧光笔 / 橡皮擦 / 便签 / 批注列表：一个连体框，顺序就是这四个 */
   ui.toolSeg = el('div.lv-pdf-toolseg', { role: 'group', 'aria-label': '批注工具' },
-    [ui.btnHighlight, ui.btnNote, ui.btnAnnotList])
+    [ui.btnHighlight, ui.btnEraser, ui.btnNote, ui.btnAnnotList])
 
   ui.linkDownload = el('a.lv-pdf-btn.lv-pdf-iconbtn', {
     href: downloadHref, title: '下载这个 PDF 文件', 'aria-label': '下载',
@@ -155,7 +226,7 @@ export function buildViewerUi (ctx) {
   ui.toolbar = el('div.lv-pdf-toolbar', {
     role: 'toolbar', 'aria-label': 'PDF 工具栏'
   }, [
-    el('div.lv-pdf-group', null, [ui.btnPrevPage, ui.pageInput, ui.total, ui.btnNextPage]),
+    el('div.lv-pdf-group', null, [ui.historySeg, ui.btnPrevPage, ui.pageInput, ui.total, ui.btnNextPage]),
     el('div.lv-pdf-group', null, [ui.btnZoomOut, ui.zoom, ui.btnZoomIn]),
     el('div.lv-pdf-group', null, [ui.fitSeg]),
     el('div.lv-pdf-group', null, [ui.toolSeg]),
@@ -252,10 +323,14 @@ export function buildViewerUi (ctx) {
   ui.btnRegion.onclick = function () { ctx.toggleRegionSelect() }
   ctx.syncRegionButton()
 
+  ui.btnUndo.onclick = function () { ctx.undoAnnotation() }
+  ui.btnRedo.onclick = function () { ctx.redoAnnotation() }
   ui.btnHighlight.onclick = function () { ctx.setAnnotMode('highlight') }
+  ui.btnEraser.onclick = function () { ctx.setAnnotMode('eraser') }
   ui.btnNote.onclick = function () { ctx.setAnnotMode('note') }
   ui.btnAnnotList.onclick = function () { ctx.toggleDrawer('annot') }
   ctx.onGlobal(ui.scroll, 'mousedown', ctx.onAnnotDown)
+  ctx.onGlobal(ui.scroll, 'mousemove', ctx.onAnnotMove)
   ctx.onGlobal(ui.scroll, 'mouseup', ctx.onAnnotUp)
   ctx.renderAnnotPanel()
   ctx.syncAnnotButtons()

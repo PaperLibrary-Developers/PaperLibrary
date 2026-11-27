@@ -6,7 +6,7 @@ import { injectStyle, injectViewerCss } from './pdfviewer/styles.mjs'
 import { createSearchController } from './pdfviewer/search.mjs'
 import { createCaptureController } from './pdfviewer/capture.mjs'
 import { createAnnotationController } from './pdfviewer/annotations.mjs'
-import { buildViewerUi } from './pdfviewer/toolbar.mjs'
+import { buildViewerUi, centerHistoryIcons } from './pdfviewer/toolbar.mjs'
 
 export { setPdfjsBase, getPdfjsBase }
 
@@ -70,7 +70,8 @@ async function mount (container, options) {
     annotPopDocListeners: [],
     annotPanelOpen: false,
     annotFlashId: '',
-    annotFlashTimer: 0
+    annotFlashTimer: 0,
+    eraseStrokeActive: false
   }
 
   const ui = {
@@ -466,6 +467,8 @@ async function mount (container, options) {
     } catch (err) {}
     buildViewerUi(ctx)
     container.appendChild(ui.root)
+    // 撤销/重做箭头要按实测墨迹居中，必须在节点真正挂上之后再做
+    centerHistoryIcons(ui)
     applyTheme()
     annot.setAnnotations(opts.annotations || [])
     // 接上切换标签页前的工具：重建后自动恢复荧光笔 / 便签
@@ -521,6 +524,8 @@ async function mount (container, options) {
         return view
       },
       closeAnnotationEditor: () => annot.closeAnnotPop(),
+      undoAnnotation: annot.undoAnnotation,
+      redoAnnotation: annot.redoAnnotation,
       getAnnotations: annot.getAnnotations,
       setAnnotations: annot.setAnnotations,
       goToAnnotation: annot.locateAnnotation

@@ -29,6 +29,8 @@ export const ANNOT_MIN_DRAG = 4
 export const ANNOT_QUOTE_MAX = 600
 export const ANNOT_NOTE_MAX = 4000
 export const ANNOT_FLASH_MS = 1400
+/* 撤销栈上限：批注是纯前端状态，几百步足够，再往里存只会白占内存 */
+export const ANNOT_HISTORY_MAX = 80
 export const ANNOT_LAYER_CLASS = 'lv-annot-layer'
 
 /* ------------------------------ 颜色与调色盘 ------------------------------ */
@@ -185,6 +187,79 @@ export function hsvToHex (h, s, v) {
   return out
 }
 
+/* ------------------------------ 撤销 / 重做 ------------------------------ */
+
+export function createAnnotHistory (limit) {
+  const max = Math.max(1, Math.round(Number(limit) || ANNOT_HISTORY_MAX))
+  const undoStack = []
+  const redoStack = []
+  let coalesceKey = ''
+  let coalesceAt = 0
+
+  function snapshot (items) {
+    // 深拷一份：批注项里有 rects / point 这类嵌套结构，共享引用会让撤销回到「同一份」。
+    return (Array.isArray(items) ? items : []).map(item => ({
+      id: item.id,
+      type: item.type,
+      page: item.page,
+      color: item.color,
+      rects: (Array.isArray(item.rects) ? item.rects : []).map(r => ({ x: r.x, y: r.y, w: r.w, h: r.h })),
+      point: item.point ? { x: item.point.x, y: item.point.y } : null,
+      quote: item.quote,
+      note: item.note,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt
+    }))
+  }
+
+  /* 记一步。coalesce 给同一类连续操作（比如拖橡皮擦一路划过去）用一个 key，
+     在 coalesceMs 内复用同一条历史，不会一次擦除塞进十几步。 */
+  function push (items, options) {
+    const o = options || {}
+    const now = Date.now()
+    const key = o.coalesce || ''
+    if (key && key === coalesceKey && now - coalesceAt <= (o.coalesceMs || 900)) {
+      coalesceAt = now
+      return false
+    }
+    coalesceKey = key
+    coalesceAt = now
+    undoStack.push(snapshot(items))
+    if (undoStack.length > max) undoStack.shift()
+    redoStack.length = 0
+    return true
+  }
+
+  function undo (current) {
+    if (!undoStack.length) return null
+    const prev = undoStack.pop()
+    redoStack.push(snapshot(current))
+    coalesceKey = ''
+    return prev
+  }
+
+  function redo (current) {
+    if (!redoStack.length) return null
+    const next = redoStack.pop()
+    undoStack.push(snapshot(current))
+    coalesceKey = ''
+    return next
+  }
+
+  function reset () {
+    undoStack.length = 0
+    redoStack.length = 0
+    coalesceKey = ''
+    coalesceAt = 0
+  }
+
+  function state () {
+    return { canUndo: undoStack.length > 0, canRedo: redoStack.length > 0, depth: undoStack.length, redoDepth: redoStack.length }
+  }
+
+  return { push: push, undo: undo, redo: redo, reset: reset, state: state, snapshot: snapshot }
+}
+
 /* ------------------------------ 数值与几何 ------------------------------ */
 
 export function clampScale (value) {
@@ -329,6 +404,27 @@ export function isSameHighlight (a, b) {
       Math.abs(ra[i].w - rb[i].w) > 0.004 || Math.abs(ra[i].h - rb[i].h) > 0.004) return false
   }
   return true
+}
+
+/* 橡皮擦命中：一个点是否落在某条批注上。
+   荧光笔一条记录 = 一次划过的笔迹（可能多行矩形），只要碰到任一矩形就算命中，
+   于是「按笔画擦除」= 删掉整条记录，而不是把矩形切碎。 */
+export function hitAnnotation (item, page, x, y, pad) {
+  if (!item || Number(item.page) !== Number(page)) return false
+  const grow = Number.isFinite(pad) ? Math.max(0, pad) : 0
+  if (item.type === 'note') {
+    const pt = item.point
+    if (!pt) return false
+    // 便签是 20px 的方块，按页内比例折算一个容差
+    return Math.abs(pt.x - x) <= 0.02 + grow && Math.abs(pt.y - y) <= 0.03 + grow
+  }
+  const rects = Array.isArray(item.rects) ? item.rects : []
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i]
+    if (!r) continue
+    if (x >= r.x - grow && x <= r.x + r.w + grow && y >= r.y - grow && y <= r.y + r.h + grow) return true
+  }
+  return false
 }
 
 export function annotationAnchorY (item) {

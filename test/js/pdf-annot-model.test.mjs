@@ -19,6 +19,7 @@ import {
   annotationAnchorY,
   annotPalette,
   clamp01,
+  createAnnotHistory,
   clampNumber,
   clampScale,
   describeError,
@@ -26,6 +27,7 @@ import {
   errText,
   hexToHsv,
   hexToRgba,
+  hitAnnotation,
   hsvToHex,
   inkOnColor,
   isBuiltinColor,
@@ -128,6 +130,66 @@ test('highlighter and note keep their own color, palette, and HSV round-trip', (
   assert.equal(hexToHsv('nope'), null)
   // 超出范围的角度/饱和度会绕回并夹紧，不会算出非法颜色
   assert.equal(hsvToHex(370, 2, 2), hsvToHex(10, 1, 1))
+})
+
+test('eraser hit test matches whole strokes and ignores other pages', () => {
+  const hl = { type: 'highlight', page: 3, rects: [{ x: 0.1, y: 0.2, w: 0.4, h: 0.02 }, { x: 0.1, y: 0.23, w: 0.3, h: 0.02 }] }
+  // 任一矩形命中都算「碰到这一笔」
+  assert.equal(hitAnnotation(hl, 3, 0.2, 0.21), true)
+  assert.equal(hitAnnotation(hl, 3, 0.15, 0.24), true)
+  assert.equal(hitAnnotation(hl, 3, 0.9, 0.9), false)
+  assert.equal(hitAnnotation(hl, 4, 0.2, 0.21), false)
+  // 容差向外扩，缩放小时点得没那么准也能擦到
+  assert.equal(hitAnnotation(hl, 3, 0.52, 0.21), false)
+  assert.equal(hitAnnotation(hl, 3, 0.52, 0.21, 0.03), true)
+  // 便签按点判定
+  const note = { type: 'note', page: 1, point: { x: 0.5, y: 0.5 } }
+  assert.equal(hitAnnotation(note, 1, 0.51, 0.51), true)
+  assert.equal(hitAnnotation(note, 1, 0.9, 0.5), false)
+  assert.equal(hitAnnotation(null, 1, 0.5, 0.5), false)
+})
+
+test('annotation history undo/redo, coalescing, cap, and deep copy', () => {
+  const h = createAnnotHistory(3)
+  assert.deepEqual(h.state(), { canUndo: false, canRedo: false, depth: 0, redoDepth: 0 })
+
+  const first = [{ id: 'a', type: 'highlight', page: 1, rects: [{ x: 0.1, y: 0.1, w: 0.2, h: 0.02 }], point: null }]
+  h.push(first)
+  // 入栈的是快照：之后改原对象不该影响历史
+  first[0].rects[0].x = 0.9
+  const back = h.undo([first[0]])
+  assert.equal(back[0].rects[0].x, 0.1)
+  assert.deepEqual(h.state(), { canUndo: false, canRedo: true, depth: 0, redoDepth: 1 })
+
+  // 重做回到「删除后」的状态
+  const fwd = h.redo(back)
+  assert.equal(Array.isArray(fwd), true)
+  assert.deepEqual(h.state(), { canUndo: true, canRedo: false, depth: 1, redoDepth: 0 })
+
+  // 同一 key 的连续调用在窗口内只记一步（拖橡皮擦整段擦除）
+  const t0 = Date.now()
+  const beforeDepth = h.state().depth
+  assert.equal(h.push([], { coalesce: 'erase:1', coalesceMs: 900 }), true)
+  assert.equal(h.push([], { coalesce: 'erase:1', coalesceMs: 900 }), false)
+  assert.equal(h.push([], { coalesce: 'erase:1', coalesceMs: 900 }), false)
+  assert.equal(h.state().depth, beforeDepth + 1)
+
+  // 上限：最多保留 max 步
+  const capped = createAnnotHistory(2)
+  for (let i = 0; i < 6; i++) capped.push([{ id: 'x' + i, type: 'note', page: 1, point: { x: 0, y: 0 } }])
+  assert.equal(capped.state().depth, 2)
+
+  // 新的操作会清掉重做栈
+  const h2 = createAnnotHistory(4)
+  h2.push([])
+  h2.undo([])
+  assert.equal(h2.state().canRedo, true)
+  h2.push([])
+  assert.equal(h2.state().canRedo, false)
+
+  // reset 清空
+  h2.reset()
+  assert.deepEqual(h2.state(), { canUndo: false, canRedo: false, depth: 0, redoDepth: 0 })
 })
 
 test('numeric clamping and rectangle/coordinate geometry helpers', () => {

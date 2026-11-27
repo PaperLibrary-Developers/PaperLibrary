@@ -355,6 +355,25 @@ export function createSearchController (ctx) {
       openSearchPanel()
       return
     }
+    /* 撤销 / 重做：只在阅读区里生效。
+       监听挂在 ui.root 上，事件冒泡到这里说明焦点确实在这块 PDF 区域内；
+       输入框（页码框、搜索框、便签编辑框）里一律放行，交给浏览器原生的文本撤销，
+       否则会把用户正在敲的字撤掉，也避免和页面其它模块抢 Ctrl+Z。 */
+    if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === 'z' || ev.key === 'Z')) {
+      if (isEditableTarget(ev.target)) return
+      ev.preventDefault()
+      ev.stopPropagation()
+      if (ev.shiftKey) ctx.redoAnnotation()
+      else ctx.undoAnnotation()
+      return
+    }
+    if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === 'y' || ev.key === 'Y')) {
+      if (isEditableTarget(ev.target)) return
+      ev.preventDefault()
+      ev.stopPropagation()
+      ctx.redoAnnotation()
+      return
+    }
     if (state.regionSelect) {
       if (ev.key === 'Escape' || ev.key === 'Esc') {
         ev.preventDefault()
@@ -380,6 +399,7 @@ export function createSearchController (ctx) {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return
     if (isEditableTarget(ev.target)) return
     if (ev.key === 'h' || ev.key === 'H') { ev.preventDefault(); ctx.setAnnotMode('highlight'); return }
+    if (ev.key === 'e' || ev.key === 'E') { ev.preventDefault(); ctx.setAnnotMode('eraser'); return }
     if (ev.key === 'n' || ev.key === 'N') { ev.preventDefault(); ctx.setAnnotMode('note'); return }
     switch (ev.key) {
       case 'PageUp': ev.preventDefault(); ctx.stepPage(-1); break
