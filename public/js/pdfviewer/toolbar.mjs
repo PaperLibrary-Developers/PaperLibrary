@@ -189,17 +189,17 @@ export function buildViewerUi (ctx) {
   ui.noteIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('note', state.annotColors.note)])
   ui.btnHighlight = el('button.lv-pdf-btn.lv-pdf-iconbtn.lv-pdf-inkbtn', {
     type: 'button', 'aria-pressed': 'false', 'aria-expanded': 'false', 'aria-label': '荧光笔',
-    title: '荧光笔（H）：选中文字即可高亮；再点一下关闭，颜色在下方选'
+    title: '荧光笔：选中文字即可高亮；再点一下关闭，颜色在下方选'
   }, ui.highlightIcon)
   ui.btnNote = el('button.lv-pdf-btn.lv-pdf-iconbtn', {
     type: 'button', 'aria-pressed': 'false', 'aria-expanded': 'false', 'aria-label': '便签',
-    title: '便签（N）：在页面上点一下放一张便签'
+    title: '便签：在页面上点一下放一张便签'
   }, ui.noteIcon)
   /* 橡皮擦：按笔画擦除荧光笔迹（一次点掉一条，和 GoodNotes 的「按笔画」一致） */
   ui.eraserIcon = el('span.lv-pdf-icon', { 'aria-hidden': 'true' }, [annotIcon('eraser', state.annotColors.highlight)])
   ui.btnEraser = el('button.lv-pdf-btn.lv-pdf-iconbtn', {
     type: 'button', 'aria-pressed': 'false', 'aria-label': '橡皮擦',
-    title: '橡皮擦（E）：点一下荧光笔迹就擦掉那一整条'
+    title: '橡皮擦：点一下荧光笔迹就擦掉那一整条，按住拖可连着擦'
   }, ui.eraserIcon)
   ui.palette = el('div.lv-pdf-inkbar', { hidden: true, role: 'toolbar', 'aria-label': '荧光笔颜色' })
   /* 批注列表：只放图标，条数写进 title / aria-label，不再用右上角气泡 */

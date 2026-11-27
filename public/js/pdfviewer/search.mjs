@@ -398,9 +398,6 @@ export function createSearchController (ctx) {
     }
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return
     if (isEditableTarget(ev.target)) return
-    if (ev.key === 'h' || ev.key === 'H') { ev.preventDefault(); ctx.setAnnotMode('highlight'); return }
-    if (ev.key === 'e' || ev.key === 'E') { ev.preventDefault(); ctx.setAnnotMode('eraser'); return }
-    if (ev.key === 'n' || ev.key === 'N') { ev.preventDefault(); ctx.setAnnotMode('note'); return }
     switch (ev.key) {
       case 'PageUp': ev.preventDefault(); ctx.stepPage(-1); break
       case 'PageDown': ev.preventDefault(); ctx.stepPage(1); break
