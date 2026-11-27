@@ -13,7 +13,7 @@ export function pdfjsUrls () {
   return {
     module: vendorUrl('pdfjs', '/build/pdf.mjs'),
     viewer: vendorUrl('pdfjs', '/web/pdf_viewer.mjs'),
-    worker: vendorUrl('pdfjs', '/build/pdf.worker.min.mjs'),
+    worker: vendorUrl('pdfjs', '/build/pdf.worker.min.mjs?v=spot-tint'),
     css: vendorUrl('pdfjs', '/web/pdf_viewer.css'),
     cmaps: vendorUrl('pdfjs', '/cmaps/'),
     standardFonts: vendorUrl('pdfjs', '/standard_fonts/')

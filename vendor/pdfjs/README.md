@@ -12,3 +12,12 @@ latest JavaScript features, please see the `legacy/` folder.
 Please see [this wiki page](https://github.com/mozilla/pdf.js/wiki/Frequently-Asked-Questions#faq-support) for information about supported browsers/environments.
 
 See https://github.com/mozilla/pdf.js for learning and contributing.
+
+## PaperLibrary patch
+
+Both worker builds apply the initial tint when a content stream selects a
+Separation or DeviceN color space with `cs` or `CS` (ISO 32000-1, Table 74).
+This preserves spot colors in PDFs that rely on the default tint instead of
+setting it explicitly with `scn` or `SCN`. Keep this behavior when updating
+the bundled worker. Run `node --test test/js/pdf-spot-colors.test.mjs` from the
+repository root to verify it.

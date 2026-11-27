@@ -35360,6 +35360,14 @@ class TimeSlotManager {
     this.checked = 0;
   }
 }
+// PaperLibrary patch: ISO 32000-1 Table 74 resets Separation and DeviceN
+// to full tint on cs/CS, including when no scn/SCN follows.
+function setInitialSpotColor(operatorList, colorSpace, op) {
+  if (colorSpace instanceof AlternateCS) {
+    operatorList.addOp(op, colorSpace.getRgb(new Float32Array(colorSpace.numComps).fill(1), 0));
+  }
+}
+
 class PartialEvaluator {
   constructor({
     xref,
@@ -36623,6 +36631,7 @@ class PartialEvaluator {
               const cachedColorSpace = ColorSpace.getCached(args[0], xref, localColorSpaceCache);
               if (cachedColorSpace) {
                 stateManager.state.fillColorSpace = cachedColorSpace;
+                setInitialSpotColor(operatorList, cachedColorSpace, OPS.setFillRGBColor);
                 continue;
               }
               next(self.parseColorSpace({
@@ -36631,6 +36640,7 @@ class PartialEvaluator {
                 localColorSpaceCache
               }).then(function (colorSpace) {
                 stateManager.state.fillColorSpace = colorSpace || ColorSpace.singletons.gray;
+                setInitialSpotColor(operatorList, colorSpace, OPS.setFillRGBColor);
               }));
               return;
             }
@@ -36639,6 +36649,7 @@ class PartialEvaluator {
               const cachedColorSpace = ColorSpace.getCached(args[0], xref, localColorSpaceCache);
               if (cachedColorSpace) {
                 stateManager.state.strokeColorSpace = cachedColorSpace;
+                setInitialSpotColor(operatorList, cachedColorSpace, OPS.setStrokeRGBColor);
                 continue;
               }
               next(self.parseColorSpace({
@@ -36647,6 +36658,7 @@ class PartialEvaluator {
                 localColorSpaceCache
               }).then(function (colorSpace) {
                 stateManager.state.strokeColorSpace = colorSpace || ColorSpace.singletons.gray;
+                setInitialSpotColor(operatorList, colorSpace, OPS.setStrokeRGBColor);
               }));
               return;
             }
